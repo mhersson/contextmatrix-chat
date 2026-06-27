@@ -1,0 +1,6 @@
+/contextmatrix-chat
+*.test
+.envrc
+
+# Local point-in-time artifacts — never committed.
+transcripts/
