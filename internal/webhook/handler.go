@@ -41,8 +41,6 @@ type ChatConfig struct {
 	// MemoryBytes and PidsLimit are the per-container resource caps.
 	MemoryBytes int64
 	PidsLimit   int64
-	// PullPolicy controls image pull behaviour (never / if-not-present / always).
-	PullPolicy string
 	// MaxConcurrent is the concurrency cap enforced before Launch is attempted.
 	MaxConcurrent int
 }
@@ -97,7 +95,6 @@ type Server struct {
 	chatRunDirBase    string
 	memBytes          int64
 	pidsLimit         int64
-	pullPolicy        string
 	maxConcurrent     int
 
 	hub *logbridge.Hub
@@ -166,7 +163,6 @@ func NewServer(cfg Config) *Server {
 		chatRunDirBase:    cfg.Chat.ChatRunDirBase,
 		memBytes:          cfg.Chat.MemoryBytes,
 		pidsLimit:         cfg.Chat.PidsLimit,
-		pullPolicy:        cfg.Chat.PullPolicy,
 		maxConcurrent:     cfg.Chat.MaxConcurrent,
 		hub:               cfg.Hub,
 		replay:            replay,
