@@ -17,6 +17,10 @@ func TestConfigureGitCredentialHelper(t *testing.T) {
 		t.Skip("git not on PATH")
 	}
 
+	// os.TempDir() honors TMPDIR on Linux; redirect it to a per-test temp dir
+	// so the credential helper script is auto-cleaned and doesn't persist in /tmp.
+	t.Setenv("TMPDIR", t.TempDir())
+
 	dir := t.TempDir()
 	secretsEnvPath := filepath.Join(dir, "secrets.env")
 	gitconfigPath := filepath.Join(dir, "gitconfig")
@@ -31,7 +35,7 @@ func TestConfigureGitCredentialHelper(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, ConfigureGitCredentialHelper(ctx, secretsEnvPath))
 
-	scriptPath := filepath.Join(dir, "cm-git-credential-helper.sh")
+	scriptPath := filepath.Join(os.TempDir(), "cm-git-credential-helper.sh")
 
 	runHelper := func(t *testing.T) string {
 		t.Helper()

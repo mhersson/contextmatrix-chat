@@ -8,13 +8,15 @@ import (
 	"path/filepath"
 )
 
-// ConfigureGitCredentialHelper writes a credential-helper script alongside
-// the secrets env file and registers it as the global git credential helper.
+// ConfigureGitCredentialHelper writes a credential-helper script to os.TempDir()
+// and registers it as the global git credential helper.
 // The script reads CM_GIT_TOKEN from secretsEnvPath on every git auth call,
 // so token rotation is transparent — the token is never embedded in the
 // script or git config; only the path to the env file is baked in.
+// The script is written to os.TempDir() (not alongside secretsEnvPath) because
+// the secrets mount is read-only in the container.
 func ConfigureGitCredentialHelper(ctx context.Context, secretsEnvPath string) error {
-	scriptPath := filepath.Join(filepath.Dir(secretsEnvPath), "cm-git-credential-helper.sh")
+	scriptPath := filepath.Join(os.TempDir(), "cm-git-credential-helper.sh")
 
 	// Path is baked in; token is read fresh on each git auth call.
 	script := fmt.Sprintf(`#!/bin/sh

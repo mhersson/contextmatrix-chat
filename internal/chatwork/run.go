@@ -46,9 +46,10 @@ func Run(ctx context.Context) error {
 	gitToken := src.Get("CM_GIT_TOKEN")
 
 	// 2. Configure the git credential helper so clones authenticate via the
-	// rotating token in the secrets env file.
+	// rotating token in the secrets env file. Non-fatal: a degraded git-auth
+	// environment must not kill an otherwise-usable interactive session.
 	if err := ConfigureGitCredentialHelper(ctx, secretsEnvPath); err != nil {
-		return fmt.Errorf("configure git credential helper: %w", err)
+		slog.Warn("git credential helper setup failed; continuing without git auth", "error", err)
 	}
 
 	// 3. Clone the project repo into /workspace (best-effort: a clone failure
@@ -57,7 +58,7 @@ func Run(ctx context.Context) error {
 	if repoURL := os.Getenv("CM_CHAT_REPO_URL"); repoURL != "" {
 		cloneDir := filepath.Join(workspaceRoot, cloneTarget())
 
-		cmd := exec.CommandContext(ctx, "git", "clone", repoURL, cloneDir) //nolint:gosec // G702: repoURL is the operator-supplied CM_CHAT_REPO_URL
+		cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, cloneDir) //nolint:gosec // G702: repoURL is the operator-supplied CM_CHAT_REPO_URL
 		if out, err := cmd.CombinedOutput(); err != nil {
 			slog.Warn("repo clone failed; continuing", //nolint:gosec // G706: operator-supplied env var
 				"url", repoURL, "dir", cloneDir,
@@ -74,7 +75,7 @@ func Run(ctx context.Context) error {
 
 	if cat, err := client.FetchCatalog(ctx); err != nil {
 		slog.Warn("fetch catalog failed; using default context window", "error", err)
-	} else if entry, ok := cat.Find(model); ok {
+	} else if entry, ok := cat.Find(model); ok && entry.ContextLength > 0 {
 		ctxWindow = entry.ContextLength
 	}
 
