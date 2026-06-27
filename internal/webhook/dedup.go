@@ -6,12 +6,12 @@ import (
 	"time"
 )
 
-// DedupCache remembers the (project, cardID, messageID) tuples whose /message
-// request has already been DELIVERED, so a retry returns a cached ack instead
-// of writing the user frame to the worker's stdin a second time. The check
-// (Contains) and the record (Record) are deliberately split so a caller records
-// only after a successful delivery — a failed write or an untracked run must not
-// poison the cache, or ContextMatrix's retry would get a false duplicate ack and
+// DedupCache remembers the (sessionID, messageID) pairs whose /message request
+// has already been DELIVERED, so a retry returns a cached ack instead of writing
+// the user frame to the container's stdin a second time. The check (Contains)
+// and the record (Record) are deliberately split so a caller records only after
+// a successful delivery — a failed write or an untracked session must not poison
+// the cache, or ContextMatrix's retry would get a false duplicate ack and
 // silently drop the human's message. It is TTL- and capacity-bounded; an empty
 // messageID NEVER dedups (the client opted out of at-most-once delivery). All
 // methods are safe for concurrent use.
@@ -60,22 +60,21 @@ func NewDedupCache(ttl time.Duration, capacity int, opts ...dedupCacheOption) *D
 }
 
 // dedupKey builds the composite lookup key. A NUL delimiter cannot appear in a
-// validated project name or card ID, so fields containing dashes or slashes
-// never collide across the boundary.
-func dedupKey(project, cardID, messageID string) string {
-	return project + "\x00" + cardID + "\x00" + messageID
+// validated session ID, so fields never collide across the boundary.
+func dedupKey(sessionID, messageID string) string {
+	return sessionID + "\x00" + messageID
 }
 
-// Contains reports whether the (project, cardID, messageID) tuple has already
-// been recorded inside the TTL window. It is a pure read — nothing is recorded.
-// An empty messageID always returns false: dedup requires the client to supply
-// an idempotency key. A TTL-expired entry is reaped here so it does not linger.
-func (c *DedupCache) Contains(project, cardID, messageID string) bool {
+// Contains reports whether the (sessionID, messageID) pair has already been
+// recorded inside the TTL window. It is a pure read — nothing is recorded. An
+// empty messageID always returns false: dedup requires the client to supply an
+// idempotency key. A TTL-expired entry is reaped here so it does not linger.
+func (c *DedupCache) Contains(sessionID, messageID string) bool {
 	if messageID == "" {
 		return false
 	}
 
-	key := dedupKey(project, cardID, messageID)
+	key := dedupKey(sessionID, messageID)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -97,18 +96,17 @@ func (c *DedupCache) Contains(project, cardID, messageID string) bool {
 	return false
 }
 
-// Record marks the (project, cardID, messageID) tuple as processed so a
-// subsequent Contains returns true within the TTL window. It is called only
-// AFTER the message has been delivered, so a failed delivery never poisons the
-// cache. An empty messageID records nothing (the client opted out of
-// at-most-once delivery). Recording an already-present key refreshes its
-// stored time.
-func (c *DedupCache) Record(project, cardID, messageID string) {
+// Record marks the (sessionID, messageID) pair as processed so a subsequent
+// Contains returns true within the TTL window. It is called only AFTER the
+// message has been delivered, so a failed delivery never poisons the cache. An
+// empty messageID records nothing (the client opted out of at-most-once
+// delivery). Recording an already-present key refreshes its stored time.
+func (c *DedupCache) Record(sessionID, messageID string) {
 	if messageID == "" {
 		return
 	}
 
-	key := dedupKey(project, cardID, messageID)
+	key := dedupKey(sessionID, messageID)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

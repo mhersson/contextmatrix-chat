@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	"github.com/mhersson/contextmatrix-chat/internal/logbridge"
 	"github.com/mhersson/contextmatrix-chat/internal/metrics"
 	protocol "github.com/mhersson/contextmatrix-protocol"
@@ -18,11 +20,46 @@ const (
 	maxRequestBodyBytes = 1 << 20 // 1 MiB
 )
 
+// ChatConfig carries the static, per-process chat backend settings. All fields
+// are set at serve startup; they are not reloaded at runtime.
+type ChatConfig struct {
+	// Image is the worker container image to launch.
+	Image string
+	// MCPURL is the CM MCP endpoint forwarded to each container as CM_MCP_URL.
+	MCPURL string
+	// TaskSkillsDir is the in-container mount path for task skills, passed as
+	// CMX_TASK_SKILLS_DIR (e.g. /run/cm-skills).
+	TaskSkillsDir string
+	// TaskSkillsHostDir is the host-side directory bind-mounted at TaskSkillsDir.
+	TaskSkillsHostDir string
+	// SecretsHostDir is the host-side secrets directory bind-mounted at
+	// /run/cm-secrets inside each container.
+	SecretsHostDir string
+	// ChatRunDirBase is the host root under which per-session run directories
+	// (resume.jsonl, primer.txt) are created and mounted at /run/cm-chat.
+	ChatRunDirBase string
+	// MemoryBytes and PidsLimit are the per-container resource caps.
+	MemoryBytes int64
+	PidsLimit   int64
+	// PullPolicy controls image pull behaviour (never / if-not-present / always).
+	PullPolicy string
+	// MaxConcurrent is the concurrency cap enforced before Launch is attempted.
+	MaxConcurrent int
+}
+
 // Config carries the dependencies NewServer needs. Pointers may be shared with
 // the serve layer; the server does not take ownership of their lifecycles.
 type Config struct {
 	APIKey string
 	Skew   time.Duration
+
+	// Executor and Tracker drive the chat container lifecycle. Wired at serve
+	// startup; nil in minimal test servers that exercise infra routes only.
+	Executor executor.Executor
+	Tracker  *executor.Tracker
+
+	// Chat carries the static per-process chat backend settings.
+	Chat ChatConfig
 
 	Hub *logbridge.Hub
 
@@ -41,13 +78,27 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// Server is the chat backend's HTTP surface. It owns no goroutines; the replay
-// janitor lives in its owner. Chat lifecycle handlers (POST /chat/start,
-// POST /chat/end, POST /message) are added in 2.7b and will reference the
-// Hub, Dedup, and an executor injected at that time.
+// Server is the chat backend's HTTP surface. It owns no goroutines beyond the
+// per-session supervision goroutines spawned by the executor; the replay janitor
+// lives in its owner.
 type Server struct {
 	apiKey string
 	skew   time.Duration
+
+	executor executor.Executor
+	tracker  *executor.Tracker
+
+	// chat config (populated from ChatConfig at NewServer time)
+	image             string
+	mcpURL            string
+	taskSkillsDir     string
+	taskSkillsHostDir string
+	secretsHostDir    string
+	chatRunDirBase    string
+	memBytes          int64
+	pidsLimit         int64
+	pullPolicy        string
+	maxConcurrent     int
 
 	hub *logbridge.Hub
 
@@ -63,6 +114,14 @@ type Server struct {
 	metrics *metrics.Metrics
 
 	logger *slog.Logger
+
+	// stdinMu serializes control-frame writes and stdin closes per session. The
+	// executor documents Run.Stdin as single-writer; webhook handlers run on
+	// independent HTTP goroutines, so a per-session mutex keeps frame bytes from
+	// interleaving on the wire. Entries are never reclaimed: one bare mutex per
+	// session ever seen is a tiny, process-bounded footprint and avoids
+	// delete/recreate races with in-flight writers.
+	stdinMu sync.Map // map[string]*sync.Mutex
 }
 
 // NewServer wires a Server from its dependencies. The replay cache, dedup
@@ -97,6 +156,18 @@ func NewServer(cfg Config) *Server {
 	return &Server{
 		apiKey:            cfg.APIKey,
 		skew:              skew,
+		executor:          cfg.Executor,
+		tracker:           cfg.Tracker,
+		image:             cfg.Chat.Image,
+		mcpURL:            cfg.Chat.MCPURL,
+		taskSkillsDir:     cfg.Chat.TaskSkillsDir,
+		taskSkillsHostDir: cfg.Chat.TaskSkillsHostDir,
+		secretsHostDir:    cfg.Chat.SecretsHostDir,
+		chatRunDirBase:    cfg.Chat.ChatRunDirBase,
+		memBytes:          cfg.Chat.MemoryBytes,
+		pidsLimit:         cfg.Chat.PidsLimit,
+		pullPolicy:        cfg.Chat.PullPolicy,
+		maxConcurrent:     cfg.Chat.MaxConcurrent,
 		hub:               cfg.Hub,
 		replay:            replay,
 		dedup:             dedup,
@@ -107,12 +178,24 @@ func NewServer(cfg Config) *Server {
 	}
 }
 
-// Routes returns the mux with the infra routes mounted. Chat lifecycle routes
-// (POST /chat/start, POST /chat/end, POST /message) are added in 2.7b once
-// the executor and session tracker are available.
+// stdinLock returns the per-session mutex for sessionID, creating it on first
+// use. Callers Lock/Unlock around frames.Write and Stdin.Close to honour
+// Run.Stdin's single-writer contract.
+func (s *Server) stdinLock(sessionID string) *sync.Mutex {
+	v, _ := s.stdinMu.LoadOrStore(sessionID, &sync.Mutex{})
+
+	return v.(*sync.Mutex)
+}
+
+// Routes returns the mux with every webhook route mounted. The mutating
+// lifecycle routes are gated on drain; /logs, /health, and /readyz stay
+// reachable during shutdown so operators can read state.
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("POST /chat/start", s.recordMetrics(s.auth(s.drainGate(s.handleChatStart))))
+	mux.HandleFunc("POST /chat/end", s.recordMetrics(s.auth(s.handleChatEnd)))
+	mux.HandleFunc("POST /message", s.recordMetrics(s.auth(s.drainGate(s.handleMessage))))
 	mux.HandleFunc("GET /logs", s.recordMetrics(s.auth(s.handleLogs)))
 	mux.HandleFunc("GET /health", s.recordMetrics(s.handleHealth))
 	mux.HandleFunc("GET /readyz", s.recordMetrics(s.handleReadyz))
@@ -131,9 +214,16 @@ func (s *Server) AdminAuth(next http.HandlerFunc) http.HandlerFunc {
 // ---- health / readyz --------------------------------------------------------
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	// RunningContainers and MaxConcurrent are wired in 2.7b once the session
-	// tracker is available.
-	writeJSON(w, http.StatusOK, protocol.HealthResponse{OK: true})
+	running := 0
+	if s.tracker != nil {
+		running = s.tracker.Count()
+	}
+
+	writeJSON(w, http.StatusOK, protocol.HealthResponse{
+		OK:                true,
+		RunningContainers: running,
+		MaxConcurrent:     s.maxConcurrent,
+	})
 }
 
 // readyResponse is the /readyz body. It is a custom shape (not ErrorResponse)
@@ -151,6 +241,21 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, readyResponse{OK: true})
+}
+
+// ---- decode + write helpers -------------------------------------------------
+
+// decode unmarshals the (already auth-verified) request body into v. The body
+// was re-injected by the auth middleware, so a normal read suffices. On a JSON
+// error it writes a 400 and returns false.
+func (s *Server) decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		writeError(w, http.StatusBadRequest, protocol.CodeInvalidJSON, "invalid JSON")
+
+		return false
+	}
+
+	return true
 }
 
 // ---- write helpers ----------------------------------------------------------
