@@ -3,7 +3,6 @@ package chatwork
 import (
 	"context"
 	"io"
-	"log/slog"
 	"sync"
 
 	"github.com/mhersson/contextmatrix-chat/internal/frames"
@@ -27,10 +26,10 @@ func newChatInbox() *chatInbox {
 }
 
 // Pump reads frames from r until EOF or error, routing user_message frames to
-// the inbox and closing it on EOF. clear frames are logged; epoch reset is
-// deferred to task 3.4b. Run Pump in a goroutine; it exits when the reader
-// reaches EOF or returns a non-EOF error.
-func (in *chatInbox) Pump(r io.Reader) {
+// the inbox, signaling clearCh (non-blocking) on clear frames, and closing the
+// inbox on EOF. Run Pump in a goroutine; it exits when the reader reaches EOF
+// or returns a non-EOF error.
+func (in *chatInbox) Pump(r io.Reader, clearCh chan<- struct{}) {
 	fr := frames.NewReader(r)
 
 	for {
@@ -46,7 +45,10 @@ func (in *chatInbox) Pump(r io.Reader) {
 		case frames.TypeUserMessage:
 			in.push(harness.UserMessage{MessageID: f.MessageID, Content: f.Content})
 		case frames.TypeClear:
-			slog.Info("clear frame received; epoch reset deferred to task 3.4b")
+			select {
+			case clearCh <- struct{}{}:
+			default:
+			}
 		}
 	}
 }

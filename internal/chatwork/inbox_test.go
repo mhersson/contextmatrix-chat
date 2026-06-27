@@ -1,10 +1,12 @@
 package chatwork
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
 
+	"github.com/mhersson/contextmatrix-chat/internal/frames"
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,4 +94,37 @@ func TestChatInbox_Wait_ContextCanceled(t *testing.T) {
 
 	_, err := in.Wait(ctx)
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestChatInbox_Pump_ClearSignal(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, frames.Write(&buf, frames.Frame{Type: frames.TypeClear}))
+
+	in := newChatInbox()
+	clearCh := make(chan struct{}, 1)
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		in.Pump(&buf, clearCh)
+	}()
+
+	// Wait for Pump to finish (it exits on EOF after the single frame).
+	<-done
+
+	// The clear frame must have produced a signal in the buffered channel.
+	select {
+	case <-clearCh:
+		// received ✓
+	default:
+		t.Fatal("no clear signal in clearCh after Pump processed clear frame")
+	}
+
+	// Pump closes the inbox on EOF.
+	_, err := in.Wait(context.Background())
+	assert.ErrorIs(t, err, harness.ErrInboxClosed)
 }

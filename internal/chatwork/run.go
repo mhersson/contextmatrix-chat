@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/mhersson/contextmatrix-chat/internal/mcpbridge"
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
@@ -33,8 +34,9 @@ const (
 
 // Run is the container entrypoint for one interactive chat session. It opens
 // secrets, configures git auth, optionally clones the project repo, assembles
-// the tool registry and harness config, and drives one harness.Run to
-// completion. The /clear epoch-reset loop is deferred to task 3.4b.
+// the tool registry and harness config, and drives the epoch loop to completion.
+// Each epoch is one harness.Run; a /clear frame ends the current epoch and
+// starts a fresh one with no history.
 func Run(ctx context.Context) error {
 	// 1. Open secrets.
 	src, err := secrets.Open(secretsEnvPath)
@@ -111,8 +113,11 @@ func Run(ctx context.Context) error {
 
 	// 10. Inbox: channel-backed; Pump reads stdin frames in a goroutine and
 	// closes the inbox on EOF so harness.Run exits when the host closes stdin.
+	// clearCh carries /clear signals from the frame reader to the epoch loop.
 	in := newChatInbox()
-	go in.Pump(os.Stdin)
+
+	clearCh := make(chan struct{}, 1)
+	go in.Pump(os.Stdin, clearCh)
 
 	// 11. Emitter: board tool_call lines are filtered from the transcript
 	// (noise reduction, matching the runner's mcp__* skip). All other events
@@ -120,7 +125,8 @@ func Run(ctx context.Context) error {
 	filteredWriter := newBoardFilterWriter(os.Stdout, bridge.BoardToolNames())
 	emit := events.NewEmitter(io.Discard, filteredWriter)
 
-	// 12. Run once. The /clear epoch-reset loop is task 3.4b.
+	// 12. Epoch loop: one harness.Run per epoch; /clear resets history and
+	// restarts with the re-sent primer as the new task.
 	cfg := harness.Config{
 		Model:            model,
 		ContextWindow:    ctxWindow,
@@ -134,18 +140,75 @@ func Run(ctx context.Context) error {
 		SystemPrompt:     chatSystemPrompt,
 	}
 
-	res, err := harness.Run(ctx, client, reg, emit, primer, cfg)
+	run := func(ctx context.Context, epochTask string) (bool, error) {
+		epochCtx, cancel := context.WithCancel(ctx)
 
-	slog.Info("chat session finished",
-		"reason", res.Reason,
-		"turns", res.Turns,
-		"cost_usd", res.TotalCostUSD)
+		var cleared atomic.Bool
 
-	if err != nil {
-		return fmt.Errorf("harness run: %w", err)
+		go func() {
+			select {
+			case <-clearCh:
+				cleared.Store(true)
+				cancel()
+			case <-epochCtx.Done():
+			}
+		}()
+
+		res, err := harness.Run(epochCtx, client, reg, emit, epochTask, cfg)
+
+		cancel()
+
+		slog.Info("chat epoch finished",
+			"reason", res.Reason,
+			"turns", res.Turns,
+			"cost_usd", res.TotalCostUSD)
+
+		wasCleared := cleared.Load()
+		if err != nil && !wasCleared {
+			return false, fmt.Errorf("harness run: %w", err)
+		}
+
+		return wasCleared, nil
 	}
 
-	return nil
+	return epochLoop(ctx, clearCh, in, &cfg, primer, run)
+}
+
+// epochLoop drives the per-epoch harness.Run lifecycle. run is called once per
+// epoch; if it returns cleared=true the epoch was cut short by a /clear frame,
+// History is reset to nil, and the loop blocks for the re-sent primer before
+// starting the next epoch. The loop exits when run returns cleared=false (done
+// or error) or when inbox.Wait returns an error between epochs (inbox closed or
+// parent ctx canceled).
+func epochLoop(
+	ctx context.Context,
+	clearCh <-chan struct{},
+	inbox *chatInbox,
+	cfg *harness.Config,
+	task string,
+	run func(context.Context, string) (bool, error),
+) error {
+	for {
+		cleared, err := run(ctx, task)
+		if !cleared {
+			return err
+		}
+
+		cfg.History = nil
+
+		msg, werr := inbox.Wait(ctx)
+		if werr != nil {
+			return nil
+		}
+
+		task = msg.Content
+
+		// drain any stale clear signal that arrived between epochs
+		select {
+		case <-clearCh:
+		default:
+		}
+	}
 }
 
 // buildToolRegistry assembles the model-facing tool registry: filesystem/shell
