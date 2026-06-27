@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	protocol "github.com/mhersson/contextmatrix-protocol"
@@ -176,6 +177,33 @@ func TestLoadResume(t *testing.T) {
 
 		_, err := LoadResume(path)
 		assert.ErrorContains(t, err, "unmarshal resume turn")
+	})
+
+	t.Run("turn larger than 64KB succeeds", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "resume.jsonl")
+
+		// Build a content string that exceeds the default 64 KiB scanner cap.
+		largeContent := strings.Repeat("x", 80*1024) // 80 KiB
+
+		turns := []protocol.ChatResumeTurn{
+			{Seq: 1, Role: "assistant_text", Content: largeContent},
+		}
+
+		f, err := os.Create(path)
+		require.NoError(t, err)
+
+		enc := json.NewEncoder(f)
+		for _, turn := range turns {
+			require.NoError(t, enc.Encode(turn))
+		}
+
+		require.NoError(t, f.Close())
+
+		rc, err := LoadResume(path)
+		require.NoError(t, err)
+		require.Len(t, rc.Turns, 1)
+		assert.Equal(t, largeContent, rc.Turns[0].Content)
 	})
 
 	t.Run("load then seed round-trip", func(t *testing.T) {

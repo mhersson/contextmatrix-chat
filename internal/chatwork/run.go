@@ -107,9 +107,10 @@ func Run(ctx context.Context) error {
 	// 8. Redactor: mask the secrets from all tool output and event data.
 	red := redact.New([]string{openRouterKey, gitToken, os.Getenv("CM_MCP_API_KEY")})
 
-	// 9. Compaction config from env, with documented defaults.
+	// 9. Compaction and tool-output config from env, with documented defaults.
 	threshold := envFloatDefault("CMX_COMPACTION_THRESHOLD", defaultCompactionThreshold)
 	keepRecent := envIntDefault("CMX_COMPACTION_KEEP_RECENT_TURNS", defaultKeepRecentTurns)
+	toolOutputMaxBytes := envIntDefault("CMX_TOOL_OUTPUT_MAX_BYTES", 131072)
 
 	// 10. Inbox: channel-backed; Pump reads stdin frames in a goroutine and
 	// closes the inbox on EOF so harness.Run exits when the host closes stdin.
@@ -128,16 +129,17 @@ func Run(ctx context.Context) error {
 	// 12. Epoch loop: one harness.Run per epoch; /clear resets history and
 	// restarts with the re-sent primer as the new task.
 	cfg := harness.Config{
-		Model:            model,
-		ContextWindow:    ctxWindow,
-		Interactive:      true,
-		MaxTurns:         0,
-		MaxCostUSD:       0,
-		Compaction:       &harness.Compaction{Threshold: threshold, KeepRecentTurns: keepRecent},
-		History:          history,
-		Inbox:            in,
-		RedactToolOutput: red.Apply,
-		SystemPrompt:     chatSystemPrompt,
+		Model:              model,
+		ContextWindow:      ctxWindow,
+		Interactive:        true,
+		MaxTurns:           0,
+		MaxCostUSD:         0,
+		ToolOutputMaxBytes: toolOutputMaxBytes,
+		Compaction:         &harness.Compaction{Threshold: threshold, KeepRecentTurns: keepRecent},
+		History:            history,
+		Inbox:              in,
+		RedactToolOutput:   red.Apply,
+		SystemPrompt:       chatSystemPrompt,
 	}
 
 	run := func(ctx context.Context, epochTask string) (bool, error) {
@@ -223,11 +225,13 @@ func buildToolRegistry(ctx context.Context) (*tools.Registry, *mcpbridge.Bridge,
 		return nil, nil, fmt.Errorf("connect to mcp: %w", err)
 	}
 
+	bashTimeout := envIntDefault("CMX_BASH_TIMEOUT_MAX_SECONDS", 600)
+
 	ts := []tools.Tool{
 		tools.NewReadTool(workspaceRoot),
 		tools.NewWriteTool(workspaceRoot),
 		tools.NewEditTool(workspaceRoot),
-		tools.NewBashTool(workspaceRoot),
+		tools.NewBashTool(workspaceRoot).WithMaxTimeout(bashTimeout),
 		tools.NewGrepTool(workspaceRoot),
 		tools.NewGitTool(workspaceRoot),
 		tools.NewGlobTool(workspaceRoot),

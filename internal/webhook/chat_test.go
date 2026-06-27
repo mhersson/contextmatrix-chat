@@ -188,6 +188,37 @@ func mustJSON(t *testing.T, v any) []byte {
 
 // ---- /chat/start ------------------------------------------------------------
 
+func TestChatStart_InvalidSessionID(t *testing.T) {
+	cases := []struct {
+		name      string
+		sessionID string
+	}{
+		{"empty", ""},
+		{"dotdot", ".."},
+		{"dotdot prefix", "../x"},
+		{"slash path", "a/b"},
+		{"absolute", "/etc/passwd"},
+		{"backslash", `a\b`},
+		{"dotdot embedded", "foo..bar"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv, _, fe := newChatServer(t)
+
+			body := mustJSON(t, protocol.ChatStartPayload{SessionID: tc.sessionID, Primer: "x"})
+			w := httptest.NewRecorder()
+			srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+
+			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), protocol.CodeInvalidField)
+			assert.Empty(t, fe.Launched(), "no container must be launched for invalid session id")
+		})
+	}
+}
+
 func TestChatStart_HMACRequired(t *testing.T) {
 	srv, _, _ := newChatServer(t)
 
@@ -381,6 +412,49 @@ func TestChatStart_NoResumeNoResumeFile(t *testing.T) {
 	hostRunDir := strings.SplitN(runDirBind, ":", 2)[0]
 	_, err := os.Stat(filepath.Join(hostRunDir, "resume.jsonl"))
 	assert.True(t, os.IsNotExist(err), "resume.jsonl should not exist when Resume is nil")
+}
+
+func TestChatStart_ConfigEnvForwarded(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+
+	srv := NewServer(Config{
+		APIKey:   testAPIKey,
+		Executor: fe,
+		Tracker:  tracker,
+		Chat: ChatConfig{
+			Image:                     testImage,
+			MCPURL:                    testMCPURL,
+			TaskSkillsDir:             "/run/cm-skills",
+			TaskSkillsHostDir:         "/host/skills",
+			SecretsHostDir:            "/host/secrets",
+			ChatRunDirBase:            t.TempDir(),
+			MaxConcurrent:             10,
+			ToolOutputMaxBytes:        65536,
+			CompactionThreshold:       0.75,
+			CompactionKeepRecentTurns: 4,
+			BashTimeoutMaxSeconds:     300,
+			WorkerExtraEnv:            map[string]string{"MY_KEY": "my-value"},
+		},
+	})
+
+	body := mustJSON(t, protocol.ChatStartPayload{
+		SessionID: testSession,
+		Primer:    "hello",
+	})
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	launched := fe.Launched()
+	require.Len(t, launched, 1)
+
+	envMap := envToMap(launched[0].Env)
+	assert.Equal(t, "65536", envMap["CMX_TOOL_OUTPUT_MAX_BYTES"])
+	assert.Equal(t, "0.75", envMap["CMX_COMPACTION_THRESHOLD"])
+	assert.Equal(t, "4", envMap["CMX_COMPACTION_KEEP_RECENT_TURNS"])
+	assert.Equal(t, "300", envMap["CMX_BASH_TIMEOUT_MAX_SECONDS"])
+	assert.Equal(t, "my-value", envMap["MY_KEY"])
 }
 
 // ---- /chat/end --------------------------------------------------------------

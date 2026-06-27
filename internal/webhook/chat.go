@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	"github.com/mhersson/contextmatrix-chat/internal/frames"
@@ -19,6 +21,18 @@ import (
 func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	var p protocol.ChatStartPayload
 	if !s.decode(w, r, &p) {
+		return
+	}
+
+	// Guard: a missing or path-unsafe session ID would let chatExit's
+	// os.RemoveAll(filepath.Join(chatRunDirBase, sessionID)) delete the entire
+	// run-dir base (empty ID) or escape the bind-mount (path separators / ..).
+	if p.SessionID == "" ||
+		p.SessionID != filepath.Base(p.SessionID) ||
+		strings.ContainsAny(p.SessionID, `/\`) ||
+		strings.Contains(p.SessionID, "..") {
+		writeError(w, http.StatusBadRequest, protocol.CodeInvalidField, "invalid session_id")
+
 		return
 	}
 
@@ -75,6 +89,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		"CM_MCP_API_KEY=" + p.MCPAPIKey,
 		"CM_MODEL=" + p.Model,
 		"CMX_TASK_SKILLS_DIR=" + s.taskSkillsDir,
+		"CMX_TOOL_OUTPUT_MAX_BYTES=" + strconv.Itoa(s.toolOutputMaxBytes),
+		"CMX_COMPACTION_THRESHOLD=" + strconv.FormatFloat(s.compactionThreshold, 'g', -1, 64),
+		"CMX_COMPACTION_KEEP_RECENT_TURNS=" + strconv.Itoa(s.compactionKeepRecentTurns),
+		"CMX_BASH_TIMEOUT_MAX_SECONDS=" + strconv.Itoa(s.bashTimeoutMaxSeconds),
 	}
 
 	if p.Project != "" {
@@ -87,6 +105,13 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	if p.Resume != nil {
 		env = append(env, "CM_CHAT_RESUME=1")
+	}
+
+	// Operator-supplied extra env is appended after the system vars so that
+	// explicit operator entries take precedence over CM_*/CMX_* defaults for
+	// any duplicate keys.
+	for k, v := range s.workerExtraEnv {
+		env = append(env, k+"="+v)
 	}
 
 	binds := []string{

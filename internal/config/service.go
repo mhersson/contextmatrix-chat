@@ -23,7 +23,7 @@ const defaultSecretsDir = "/var/run/cm-chat/secrets" //nolint:gosec // path, not
 
 // defaultTaskSkillsContainerDir is where task-skills are bind-mounted inside
 // the worker container.
-const defaultTaskSkillsContainerDir = "/var/run/cm-agent/task-skills" //nolint:gosec // path, not a credential
+const defaultTaskSkillsContainerDir = "/var/run/cm-chat/task-skills" //nolint:gosec // path, not a credential
 
 // GitHubAppConfig holds GitHub App credentials for minting installation tokens.
 // Mirrors the runner/agent field shape so operators carry one mental model.

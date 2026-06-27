@@ -45,6 +45,11 @@ func SeedHistory(rc *protocol.ChatResumeContext) []llm.Message {
 	return msgs
 }
 
+// maxResumeLine is the per-line buffer cap for LoadResume. Resume turns can
+// contain long model responses, so 1 MiB gives substantial headroom over the
+// bufio default (64 KiB) without unbounded allocation.
+const maxResumeLine = 1 << 20 // 1 MiB
+
 // LoadResume reads a newline-delimited JSON file (one ChatResumeTurn per line,
 // as written by json.Encoder) and returns the assembled ChatResumeContext.
 // Blank lines are skipped; a malformed line returns an error. A missing file
@@ -60,6 +65,7 @@ func LoadResume(path string) (*protocol.ChatResumeContext, error) {
 	var turns []protocol.ChatResumeTurn
 
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxResumeLine)
 
 	for scanner.Scan() {
 		line := scanner.Text()

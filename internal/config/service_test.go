@@ -23,7 +23,7 @@ func validServiceConfig() ServiceConfig {
 		Port:             9093,
 		SecretsDir:       "/var/run/cm-chat/secrets",
 		Compaction:       CompactionConfig{Threshold: 0.85, KeepRecentTurns: 6},
-		TaskSkills:       TaskSkillsConfig{Dir: "/opt/task-skills", ContainerDir: "/var/run/cm-agent/task-skills"},
+		TaskSkills:       TaskSkillsConfig{Dir: "/opt/task-skills", ContainerDir: "/var/run/cm-chat/task-skills"},
 		ChatRunDir:       "/var/run/cm-chat/sessions",
 		GitHub: GitHubConfig{
 			AuthMode: "pat",
@@ -63,7 +63,7 @@ func TestServiceDefaults(t *testing.T) {
 	assert.Equal(t, 131072, cfg.ToolOutputMaxBytes)
 	assert.InDelta(t, 0.85, cfg.Compaction.Threshold, 1e-9, "compaction.threshold default must be 0.85")
 	assert.Equal(t, 6, cfg.Compaction.KeepRecentTurns, "compaction.keep_recent_turns default must be 6")
-	assert.Equal(t, "/var/run/cm-agent/task-skills", cfg.TaskSkills.ContainerDir)
+	assert.Equal(t, "/var/run/cm-chat/task-skills", cfg.TaskSkills.ContainerDir)
 }
 
 func TestServiceLoadFromFile(t *testing.T) {

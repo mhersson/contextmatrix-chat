@@ -43,6 +43,19 @@ type ChatConfig struct {
 	PidsLimit   int64
 	// MaxConcurrent is the concurrency cap enforced before Launch is attempted.
 	MaxConcurrent int
+	// ToolOutputMaxBytes caps tool output fed into the model context.
+	// 0 disables the cap; config default is 131072.
+	ToolOutputMaxBytes int
+	// CompactionThreshold and CompactionKeepRecentTurns control in-window
+	// compaction, forwarded to the worker as CMX_COMPACTION_* env vars.
+	CompactionThreshold       float64
+	CompactionKeepRecentTurns int
+	// BashTimeoutMaxSeconds is the per-command ceiling forwarded to the worker
+	// as CMX_BASH_TIMEOUT_MAX_SECONDS.
+	BashTimeoutMaxSeconds int
+	// WorkerExtraEnv is operator-supplied KEY=VALUE pairs appended to the
+	// container env after the CM_*/CMX_* system vars.
+	WorkerExtraEnv map[string]string
 }
 
 // Config carries the dependencies NewServer needs. Pointers may be shared with
@@ -87,15 +100,20 @@ type Server struct {
 	tracker  *executor.Tracker
 
 	// chat config (populated from ChatConfig at NewServer time)
-	image             string
-	mcpURL            string
-	taskSkillsDir     string
-	taskSkillsHostDir string
-	secretsHostDir    string
-	chatRunDirBase    string
-	memBytes          int64
-	pidsLimit         int64
-	maxConcurrent     int
+	image                     string
+	mcpURL                    string
+	taskSkillsDir             string
+	taskSkillsHostDir         string
+	secretsHostDir            string
+	chatRunDirBase            string
+	memBytes                  int64
+	pidsLimit                 int64
+	maxConcurrent             int
+	toolOutputMaxBytes        int
+	compactionThreshold       float64
+	compactionKeepRecentTurns int
+	bashTimeoutMaxSeconds     int
+	workerExtraEnv            map[string]string
 
 	hub *logbridge.Hub
 
@@ -151,26 +169,31 @@ func NewServer(cfg Config) *Server {
 	}
 
 	return &Server{
-		apiKey:            cfg.APIKey,
-		skew:              skew,
-		executor:          cfg.Executor,
-		tracker:           cfg.Tracker,
-		image:             cfg.Chat.Image,
-		mcpURL:            cfg.Chat.MCPURL,
-		taskSkillsDir:     cfg.Chat.TaskSkillsDir,
-		taskSkillsHostDir: cfg.Chat.TaskSkillsHostDir,
-		secretsHostDir:    cfg.Chat.SecretsHostDir,
-		chatRunDirBase:    cfg.Chat.ChatRunDirBase,
-		memBytes:          cfg.Chat.MemoryBytes,
-		pidsLimit:         cfg.Chat.PidsLimit,
-		maxConcurrent:     cfg.Chat.MaxConcurrent,
-		hub:               cfg.Hub,
-		replay:            replay,
-		dedup:             dedup,
-		draining:          draining,
-		keepaliveInterval: cfg.KeepaliveInterval,
-		metrics:           cfg.Metrics,
-		logger:            logger,
+		apiKey:                    cfg.APIKey,
+		skew:                      skew,
+		executor:                  cfg.Executor,
+		tracker:                   cfg.Tracker,
+		image:                     cfg.Chat.Image,
+		mcpURL:                    cfg.Chat.MCPURL,
+		taskSkillsDir:             cfg.Chat.TaskSkillsDir,
+		taskSkillsHostDir:         cfg.Chat.TaskSkillsHostDir,
+		secretsHostDir:            cfg.Chat.SecretsHostDir,
+		chatRunDirBase:            cfg.Chat.ChatRunDirBase,
+		memBytes:                  cfg.Chat.MemoryBytes,
+		pidsLimit:                 cfg.Chat.PidsLimit,
+		maxConcurrent:             cfg.Chat.MaxConcurrent,
+		toolOutputMaxBytes:        cfg.Chat.ToolOutputMaxBytes,
+		compactionThreshold:       cfg.Chat.CompactionThreshold,
+		compactionKeepRecentTurns: cfg.Chat.CompactionKeepRecentTurns,
+		bashTimeoutMaxSeconds:     cfg.Chat.BashTimeoutMaxSeconds,
+		workerExtraEnv:            cfg.Chat.WorkerExtraEnv,
+		hub:                       cfg.Hub,
+		replay:                    replay,
+		dedup:                     dedup,
+		draining:                  draining,
+		keepaliveInterval:         cfg.KeepaliveInterval,
+		metrics:                   cfg.Metrics,
+		logger:                    logger,
 	}
 }
 
