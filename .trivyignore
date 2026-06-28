@@ -1,0 +1,11 @@
+# Trivy suppressions for the worker image scan (.github/workflows/ci.yaml).
+# Each entry documents a vulnerability we have evaluated and accepted; add a
+# bare CVE id on its own line to actively suppress one.
+
+# CVE-2026-33671 — npm-bundled tinyglobby/picomatch 4.0.3 ReDoS (4.0.4 fixes);
+# only npm's transitive, single-tenant worker, unreachable from a prompt attacker.
+
+# CVE-2026-34040 — Docker SDK Moby daemon authz-bypass (v29.3.1 fixes);
+# the chat service uses the Docker *client* only, against a trusted local
+# daemon; govulncheck reports no finding. v28->v29 major bump pending
+# Dependabot review.
