@@ -123,6 +123,35 @@ dependency.
    `api_key`. The ContextMatrix-side configuration lives in the ContextMatrix
    repo.
 
+### Service management
+
+For an unattended deployment, run chat as a systemd **user** service instead of
+the foreground `serve` command:
+
+```bash
+make build                    # build the contextmatrix-chat binary
+./svc.sh install              # write + enable ~/.config/systemd/user/contextmatrix-chat.service
+./svc.sh start                # start it (also: stop / status / print / verify / uninstall)
+```
+
+The generated unit is sandboxed (read-only home, restricted syscalls, resource
+caps) and runs `serve --config ${XDG_CONFIG_HOME:-~/.config}/contextmatrix-chat/serve.yaml`.
+`svc.sh` reads `chat_run_dir` from that config and whitelists it for writing.
+
+`redeploy.sh` updates a running install in place — rebuild the binary and worker
+image, pin the new image digest into `serve.yaml`, and restart the service:
+
+```bash
+./redeploy.sh
+```
+
+> **Writable runtime dirs.** Chat writes secrets under `secrets_dir` (default
+> `/var/run/cm-chat/secrets`) and per-session state under `chat_run_dir`.
+> `/var/run` is root-owned and not created for a user service — either pre-create
+> `/var/run/cm-chat` and `chown` it to your user, or set these to paths under your
+> home (e.g. `~/.cm-chat/secrets`, `~/.cm-chat/runs`); the unit whitelists both
+> trees plus the configured `chat_run_dir`.
+
 ## Commands
 
 | Command | Purpose                                                                              |
