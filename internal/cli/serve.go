@@ -26,6 +26,7 @@ import (
 	"github.com/mhersson/contextmatrix-chat/internal/logbridge"
 	"github.com/mhersson/contextmatrix-chat/internal/metrics"
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
+	"github.com/mhersson/contextmatrix-chat/internal/taskskills"
 	"github.com/mhersson/contextmatrix-chat/internal/webhook"
 )
 
@@ -141,17 +142,24 @@ func runServe(ctx context.Context, configPath string) error {
 		base = cfg.ContextMatrixURL
 	}
 
+	// Task-skills resolver: fetches the {git_remote_url, ref} pointer from CM and
+	// shallow-clones it once into a host cache dir that handleChatStart binds
+	// read-only into each worker at /run/cm-skills. CM is the single source of
+	// truth — chat carries no task-skills config. Uses cfg.ContextMatrixURL (the
+	// host-reachable CM URL), not the container URL.
+	skillsCache := filepath.Join(cfg.SecretsDir, "task-skills-cache")
+	skillsResolver := taskskills.NewResolver(cfg.ContextMatrixURL, cfg.APIKey, skillsCache, provider, logger)
+
 	srv := webhook.NewServer(webhook.Config{
-		APIKey:   cfg.APIKey,
-		Skew:     cfg.ReplaySkew,
-		Executor: exec,
-		Tracker:  tracker,
-		Hub:      hub,
+		APIKey:         cfg.APIKey,
+		Skew:           cfg.ReplaySkew,
+		Executor:       exec,
+		Tracker:        tracker,
+		SkillsResolver: skillsResolver,
+		Hub:            hub,
 		Chat: webhook.ChatConfig{
 			Image:                     cfg.BaseImage,
 			MCPURL:                    composeMCPURL(base),
-			TaskSkillsDir:             cfg.TaskSkills.ContainerDir,
-			TaskSkillsHostDir:         cfg.TaskSkills.Dir,
 			SecretsHostDir:            sharedDir,
 			ChatRunDirBase:            cfg.ChatRunDir,
 			MemoryBytes:               cfg.ContainerMemoryBytes,

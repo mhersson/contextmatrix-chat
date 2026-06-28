@@ -23,7 +23,6 @@ func validServiceConfig() ServiceConfig {
 		Port:             9093,
 		SecretsDir:       "/var/run/cm-chat/secrets",
 		Compaction:       CompactionConfig{Threshold: 0.85, KeepRecentTurns: 6},
-		TaskSkills:       TaskSkillsConfig{Dir: "/opt/task-skills", ContainerDir: "/var/run/cm-chat/task-skills"},
 		ChatRunDir:       "/var/run/cm-chat/sessions",
 		GitHub: GitHubConfig{
 			AuthMode: "pat",
@@ -63,7 +62,6 @@ func TestServiceDefaults(t *testing.T) {
 	assert.Equal(t, 131072, cfg.ToolOutputMaxBytes)
 	assert.InDelta(t, 0.85, cfg.Compaction.Threshold, 1e-9, "compaction.threshold default must be 0.85")
 	assert.Equal(t, 6, cfg.Compaction.KeepRecentTurns, "compaction.keep_recent_turns default must be 6")
-	assert.Equal(t, "/var/run/cm-chat/task-skills", cfg.TaskSkills.ContainerDir)
 }
 
 func TestServiceLoadFromFile(t *testing.T) {
@@ -92,9 +90,6 @@ log_level: debug
 compaction:
   threshold: 0.75
   keep_recent_turns: 4
-task_skills:
-  dir: /opt/task-skills
-  container_dir: /mnt/task-skills
 chat_run_dir: /var/run/cm-chat/sessions
 github:
   auth_mode: app
@@ -133,8 +128,6 @@ worker_extra_env:
 	assert.Equal(t, "debug", cfg.LogLevel)
 	assert.InDelta(t, 0.75, cfg.Compaction.Threshold, 1e-9)
 	assert.Equal(t, 4, cfg.Compaction.KeepRecentTurns)
-	assert.Equal(t, "/opt/task-skills", cfg.TaskSkills.Dir)
-	assert.Equal(t, "/mnt/task-skills", cfg.TaskSkills.ContainerDir)
 	assert.Equal(t, "/var/run/cm-chat/sessions", cfg.ChatRunDir)
 	assert.Equal(t, "app", cfg.GitHub.AuthMode)
 	assert.Equal(t, int64(12345), cfg.GitHub.App.AppID)
@@ -151,8 +144,6 @@ contextmatrix_url: http://from-file:8080
 api_key: filekeyfilekeyfilekeyfilekeyfile
 base_image: ghcr.io/example/chat:v1
 openrouter_api_key: sk-or-file
-task_skills:
-  dir: /opt/task-skills-file
 chat_run_dir: /var/run/file
 github:
   auth_mode: pat
@@ -168,7 +159,6 @@ github:
 	t.Setenv("CMX_GITHUB__AUTH_MODE", "pat")
 	t.Setenv("CMX_GITHUB__PAT__TOKEN", "ghp_env")
 	t.Setenv("CMX_COMPACTION__THRESHOLD", "0.90")
-	t.Setenv("CMX_TASK_SKILLS__DIR", "/opt/task-skills-env")
 	t.Setenv("CMX_CHAT_RUN_DIR", "/var/run/env")
 
 	cfg, err := LoadService(path)
@@ -179,7 +169,6 @@ github:
 	assert.Equal(t, "sk-or-env", cfg.OpenRouterAPIKey)
 	assert.Equal(t, "ghp_env", cfg.GitHub.PAT.Token)
 	assert.InDelta(t, 0.90, cfg.Compaction.Threshold, 1e-9)
-	assert.Equal(t, "/opt/task-skills-env", cfg.TaskSkills.Dir)
 	assert.Equal(t, "/var/run/env", cfg.ChatRunDir)
 	// Untouched file value survives.
 	assert.Equal(t, "ghcr.io/example/chat:v1", cfg.BaseImage)
@@ -317,14 +306,6 @@ func TestServiceValidate(t *testing.T) {
 		require.NoError(t, cfg.Validate())
 	})
 
-	t.Run("missing task_skills.dir errors", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.TaskSkills.Dir = ""
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "task_skills.dir")
-	})
-
 	t.Run("missing chat_run_dir errors", func(t *testing.T) {
 		cfg := validServiceConfig()
 		cfg.ChatRunDir = ""
@@ -418,7 +399,6 @@ func clearServiceEnv(t *testing.T) {
 		"CMX_GITHUB__AUTH_MODE", "CMX_GITHUB__PAT__TOKEN",
 		"CMX_ADMIN_PORT",
 		"CMX_COMPACTION__THRESHOLD", "CMX_COMPACTION__KEEP_RECENT_TURNS",
-		"CMX_TASK_SKILLS__DIR", "CMX_TASK_SKILLS__CONTAINER_DIR",
 		"CMX_CHAT_RUN_DIR",
 	} {
 		if _, ok := os.LookupEnv(e); ok {

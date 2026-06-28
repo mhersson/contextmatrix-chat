@@ -7,7 +7,7 @@
 # separator:
 #   CMX_GITHUB__AUTH_MODE=pat
 #   CMX_COMPACTION__THRESHOLD=0.85
-#   CMX_TASK_SKILLS__DIR=/srv/task-skills
+#   CMX_GITHUB__APP__APP_ID=12345
 
 # ─── ContextMatrix connectivity ───────────────────────────────────────────────
 
@@ -106,16 +106,12 @@ openrouter_api_key: ""
 
 # ─── Task skills ──────────────────────────────────────────────────────────────
 
-task_skills:
-  # Host-side directory holding the task-skills snapshot. It is bind-mounted
-  # read-only into each worker at container_dir. Required.
-  # CMX_TASK_SKILLS__DIR
-  # dir: /srv/contextmatrix/task-skills
-
-  # In-container mount destination, forwarded to the worker as
-  # CMX_TASK_SKILLS_DIR. Default: /var/run/cm-chat/task-skills.
-  # CMX_TASK_SKILLS__CONTAINER_DIR
-  container_dir: /var/run/cm-chat/task-skills
+# No configuration. Task-skills are sourced from ContextMatrix — the single
+# source of truth. Chat fetches a {git_remote_url, ref} pointer from CM, clones
+# it on the host, and mounts the clone read-only into each worker at
+# /run/cm-skills. What is served is governed by CM's own task_skills config
+# (task_skills.dir / task_skills.git_remote_url); the chat backend's HMAC key
+# (api_key above) must match CM's backends.chat.api_key.
 
 # ─── In-context compaction ────────────────────────────────────────────────────
 

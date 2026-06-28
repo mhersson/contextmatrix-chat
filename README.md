@@ -99,8 +99,7 @@ dependency.
    mkdir -p ~/.config/contextmatrix-chat
    cp serve.yaml.example ~/.config/contextmatrix-chat/serve.yaml
    # set: contextmatrix_url, container_contextmatrix_url, api_key,
-   #      openrouter_api_key, base_image, chat_run_dir, task_skills.dir,
-   #      github.*
+   #      openrouter_api_key, base_image, chat_run_dir, github.*
    ```
 
    Every field also has a `CMX_*` override (see `serve.yaml.example`).
@@ -168,8 +167,12 @@ underscore (`CMX_GITHUB__AUTH_MODE`, `CMX_COMPACTION__THRESHOLD`).
 `serve.yaml.example` documents every field, its default, and its env override.
 
 Required fields: `contextmatrix_url`, `api_key` (≥ 32 chars), `openrouter_api_key`,
-`base_image`, `chat_run_dir`, `task_skills.dir`, and a `github` auth block
+`base_image`, `chat_run_dir`, and a `github` auth block
 (`auth_mode: app | pat` with the matching credentials).
+
+Task-skills need no chat config: serve fetches a git pointer from ContextMatrix,
+clones it on the host, and mounts it read-only into each worker at
+`/run/cm-skills`. CM is the single source of truth.
 
 ## Development
 

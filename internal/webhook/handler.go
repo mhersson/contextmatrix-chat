@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -20,6 +21,13 @@ const (
 	maxRequestBodyBytes = 1 << 20 // 1 MiB
 )
 
+// SkillsResolver fetches the task-skills pointer from CM, clones it once, and
+// returns the host directory to bind read-only into each worker container. The
+// webhook server calls it on each chat/start. *taskskills.Resolver satisfies it.
+type SkillsResolver interface {
+	Resolve(ctx context.Context) (string, error)
+}
+
 // ChatConfig carries the static, per-process chat backend settings. All fields
 // are set at serve startup; they are not reloaded at runtime.
 type ChatConfig struct {
@@ -27,11 +35,6 @@ type ChatConfig struct {
 	Image string
 	// MCPURL is the CM MCP endpoint forwarded to each container as CM_MCP_URL.
 	MCPURL string
-	// TaskSkillsDir is the in-container mount path for task skills, passed as
-	// CMX_TASK_SKILLS_DIR (e.g. /run/cm-skills).
-	TaskSkillsDir string
-	// TaskSkillsHostDir is the host-side directory bind-mounted at TaskSkillsDir.
-	TaskSkillsHostDir string
 	// SecretsHostDir is the host-side secrets directory bind-mounted at
 	// /run/cm-secrets inside each container.
 	SecretsHostDir string
@@ -69,6 +72,10 @@ type Config struct {
 	Executor executor.Executor
 	Tracker  *executor.Tracker
 
+	// SkillsResolver fetches + clones CM's task-skills onto the host and returns
+	// the dir to bind read-only into each worker. nil disables task-skills.
+	SkillsResolver SkillsResolver
+
 	// Chat carries the static per-process chat backend settings.
 	Chat ChatConfig
 
@@ -102,8 +109,7 @@ type Server struct {
 	// chat config (populated from ChatConfig at NewServer time)
 	image                     string
 	mcpURL                    string
-	taskSkillsDir             string
-	taskSkillsHostDir         string
+	skillsResolver            SkillsResolver
 	secretsHostDir            string
 	chatRunDirBase            string
 	memBytes                  int64
@@ -175,8 +181,7 @@ func NewServer(cfg Config) *Server {
 		tracker:                   cfg.Tracker,
 		image:                     cfg.Chat.Image,
 		mcpURL:                    cfg.Chat.MCPURL,
-		taskSkillsDir:             cfg.Chat.TaskSkillsDir,
-		taskSkillsHostDir:         cfg.Chat.TaskSkillsHostDir,
+		skillsResolver:            cfg.SkillsResolver,
 		secretsHostDir:            cfg.Chat.SecretsHostDir,
 		chatRunDirBase:            cfg.Chat.ChatRunDirBase,
 		memBytes:                  cfg.Chat.MemoryBytes,

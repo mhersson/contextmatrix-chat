@@ -24,6 +24,18 @@ import (
 
 // ---- test doubles -----------------------------------------------------------
 
+// fakeSkillsResolver is a test double for SkillsResolver. It returns a fixed
+// host dir (or an error) so chat/start tests exercise the bind/env wiring
+// without a real CM endpoint or git clone.
+type fakeSkillsResolver struct {
+	dir string
+	err error
+}
+
+func (f fakeSkillsResolver) Resolve(context.Context) (string, error) {
+	return f.dir, f.err
+}
+
 // stdinCapture is a thread-safe in-memory WriteCloser that records what was
 // written and whether Close was called. Tests inject it into Run.Stdin to
 // inspect frame writes without needing a real Docker attachment.
@@ -137,19 +149,18 @@ func newChatServer(t *testing.T) (*Server, *executor.Tracker, *fakeExecutor) {
 	fe := &fakeExecutor{tracker: tracker}
 
 	srv := NewServer(Config{
-		APIKey:   testAPIKey,
-		Executor: fe,
-		Tracker:  tracker,
+		APIKey:         testAPIKey,
+		Executor:       fe,
+		Tracker:        tracker,
+		SkillsResolver: fakeSkillsResolver{dir: "/host/skills"},
 		Chat: ChatConfig{
-			Image:             testImage,
-			MCPURL:            testMCPURL,
-			TaskSkillsDir:     "/run/cm-skills",
-			TaskSkillsHostDir: "/host/skills",
-			SecretsHostDir:    "/host/secrets",
-			ChatRunDirBase:    t.TempDir(),
-			MemoryBytes:       512 * 1024 * 1024,
-			PidsLimit:         128,
-			MaxConcurrent:     10,
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			SecretsHostDir: "/host/secrets",
+			ChatRunDirBase: t.TempDir(),
+			MemoryBytes:    512 * 1024 * 1024,
+			PidsLimit:      128,
+			MaxConcurrent:  10,
 		},
 	})
 
@@ -425,8 +436,6 @@ func TestChatStart_ConfigEnvForwarded(t *testing.T) {
 		Chat: ChatConfig{
 			Image:                     testImage,
 			MCPURL:                    testMCPURL,
-			TaskSkillsDir:             "/run/cm-skills",
-			TaskSkillsHostDir:         "/host/skills",
 			SecretsHostDir:            "/host/secrets",
 			ChatRunDirBase:            t.TempDir(),
 			MaxConcurrent:             10,
@@ -455,6 +464,42 @@ func TestChatStart_ConfigEnvForwarded(t *testing.T) {
 	assert.Equal(t, "4", envMap["CMX_COMPACTION_KEEP_RECENT_TURNS"])
 	assert.Equal(t, "300", envMap["CMX_BASH_TIMEOUT_MAX_SECONDS"])
 	assert.Equal(t, "my-value", envMap["MY_KEY"])
+}
+
+func TestChatStart_NoSkillsWhenResolverEmpty(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+
+	// Resolver yields no skills (empty pointer or fetch failure): the worker
+	// launches without the skills bind or CMX_TASK_SKILLS_DIR env.
+	srv := NewServer(Config{
+		APIKey:         testAPIKey,
+		Executor:       fe,
+		Tracker:        tracker,
+		SkillsResolver: fakeSkillsResolver{dir: ""},
+		Chat: ChatConfig{
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			SecretsHostDir: "/host/secrets",
+			ChatRunDirBase: t.TempDir(),
+			MaxConcurrent:  10,
+		},
+	})
+
+	body := mustJSON(t, protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"})
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	launched := fe.Launched()
+	require.Len(t, launched, 1)
+
+	_, hasSkillsEnv := envToMap(launched[0].Env)["CMX_TASK_SKILLS_DIR"]
+	assert.False(t, hasSkillsEnv, "no CMX_TASK_SKILLS_DIR when skills unavailable")
+
+	for _, b := range launched[0].Binds {
+		assert.NotContains(t, b, "/run/cm-skills", "no skills bind when skills unavailable")
+	}
 }
 
 // ---- /chat/end --------------------------------------------------------------

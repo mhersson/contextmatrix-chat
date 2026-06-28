@@ -151,8 +151,10 @@ we got here.
    `/run/cm-secrets`. The worker's git credential helper reads the token on each
    call, so rotation is transparent. Secrets are redacted from all tool output
    and events.
-8. **task-skills are mounted read-only** at `task_skills.container_dir` and
-   engaged by the model via the `Skill` tool.
+8. **task-skills come from ContextMatrix** (the single source of truth): serve
+   fetches a `{git_remote_url, ref}` pointer from CM, clones it on the host, and
+   bind-mounts the clone read-only at `/run/cm-skills`. The model engages them
+   via the `Skill` tool. Chat carries no task-skills config.
 9. **Webhooks are HMAC-authenticated, replay-protected, and deduplicated.**
    `/message` is idempotent by `message_id`: a retry returns a cached ack without
    re-writing the frame to stdin.
