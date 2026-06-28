@@ -19,6 +19,7 @@ const (
 	OutcomeFailure     = "failure"
 	OutcomeTimeout     = "timeout"
 	OutcomeKilled      = "killed"
+	OutcomeEnded       = "ended"
 	OutcomeIdleTimeout = "idle_timeout"
 )
 

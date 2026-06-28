@@ -74,6 +74,7 @@ type LaunchSpec struct {
 // depends on this interface, not on DockerExecutor.
 type Executor interface {
 	Launch(ctx context.Context, spec LaunchSpec) error
+	Stop(ctx context.Context, sessionID string) error
 	Kill(ctx context.Context, sessionID string) error
 	List(ctx context.Context) ([]*Run, error)
 	StopAll(ctx context.Context) ([]*Run, error)
@@ -332,6 +333,30 @@ func (e *DockerExecutor) waitAndCleanup(
 	if e.onExit != nil {
 		e.onExit(sessionID, exitCode)
 	}
+}
+
+// Stop gracefully stops the tracked container for sessionID (SIGTERM, then
+// SIGKILL after the daemon grace period). It records the "ended" outcome so the
+// container_duration metric distinguishes an operator-ended session from a crash
+// or a kill. Removal and tracker cleanup are handled by waitAndCleanup once the
+// container transitions to not-running. Returns ErrNotFound when no run is
+// tracked. This is what actually ends a chat session: with StdinOnce=false,
+// closing the attach connection does not EOF the worker, so the container must be
+// stopped explicitly or it runs until the idle reaper.
+func (e *DockerExecutor) Stop(ctx context.Context, sessionID string) error {
+	run, ok := e.tracker.Get(sessionID)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNotFound, sessionID)
+	}
+
+	e.tracker.SetReason(sessionID, metrics.OutcomeEnded)
+
+	timeout := 10 // seconds grace before the daemon escalates to SIGKILL
+	if err := e.docker.ContainerStop(ctx, run.ContainerID, container.StopOptions{Timeout: &timeout}); err != nil {
+		return fmt.Errorf("stop container %s: %w", sessionID, err)
+	}
+
+	return nil
 }
 
 // Kill sends SIGKILL to the tracked container for sessionID. Removal is

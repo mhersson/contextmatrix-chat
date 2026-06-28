@@ -28,6 +28,8 @@ type stubExecutor struct {
 
 func (e *stubExecutor) Launch(_ context.Context, _ executor.LaunchSpec) error { return nil }
 
+func (e *stubExecutor) Stop(_ context.Context, _ string) error { return nil }
+
 func (e *stubExecutor) Kill(_ context.Context, sessionID string) error {
 	e.kills = append(e.kills, sessionID)
 

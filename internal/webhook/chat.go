@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	"github.com/mhersson/contextmatrix-chat/internal/frames"
@@ -233,7 +235,22 @@ func (s *Server) handleChatEnd(w http.ResponseWriter, r *http.Request) {
 			"session_id", p.SessionID, "error", err)
 	}
 
-	s.logger.Info("chat/end: stdin closed", "session_id", p.SessionID)
+	// Closing stdin alone does not end the session: the container runs with
+	// StdinOnce=false, so closing the attach connection does not EOF the worker.
+	// Stop the container explicitly (mirrors the runner and agent backends) so
+	// waitAndCleanup removes the container and clears the tracker entry —
+	// otherwise a later /chat/start for the same session sees it still active and
+	// returns 409. Detached ctx: the request ctx may be cancelled once we return,
+	// but the stop must run to completion.
+	stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := s.executor.Stop(stopCtx, p.SessionID); err != nil && !errors.Is(err, executor.ErrNotFound) {
+		s.logger.Warn("chat/end: container stop failed (tracker may retain session until exit)",
+			"session_id", p.SessionID, "error", err)
+	}
+
+	s.logger.Info("chat/end: session ended", "session_id", p.SessionID)
 
 	writeJSON(w, http.StatusAccepted, protocol.SuccessResponse{OK: true})
 }
