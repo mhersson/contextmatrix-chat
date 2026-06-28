@@ -82,7 +82,7 @@ func Run(ctx context.Context) error {
 	}
 
 	// 5. Tool registry: filesystem/shell tools + optional skill tool + MCP board tools.
-	reg, bridge, err := buildToolRegistry(ctx)
+	reg, bridge, err := buildToolRegistry(ctx, gitToken)
 	if err != nil {
 		return err
 	}
@@ -215,8 +215,9 @@ func epochLoop(
 
 // buildToolRegistry assembles the model-facing tool registry: filesystem/shell
 // tools rooted at /workspace, the optional skill tool, and the MCP board tools
-// from the Connect bridge.
-func buildToolRegistry(ctx context.Context) (*tools.Registry, *mcpbridge.Bridge, error) {
+// from the Connect bridge. gitToken, when non-empty, is exposed to the bash tool
+// as GH_TOKEN so the model can run `gh` (e.g. `gh pr create`).
+func buildToolRegistry(ctx context.Context, gitToken string) (*tools.Registry, *mcpbridge.Bridge, error) {
 	mcpURL := os.Getenv("CM_MCP_URL")
 	mcpAPIKey := os.Getenv("CM_MCP_API_KEY")
 
@@ -227,11 +228,22 @@ func buildToolRegistry(ctx context.Context) (*tools.Registry, *mcpbridge.Bridge,
 
 	bashTimeout := envIntDefault("CMX_BASH_TIMEOUT_MAX_SECONDS", 600)
 
+	bashTool := tools.NewBashTool(workspaceRoot).WithMaxTimeout(bashTimeout)
+	if gitToken != "" {
+		// Expose the GitHub installation token as GH_TOKEN so the model can use
+		// `gh` (e.g. `gh pr create`). Git auth flows through the rotating
+		// credential helper, but gh reads GH_TOKEN from the environment and has no
+		// equivalent hook. Mirrors the agent backend (worker/pr.go injects
+		// GH_TOKEN=CM_GIT_TOKEN). The redactor masks the token from all tool
+		// output, so `env` cannot leak it into the transcript.
+		bashTool = bashTool.WithExtraEnv([]string{"GH_TOKEN=" + gitToken})
+	}
+
 	ts := []tools.Tool{
 		tools.NewReadTool(workspaceRoot),
 		tools.NewWriteTool(workspaceRoot),
 		tools.NewEditTool(workspaceRoot),
-		tools.NewBashTool(workspaceRoot).WithMaxTimeout(bashTimeout),
+		bashTool,
 		tools.NewGrepTool(workspaceRoot),
 		tools.NewGitTool(workspaceRoot),
 		tools.NewGlobTool(workspaceRoot),
