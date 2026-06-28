@@ -21,10 +21,6 @@ const envPrefix = "CMX_"
 // avoid the gosec G101 false-positive that fires on path literals.
 const defaultSecretsDir = "/var/run/cm-chat/secrets" //nolint:gosec // path, not a credential
 
-// defaultTaskSkillsContainerDir is where task-skills are bind-mounted inside
-// the worker container.
-const defaultTaskSkillsContainerDir = "/var/run/cm-chat/task-skills" //nolint:gosec // path, not a credential
-
 // GitHubAppConfig holds GitHub App credentials for minting installation tokens.
 // Mirrors the runner/agent field shape so operators carry one mental model.
 type GitHubAppConfig struct {
@@ -55,13 +51,6 @@ type CompactionConfig struct {
 	KeepRecentTurns int     `koanf:"keep_recent_turns"`
 }
 
-// TaskSkillsConfig locates the task-skills snapshot on the host and the
-// in-container bind-mount destination (CMX_TASK_SKILLS_DIR inside the worker).
-type TaskSkillsConfig struct {
-	Dir          string `koanf:"dir"`
-	ContainerDir string `koanf:"container_dir"`
-}
-
 // ServiceConfig is the host-side chat service configuration. ContextMatrix
 // POSTs lifecycle webhooks at the service; it launches one worker container per
 // chat session.
@@ -88,7 +77,6 @@ type ServiceConfig struct {
 	ToolOutputMaxBytes        int
 	LogLevel                  string
 	Compaction                CompactionConfig
-	TaskSkills                TaskSkillsConfig
 	ChatRunDir                string
 }
 
@@ -119,7 +107,6 @@ type serviceRaw struct {
 	ToolOutputMaxBytes        int               `koanf:"tool_output_max_bytes"`
 	LogLevel                  string            `koanf:"log_level"`
 	Compaction                CompactionConfig  `koanf:"compaction"`
-	TaskSkills                TaskSkillsConfig  `koanf:"task_skills"`
 	ChatRunDir                string            `koanf:"chat_run_dir"`
 }
 
@@ -141,9 +128,6 @@ func serviceDefaults() serviceRaw {
 		Compaction: CompactionConfig{
 			Threshold:       0.85,
 			KeepRecentTurns: 6,
-		},
-		TaskSkills: TaskSkillsConfig{
-			ContainerDir: defaultTaskSkillsContainerDir,
 		},
 	}
 }
@@ -168,7 +152,6 @@ func LoadService(path string) (*ServiceConfig, error) {
 	// CMX_FOO_BAR -> "foo_bar"; nested keys use "__":
 	// CMX_GITHUB__AUTH_MODE -> "github.auth_mode"
 	// CMX_COMPACTION__THRESHOLD -> "compaction.threshold"
-	// CMX_TASK_SKILLS__DIR -> "task_skills.dir"
 	envCb := func(s string) string {
 		s = strings.ToLower(strings.TrimPrefix(s, envPrefix))
 
@@ -211,7 +194,6 @@ func (r serviceRaw) toConfig() (*ServiceConfig, error) {
 		ToolOutputMaxBytes:        r.ToolOutputMaxBytes,
 		LogLevel:                  r.LogLevel,
 		Compaction:                r.Compaction,
-		TaskSkills:                r.TaskSkills,
 		ChatRunDir:                r.ChatRunDir,
 	}, nil
 }
@@ -281,10 +263,6 @@ func (c *ServiceConfig) Validate() error {
 
 	if c.Compaction.Threshold <= 0 || c.Compaction.Threshold > 1 {
 		return fmt.Errorf("compaction.threshold must be in (0, 1], got %g", c.Compaction.Threshold)
-	}
-
-	if c.TaskSkills.Dir == "" {
-		return fmt.Errorf("task_skills.dir is required")
 	}
 
 	if c.ChatRunDir == "" {

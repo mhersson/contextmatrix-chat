@@ -14,6 +14,11 @@ import (
 	protocol "github.com/mhersson/contextmatrix-protocol"
 )
 
+// skillsMountPath is the fixed in-container mount point for task-skills. CM is
+// the single source of truth and the chat service clones the pointer it serves;
+// the path is not operator-configurable.
+const skillsMountPath = "/run/cm-skills"
+
 // handleChatStart starts a long-lived chat container for the given session. It
 // creates the per-session run directory, writes resume.jsonl and primer.txt,
 // builds the LaunchSpec, and delegates to the executor. The response body
@@ -88,7 +93,6 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		"CM_MCP_URL=" + s.mcpURL,
 		"CM_MCP_API_KEY=" + p.MCPAPIKey,
 		"CM_MODEL=" + p.Model,
-		"CMX_TASK_SKILLS_DIR=" + s.taskSkillsDir,
 		"CMX_TOOL_OUTPUT_MAX_BYTES=" + strconv.Itoa(s.toolOutputMaxBytes),
 		"CMX_COMPACTION_THRESHOLD=" + strconv.FormatFloat(s.compactionThreshold, 'g', -1, 64),
 		"CMX_COMPACTION_KEEP_RECENT_TURNS=" + strconv.Itoa(s.compactionKeepRecentTurns),
@@ -107,6 +111,26 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CM_CHAT_RESUME=1")
 	}
 
+	// Resolve task-skills from CM (the single source of truth): fetch the git
+	// pointer, clone once, and bind the clone read-only at skillsMountPath. A
+	// failure or empty pointer means this session runs without the Skill tool —
+	// never fatal to the chat start.
+	var skillsHostDir string
+
+	if s.skillsResolver != nil {
+		dir, serr := s.skillsResolver.Resolve(r.Context())
+		if serr != nil {
+			s.logger.Warn("chat/start: task-skills unavailable; launching without skills",
+				"session_id", p.SessionID, "error", serr)
+		} else {
+			skillsHostDir = dir
+		}
+	}
+
+	if skillsHostDir != "" {
+		env = append(env, "CMX_TASK_SKILLS_DIR="+skillsMountPath)
+	}
+
 	// Operator-supplied extra env is appended after the system vars so that
 	// explicit operator entries take precedence over CM_*/CMX_* defaults for
 	// any duplicate keys.
@@ -117,7 +141,9 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	binds := []string{
 		s.secretsHostDir + ":/run/cm-secrets:ro",
 		runDir + ":/run/cm-chat:ro",
-		s.taskSkillsHostDir + ":" + s.taskSkillsDir + ":ro",
+	}
+	if skillsHostDir != "" {
+		binds = append(binds, skillsHostDir+":"+skillsMountPath+":ro")
 	}
 
 	spec := executor.LaunchSpec{
