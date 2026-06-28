@@ -1,0 +1,19 @@
+# Keep the build context to what the multi-stage build actually needs
+# (go.mod, go.sum, cmd/, internal/).
+.git
+.github
+docker
+.dockerignore
+.golangci.yaml
+
+# Documentation and project metadata — not needed to build the binary.
+*.md
+LICENSE
+serve.yaml.example
+.trivyignore
+
+# Built binary and local artifacts (mirrors .gitignore).
+/contextmatrix-chat
+*.test
+.envrc
+transcripts
