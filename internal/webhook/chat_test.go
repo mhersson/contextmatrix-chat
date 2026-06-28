@@ -88,6 +88,7 @@ func (c *stdinCapture) IsClosed() bool {
 type fakeExecutor struct {
 	mu        sync.Mutex
 	launched  []executor.LaunchSpec
+	stopped   []string
 	launchErr error
 	tracker   *executor.Tracker
 	lastStdin *stdinCapture
@@ -116,6 +117,31 @@ func (f *fakeExecutor) Launch(_ context.Context, spec executor.LaunchSpec) error
 	}
 
 	return nil
+}
+
+// Stop records the call and mirrors real teardown: the live executor stops the
+// container and waitAndCleanup then clears the tracker, so the fake drops the
+// tracker entry directly to make end→reopen observable in tests.
+func (f *fakeExecutor) Stop(_ context.Context, sessionID string) error {
+	f.mu.Lock()
+	f.stopped = append(f.stopped, sessionID)
+	f.mu.Unlock()
+
+	if f.tracker != nil {
+		f.tracker.Remove(sessionID)
+	}
+
+	return nil
+}
+
+func (f *fakeExecutor) Stopped() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([]string, len(f.stopped))
+	copy(out, f.stopped)
+
+	return out
 }
 
 func (f *fakeExecutor) Kill(_ context.Context, _ string) error             { return nil }
@@ -520,6 +546,33 @@ func TestChatEnd_ClosesStdin(t *testing.T) {
 
 	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
 	assert.True(t, stdin.IsClosed(), "stdin should be closed after /chat/end")
+}
+
+// TestChatEnd_StopsContainerAndClearsTracker is the regression guard for the
+// end→reopen 409: closing stdin alone never EOFs the worker (StdinOnce=false),
+// so /chat/end must stop the container and clear the tracker — otherwise a later
+// /chat/start for the same session returns 409 "session already active".
+func TestChatEnd_StopsContainerAndClearsTracker(t *testing.T) {
+	srv, tracker, fe := newChatServer(t)
+
+	stdin := &stdinCapture{}
+	tracker.AddIfUnderLimit(&executor.Run{
+		ContainerID: "cid-1",
+		SessionID:   testSession,
+		Stdin:       stdin,
+	})
+
+	body := mustJSON(t, protocol.ChatEndPayload{SessionID: testSession})
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/end", body))
+
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, []string{testSession}, fe.Stopped(),
+		"/chat/end must stop the container, not just close stdin")
+
+	_, ok := tracker.Get(testSession)
+	assert.False(t, ok,
+		"session must be cleared from the tracker so a later /chat/start does not 409")
 }
 
 func TestChatEnd_IdempotentWhenNotFound(t *testing.T) {
