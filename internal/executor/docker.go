@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"regexp"
 	"strings"
 	"time"
@@ -63,6 +64,11 @@ type LaunchSpec struct {
 	MemoryBytes   int64
 	PidsLimit     int64
 	CorrelationID string
+
+	// MCPURL is the CM MCP endpoint the worker connects to. Its hostname is
+	// pinned into the container's /etc/hosts (see buildExtraHosts) so a name
+	// that only resolves on the host stays reachable inside the container.
+	MCPURL string
 
 	// Cmd overrides the image entrypoint command. Used by integration tests to
 	// run a deterministic command against a stock image; harmless in production
@@ -139,6 +145,10 @@ type DockerExecutor struct {
 	tracker    *Tracker
 	pullPolicy string
 
+	// resolver resolves the MCP hostname into the container's ExtraHosts.
+	// Defaulted to net.DefaultResolver; swappable in tests.
+	resolver hostResolver
+
 	onExit func(sessionID string, exitCode int64)
 	onLog  func(sessionID string, line []byte, stderr bool)
 
@@ -173,6 +183,7 @@ func NewDockerExecutor(cfg Config) *DockerExecutor {
 		docker:     cfg.Docker,
 		tracker:    cfg.Tracker,
 		pullPolicy: cfg.PullPolicy,
+		resolver:   net.DefaultResolver,
 		onExit:     cfg.OnExit,
 		onLog:      cfg.OnLog,
 		logger:     logger,
@@ -204,6 +215,7 @@ func (e *DockerExecutor) Launch(ctx context.Context, spec LaunchSpec) error {
 	}
 
 	cfg, host := containerConfig(spec)
+	host.ExtraHosts = buildExtraHosts(e.resolver, spec.MCPURL, log)
 	name := containerName(spec.SessionID)
 
 	resp, err := e.docker.ContainerCreate(ctx, cfg, host, &network.NetworkingConfig{}, &ocispec.Platform{}, name)

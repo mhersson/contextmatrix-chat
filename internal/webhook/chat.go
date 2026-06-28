@@ -155,6 +155,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		Binds:       binds,
 		MemoryBytes: s.memBytes,
 		PidsLimit:   s.pidsLimit,
+		MCPURL:      s.mcpURL,
 	}
 
 	if err := s.executor.Launch(r.Context(), spec); err != nil {
