@@ -1,4 +1,4 @@
-.PHONY: build test test-race fmt lint
+.PHONY: build test test-race fmt lint docker-worker
 
 # Pinned worker toolchain versions. Override on the command line
 # if a newer version has been vetted, e.g.
@@ -21,3 +21,12 @@ fmt:
 	gofumpt -w .
 lint:
 	golangci-lint run
+docker-worker: ## Build the worker image
+	docker build \
+		-f docker/Dockerfile.worker \
+		--build-arg GO_VERSION=$(GO_VERSION) \
+		--build-arg GO_SHA256_AMD64=$(GO_SHA256_AMD64) \
+		--build-arg GO_SHA256_ARM64=$(GO_SHA256_ARM64) \
+		--build-arg GOLANGCI_LINT_VERSION=$(GOLANGCI_LINT_VERSION) \
+		-t contextmatrix-chat-worker:dev \
+		.

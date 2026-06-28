@@ -1,0 +1,304 @@
+package webhook
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/mhersson/contextmatrix-chat/internal/executor"
+	"github.com/mhersson/contextmatrix-chat/internal/logbridge"
+	"github.com/mhersson/contextmatrix-chat/internal/metrics"
+	protocol "github.com/mhersson/contextmatrix-protocol"
+)
+
+const (
+	// maxRequestBodyBytes caps the body the auth middleware reads before HMAC
+	// verification. A larger body is a misbehaving or hostile client.
+	maxRequestBodyBytes = 1 << 20 // 1 MiB
+)
+
+// ChatConfig carries the static, per-process chat backend settings. All fields
+// are set at serve startup; they are not reloaded at runtime.
+type ChatConfig struct {
+	// Image is the worker container image to launch.
+	Image string
+	// MCPURL is the CM MCP endpoint forwarded to each container as CM_MCP_URL.
+	MCPURL string
+	// TaskSkillsDir is the in-container mount path for task skills, passed as
+	// CMX_TASK_SKILLS_DIR (e.g. /run/cm-skills).
+	TaskSkillsDir string
+	// TaskSkillsHostDir is the host-side directory bind-mounted at TaskSkillsDir.
+	TaskSkillsHostDir string
+	// SecretsHostDir is the host-side secrets directory bind-mounted at
+	// /run/cm-secrets inside each container.
+	SecretsHostDir string
+	// ChatRunDirBase is the host root under which per-session run directories
+	// (resume.jsonl, primer.txt) are created and mounted at /run/cm-chat.
+	ChatRunDirBase string
+	// MemoryBytes and PidsLimit are the per-container resource caps.
+	MemoryBytes int64
+	PidsLimit   int64
+	// MaxConcurrent is the concurrency cap enforced before Launch is attempted.
+	MaxConcurrent int
+	// ToolOutputMaxBytes caps tool output fed into the model context.
+	// 0 disables the cap; config default is 131072.
+	ToolOutputMaxBytes int
+	// CompactionThreshold and CompactionKeepRecentTurns control in-window
+	// compaction, forwarded to the worker as CMX_COMPACTION_* env vars.
+	CompactionThreshold       float64
+	CompactionKeepRecentTurns int
+	// BashTimeoutMaxSeconds is the per-command ceiling forwarded to the worker
+	// as CMX_BASH_TIMEOUT_MAX_SECONDS.
+	BashTimeoutMaxSeconds int
+	// WorkerExtraEnv is operator-supplied KEY=VALUE pairs appended to the
+	// container env after the CM_*/CMX_* system vars.
+	WorkerExtraEnv map[string]string
+}
+
+// Config carries the dependencies NewServer needs. Pointers may be shared with
+// the serve layer; the server does not take ownership of their lifecycles.
+type Config struct {
+	APIKey string
+	Skew   time.Duration
+
+	// Executor and Tracker drive the chat container lifecycle. Wired at serve
+	// startup; nil in minimal test servers that exercise infra routes only.
+	Executor executor.Executor
+	Tracker  *executor.Tracker
+
+	// Chat carries the static per-process chat backend settings.
+	Chat ChatConfig
+
+	Hub *logbridge.Hub
+
+	Replay *ReplayCache
+	Dedup  *DedupCache
+
+	Draining *atomic.Bool
+
+	// KeepaliveInterval overrides the SSE heartbeat period. Zero uses the
+	// package default; tests shrink it.
+	KeepaliveInterval time.Duration
+
+	// Metrics is the Prometheus bundle. Nil disables request instrumentation.
+	Metrics *metrics.Metrics
+
+	Logger *slog.Logger
+}
+
+// Server is the chat backend's HTTP surface. It owns no goroutines beyond the
+// per-session supervision goroutines spawned by the executor; the replay janitor
+// lives in its owner.
+type Server struct {
+	apiKey string
+	skew   time.Duration
+
+	executor executor.Executor
+	tracker  *executor.Tracker
+
+	// chat config (populated from ChatConfig at NewServer time)
+	image                     string
+	mcpURL                    string
+	taskSkillsDir             string
+	taskSkillsHostDir         string
+	secretsHostDir            string
+	chatRunDirBase            string
+	memBytes                  int64
+	pidsLimit                 int64
+	maxConcurrent             int
+	toolOutputMaxBytes        int
+	compactionThreshold       float64
+	compactionKeepRecentTurns int
+	bashTimeoutMaxSeconds     int
+	workerExtraEnv            map[string]string
+
+	hub *logbridge.Hub
+
+	replay *ReplayCache
+	dedup  *DedupCache
+
+	draining *atomic.Bool
+
+	// keepaliveInterval is the SSE comment heartbeat period. Zero means the
+	// package default. Tests shrink it; production leaves it unset.
+	keepaliveInterval time.Duration
+
+	metrics *metrics.Metrics
+
+	logger *slog.Logger
+
+	// stdinMu serializes control-frame writes and stdin closes per session. The
+	// executor documents Run.Stdin as single-writer; webhook handlers run on
+	// independent HTTP goroutines, so a per-session mutex keeps frame bytes from
+	// interleaving on the wire. Entries are never reclaimed: one bare mutex per
+	// session ever seen is a tiny, process-bounded footprint and avoids
+	// delete/recreate races with in-flight writers.
+	stdinMu sync.Map // map[string]*sync.Mutex
+}
+
+// NewServer wires a Server from its dependencies. The replay cache, dedup
+// cache, and draining flag are created if the caller leaves them nil so a bare
+// Config still yields a usable server (tests rely on this).
+func NewServer(cfg Config) *Server {
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	skew := cfg.Skew
+	if skew == 0 {
+		skew = protocol.DefaultMaxClockSkew
+	}
+
+	replay := cfg.Replay
+	if replay == nil {
+		replay = NewReplayCache(skew, 4096)
+	}
+
+	dedup := cfg.Dedup
+	if dedup == nil {
+		dedup = NewDedupCache(10*time.Minute, 4096)
+	}
+
+	draining := cfg.Draining
+	if draining == nil {
+		draining = &atomic.Bool{}
+	}
+
+	return &Server{
+		apiKey:                    cfg.APIKey,
+		skew:                      skew,
+		executor:                  cfg.Executor,
+		tracker:                   cfg.Tracker,
+		image:                     cfg.Chat.Image,
+		mcpURL:                    cfg.Chat.MCPURL,
+		taskSkillsDir:             cfg.Chat.TaskSkillsDir,
+		taskSkillsHostDir:         cfg.Chat.TaskSkillsHostDir,
+		secretsHostDir:            cfg.Chat.SecretsHostDir,
+		chatRunDirBase:            cfg.Chat.ChatRunDirBase,
+		memBytes:                  cfg.Chat.MemoryBytes,
+		pidsLimit:                 cfg.Chat.PidsLimit,
+		maxConcurrent:             cfg.Chat.MaxConcurrent,
+		toolOutputMaxBytes:        cfg.Chat.ToolOutputMaxBytes,
+		compactionThreshold:       cfg.Chat.CompactionThreshold,
+		compactionKeepRecentTurns: cfg.Chat.CompactionKeepRecentTurns,
+		bashTimeoutMaxSeconds:     cfg.Chat.BashTimeoutMaxSeconds,
+		workerExtraEnv:            cfg.Chat.WorkerExtraEnv,
+		hub:                       cfg.Hub,
+		replay:                    replay,
+		dedup:                     dedup,
+		draining:                  draining,
+		keepaliveInterval:         cfg.KeepaliveInterval,
+		metrics:                   cfg.Metrics,
+		logger:                    logger,
+	}
+}
+
+// stdinLock returns the per-session mutex for sessionID, creating it on first
+// use. Callers Lock/Unlock around frames.Write and Stdin.Close to honour
+// Run.Stdin's single-writer contract.
+func (s *Server) stdinLock(sessionID string) *sync.Mutex {
+	v, _ := s.stdinMu.LoadOrStore(sessionID, &sync.Mutex{})
+
+	return v.(*sync.Mutex)
+}
+
+// Routes returns the mux with every webhook route mounted. The mutating
+// lifecycle routes are gated on drain; /logs, /health, and /readyz stay
+// reachable during shutdown so operators can read state.
+func (s *Server) Routes() *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /chat/start", s.recordMetrics(s.auth(s.drainGate(s.handleChatStart))))
+	mux.HandleFunc("POST /chat/end", s.recordMetrics(s.auth(s.handleChatEnd)))
+	mux.HandleFunc("POST /message", s.recordMetrics(s.auth(s.drainGate(s.handleMessage))))
+	mux.HandleFunc("GET /logs", s.recordMetrics(s.auth(s.handleLogs)))
+	mux.HandleFunc("GET /health", s.recordMetrics(s.handleHealth))
+	mux.HandleFunc("GET /readyz", s.recordMetrics(s.handleReadyz))
+
+	return mux
+}
+
+// AdminAuth exposes the HMAC verifier for the admin /metrics endpoint, which
+// the serve layer mounts on a separate loopback listener. It reuses the same
+// signed-GET verification, replay cache, and skew as the webhook routes — the
+// agent-backend signed-GET HMAC is real auth, preserved here.
+func (s *Server) AdminAuth(next http.HandlerFunc) http.HandlerFunc {
+	return s.auth(next)
+}
+
+// ---- health / readyz --------------------------------------------------------
+
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	running := 0
+	if s.tracker != nil {
+		running = s.tracker.Count()
+	}
+
+	writeJSON(w, http.StatusOK, protocol.HealthResponse{
+		OK:                true,
+		RunningContainers: running,
+		MaxConcurrent:     s.maxConcurrent,
+	})
+}
+
+// readyResponse is the /readyz body. It is a custom shape (not ErrorResponse)
+// so the readiness probe stays self-describing for orchestrators.
+type readyResponse struct {
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
+func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
+	if s.draining.Load() {
+		writeJSON(w, http.StatusServiceUnavailable, readyResponse{OK: false, Reason: "draining"})
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, readyResponse{OK: true})
+}
+
+// ---- decode + write helpers -------------------------------------------------
+
+// decode unmarshals the (already auth-verified) request body into v. The body
+// was re-injected by the auth middleware, so a normal read suffices. On a JSON
+// error it writes a 400 and returns false.
+func (s *Server) decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		writeError(w, http.StatusBadRequest, protocol.CodeInvalidJSON, "invalid JSON")
+
+		return false
+	}
+
+	return true
+}
+
+// ---- write helpers ----------------------------------------------------------
+
+// writeJSON marshals v and writes it with the given status. A marshal failure
+// falls back to a fixed internal-error body so the client always gets
+// well-formed JSON.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+
+	body, err := json.Marshal(v)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"ok":false,"code":"internal","message":"response marshal failed"}`))
+
+		return
+	}
+
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+// writeError serialises a protocol.ErrorResponse. msg must be a fixed,
+// client-safe string, never raw err.Error() text.
+func writeError(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, protocol.ErrorResponse{OK: false, Code: code, Message: msg})
+}

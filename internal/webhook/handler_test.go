@@ -1,0 +1,46 @@
+package webhook
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	protocol "github.com/mhersson/contextmatrix-protocol"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// ---- health / readyz --------------------------------------------------------
+
+func TestHealth_Unauthenticated(t *testing.T) {
+	srv := NewServer(Config{APIKey: testAPIKey})
+
+	// No signing — /health is unauthenticated.
+	r := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var hr protocol.HealthResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &hr))
+	assert.True(t, hr.OK)
+}
+
+func TestReadyz_OKAndDraining(t *testing.T) {
+	srv := NewServer(Config{APIKey: testAPIKey})
+
+	r1 := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w1 := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w1, r1)
+	require.Equal(t, http.StatusOK, w1.Code)
+
+	srv.draining.Store(true)
+
+	r2 := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w2 := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w2, r2)
+	require.Equal(t, http.StatusServiceUnavailable, w2.Code)
+	assert.Contains(t, w2.Body.String(), "draining")
+}
