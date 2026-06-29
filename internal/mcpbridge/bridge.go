@@ -5,6 +5,7 @@ package mcpbridge
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -124,21 +125,21 @@ func (a *toolAdapter) Schema() llm.Tool {
 	}
 }
 
-func (a *toolAdapter) Execute(ctx context.Context, args map[string]any) (string, error) {
+func (a *toolAdapter) Execute(ctx context.Context, args map[string]any) (tools.Result, error) {
 	result, err := a.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      a.tool.Name,
 		Arguments: args,
 	})
 	if err != nil {
-		return "", fmt.Errorf("call %s: %w", a.tool.Name, err)
+		return tools.Result{}, fmt.Errorf("call %s: %w", a.tool.Name, err)
 	}
 
 	text := allText(result)
 	if result.IsError {
-		return text, fmt.Errorf("%s", text) //nolint:err113
+		return tools.Result{Text: text}, fmt.Errorf("%s", text) //nolint:err113
 	}
 
-	return text, nil
+	return tools.Result{Text: text, Images: imageURLs(result)}, nil
 }
 
 // allText concatenates the Text of every TextContent in the result.
@@ -152,4 +153,23 @@ func allText(result *mcp.CallToolResult) string {
 	}
 
 	return sb.String()
+}
+
+// imageURLs extracts inline ImageContent blocks from an MCP tool result as
+// OpenAI image_url data URLs, best-effort: blobs with empty data or no MIME
+// type are skipped. Generic across every board tool — no get_card special-casing.
+func imageURLs(result *mcp.CallToolResult) []llm.ImageURL {
+	var out []llm.ImageURL
+
+	for _, content := range result.Content {
+		ic, ok := content.(*mcp.ImageContent)
+		if !ok || len(ic.Data) == 0 || ic.MIMEType == "" {
+			continue
+		}
+
+		enc := base64.StdEncoding.EncodeToString(ic.Data)
+		out = append(out, llm.ImageURL{URL: "data:" + ic.MIMEType + ";base64," + enc})
+	}
+
+	return out
 }
