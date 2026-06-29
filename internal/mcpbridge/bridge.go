@@ -73,7 +73,7 @@ func Connect(ctx context.Context, mcpURL, apiKey string) (*Bridge, error) {
 func (b *Bridge) Tools() []tools.Tool {
 	out := make([]tools.Tool, 0, len(b.listed))
 	for _, t := range b.listed {
-		out = append(out, &toolAdapter{session: b.session, tool: t})
+		out = append(out, &toolAdapter{session: b.session, tool: t, types: schemaPropTypes(t.InputSchema)})
 	}
 
 	return out
@@ -102,6 +102,7 @@ func (b *Bridge) Close() error {
 type toolAdapter struct {
 	session *mcp.ClientSession
 	tool    *mcp.Tool
+	types   propTypes // per-property schema types, for coercing weak-model string args
 }
 
 func (a *toolAdapter) Name() string { return a.tool.Name }
@@ -128,7 +129,7 @@ func (a *toolAdapter) Schema() llm.Tool {
 func (a *toolAdapter) Execute(ctx context.Context, args map[string]any) (tools.Result, error) {
 	result, err := a.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      a.tool.Name,
-		Arguments: args,
+		Arguments: coerceArgs(args, a.types),
 	})
 	if err != nil {
 		return tools.Result{}, fmt.Errorf("call %s: %w", a.tool.Name, err)
