@@ -227,3 +227,52 @@ func TestBridgeExecuteSurfacesImages(t *testing.T) {
 	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngData)
 	assert.Equal(t, want, got.Images[0].URL)
 }
+
+func TestBridgeExecuteCoercesStringScalars(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		gotFlag any
+		gotLim  any
+		gotName any
+	)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "0.0.1"}, nil)
+	server.AddTool(&mcp.Tool{
+		Name:        "toggle",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"flag":{"type":["null","boolean"]},"limit":{"type":"integer"},"name":{"type":"string"}}}`),
+	}, func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var m map[string]any
+
+		_ = json.Unmarshal(req.Params.Arguments, &m)
+
+		mu.Lock()
+		gotFlag, gotLim, gotName = m["flag"], m["limit"], m["name"]
+		mu.Unlock()
+
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+	})
+
+	hs := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server { return server }, nil))
+	defer hs.Close()
+
+	ctx := context.Background()
+	b, err := mcpbridge.Connect(ctx, hs.URL, "")
+	require.NoError(t, err)
+
+	defer b.Close()
+
+	ts := b.Tools()
+	require.Len(t, ts, 1)
+
+	// The model serialized every scalar as a string (the weak-model quirk).
+	got, err := ts[0].Execute(ctx, map[string]any{"flag": "true", "limit": "5", "name": "keep"})
+	require.NoError(t, err)
+	assert.Equal(t, "ok", got.Text)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	assert.Equal(t, true, gotFlag)                // "true" coerced to a JSON boolean
+	assert.InEpsilon(t, float64(5), gotLim, 1e-9) // "5" coerced to a JSON number
+	assert.Equal(t, "keep", gotName)              // string-typed arg left untouched
+}
