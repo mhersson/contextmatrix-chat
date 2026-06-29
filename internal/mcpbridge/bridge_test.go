@@ -157,6 +157,41 @@ func TestBridgeBearerHeader(t *testing.T) {
 	assert.Equal(t, "Bearer "+apiKey, auth)
 }
 
+func TestBridgeExecuteErrorNoImages(t *testing.T) {
+	pngData := []byte{0x89, 0x50, 0x4e, 0x47}
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "0.0.1"}, nil)
+	server.AddTool(&mcp.Tool{
+		Name:        "error_tool",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: "boom"},
+				&mcp.ImageContent{Data: pngData, MIMEType: "image/png"},
+			},
+		}, nil
+	})
+
+	hs := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server { return server }, nil))
+	defer hs.Close()
+
+	ctx := context.Background()
+	b, err := mcpbridge.Connect(ctx, hs.URL, "")
+	require.NoError(t, err)
+
+	defer b.Close()
+
+	ts := b.Tools()
+	require.Len(t, ts, 1)
+
+	got, err := ts[0].Execute(ctx, map[string]any{})
+	require.Error(t, err)
+	assert.Equal(t, "boom", got.Text)
+	assert.Empty(t, got.Images) // error path must never leak images
+}
+
 func TestBridgeExecuteSurfacesImages(t *testing.T) {
 	pngData := []byte{0x89, 0x50, 0x4e, 0x47} // opaque bytes; the bridge does not decode
 
