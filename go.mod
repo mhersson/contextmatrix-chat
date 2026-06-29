@@ -2,6 +2,8 @@ module github.com/mhersson/contextmatrix-chat
 
 go 1.26.4
 
+replace github.com/mhersson/contextmatrix-harness => ../contextmatrix-harness
+
 require (
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/knadh/koanf/parsers/yaml v1.1.0
