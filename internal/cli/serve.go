@@ -95,7 +95,11 @@ func runServe(ctx context.Context, configPath string) error {
 	// read-only into the container.
 	sharedDir := filepath.Join(cfg.SecretsDir, "shared")
 	envFile := filepath.Join(sharedDir, "env")
-	refresher := secrets.NewRefresher(envFile, cfg.OpenRouterAPIKey, provider, logger)
+	refresher := secrets.NewRefresher(envFile, secrets.EndpointSecrets{
+		APIKey:  cfg.LLMEndpoint.APIKey,
+		BaseURL: cfg.LLMEndpoint.BaseURL,
+		Type:    cfg.LLMEndpoint.Type,
+	}, provider, logger)
 
 	refreshCtx, refreshCancel := context.WithCancel(context.Background())
 	defer refreshCancel()
@@ -113,7 +117,7 @@ func runServe(ctx context.Context, configPath string) error {
 
 	tracker := executor.NewTracker(cfg.MaxConcurrent)
 	hub := logbridge.NewHubWithDropObserver(dropAdapter{mx: mx})
-	redactor := redact.New([]string{cfg.OpenRouterAPIKey})
+	redactor := redact.New([]string{cfg.LLMEndpoint.APIKey})
 	bridge := logbridge.New(hub, redactor)
 
 	exec := executor.NewDockerExecutor(executor.Config{
