@@ -79,7 +79,7 @@ container_pids_limit: 512
 # Host directory under which the service stages secrets. It writes
 # <secrets_dir>/shared/env (rewritten ahead of each token expiry) and
 # bind-mounts that directory read-only at /run/cm-secrets inside each container;
-# workers read their GitHub token and OpenRouter key from /run/cm-secrets/env.
+# workers read their GitHub token and LLM endpoint API key (OpenRouter by default) from /run/cm-secrets/env.
 # Default: /var/run/cm-chat/secrets.
 # CMX_SECRETS_DIR
 secrets_dir: /var/run/cm-chat/secrets
