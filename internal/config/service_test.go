@@ -16,9 +16,9 @@ func validServiceConfig() ServiceConfig {
 	return ServiceConfig{
 		ContextMatrixURL: "http://contextmatrix:8080",
 		APIKey:           "0123456789abcdef0123456789abcdef", // 32 chars
-		BaseImage:       "ghcr.io/example/chat@sha256:" + repeatHex(64),
-		LLMEndpoint:     LLMEndpoint{Type: "openrouter", APIKey: "sk-or-test"},
-		ImagePullPolicy: "if-not-present",
+		BaseImage:        "ghcr.io/example/chat@sha256:" + repeatHex(64),
+		LLMEndpoint:      LLMEndpoint{Type: "openrouter", APIKey: "sk-or-test"},
+		ImagePullPolicy:  "if-not-present",
 		MaxConcurrent:    5,
 		Port:             9093,
 		SecretsDir:       "/var/run/cm-chat/secrets",
