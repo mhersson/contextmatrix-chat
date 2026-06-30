@@ -77,6 +77,7 @@ type ServiceConfig struct {
 	LLMEndpoint               LLMEndpoint
 	GitHub                    GitHubConfig
 	WorkerExtraEnv            map[string]string
+	ReasoningEffort           string
 	ReplaySkew                time.Duration
 	ReplayCacheSize           int
 	MessageDedupTTL           time.Duration
@@ -107,6 +108,7 @@ type serviceRaw struct {
 	LLMEndpoint               LLMEndpoint       `koanf:"llm_endpoint"`
 	GitHub                    GitHubConfig      `koanf:"github"`
 	WorkerExtraEnv            map[string]string `koanf:"worker_extra_env"`
+	ReasoningEffort           string            `koanf:"reasoning_effort"`
 	ReplaySkewSeconds         int               `koanf:"webhook_replay_skew_seconds"`
 	ReplayCacheSize           int               `koanf:"webhook_replay_cache_size"`
 	MessageDedupTTLSeconds    int               `koanf:"message_dedup_ttl_seconds"`
@@ -194,6 +196,7 @@ func (r serviceRaw) toConfig() (*ServiceConfig, error) {
 		LLMEndpoint:               r.LLMEndpoint,
 		GitHub:                    r.GitHub,
 		WorkerExtraEnv:            r.WorkerExtraEnv,
+		ReasoningEffort:           r.ReasoningEffort,
 		ReplaySkew:                time.Duration(r.ReplaySkewSeconds) * time.Second,
 		ReplayCacheSize:           r.ReplayCacheSize,
 		MessageDedupTTL:           time.Duration(r.MessageDedupTTLSeconds) * time.Second,

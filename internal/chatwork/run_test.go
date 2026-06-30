@@ -11,6 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDialectFromType(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, llm.DialectOpenAI, dialectFromType("openai"))
+	assert.Equal(t, llm.DialectOpenRouter, dialectFromType("openrouter"))
+	assert.Equal(t, llm.DialectOpenRouter, dialectFromType(""))
+}
+
 // TestEpochLoop_ClearedOnceThenDone verifies that a /clear triggers a second
 // epoch: two epochs run, the second task comes from the inbox, and History is
 // nil in the second epoch.

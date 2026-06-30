@@ -59,6 +59,9 @@ type ChatConfig struct {
 	// WorkerExtraEnv is operator-supplied KEY=VALUE pairs appended to the
 	// container env after the CM_*/CMX_* system vars.
 	WorkerExtraEnv map[string]string
+	// ReasoningEffort is the static reasoning effort forwarded as
+	// CMX_REASONING_EFFORT to every worker container. Empty disables it.
+	ReasoningEffort string
 }
 
 // Config carries the dependencies NewServer needs. Pointers may be shared with
@@ -120,6 +123,7 @@ type Server struct {
 	compactionKeepRecentTurns int
 	bashTimeoutMaxSeconds     int
 	workerExtraEnv            map[string]string
+	reasoningEffort           string
 
 	hub *logbridge.Hub
 
@@ -192,6 +196,7 @@ func NewServer(cfg Config) *Server {
 		compactionKeepRecentTurns: cfg.Chat.CompactionKeepRecentTurns,
 		bashTimeoutMaxSeconds:     cfg.Chat.BashTimeoutMaxSeconds,
 		workerExtraEnv:            cfg.Chat.WorkerExtraEnv,
+		reasoningEffort:           cfg.Chat.ReasoningEffort,
 		hub:                       cfg.Hub,
 		replay:                    replay,
 		dedup:                     dedup,

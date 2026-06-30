@@ -174,6 +174,7 @@ func runServe(ctx context.Context, configPath string) error {
 			CompactionKeepRecentTurns: cfg.Compaction.KeepRecentTurns,
 			BashTimeoutMaxSeconds:     cfg.BashTimeoutMaxSeconds,
 			WorkerExtraEnv:            cfg.WorkerExtraEnv,
+			ReasoningEffort:           cfg.ReasoningEffort,
 		},
 		Replay:   replay,
 		Dedup:    dedup,

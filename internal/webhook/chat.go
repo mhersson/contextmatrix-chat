@@ -101,6 +101,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		"CMX_BASH_TIMEOUT_MAX_SECONDS=" + strconv.Itoa(s.bashTimeoutMaxSeconds),
 	}
 
+	if s.reasoningEffort != "" {
+		env = append(env, "CMX_REASONING_EFFORT="+s.reasoningEffort)
+	}
+
 	if p.Project != "" {
 		env = append(env, "CM_CHAT_PROJECT="+p.Project)
 	}
