@@ -97,12 +97,16 @@ secrets_dir: /var/run/cm-chat/secrets
 #   HTTP_PROXY: http://proxy.example.com:3128
 #   NO_PROXY: localhost,127.0.0.1
 
-# ─── OpenRouter ───────────────────────────────────────────────────────────────
-
-# OpenRouter API key written to the shared secrets env file so workers can
-# authenticate with OpenRouter. Required.
-# CMX_OPENROUTER_API_KEY
-openrouter_api_key: ""
+# ─── LLM endpoint ─────────────────────────────────────────────────────────────
+# The inference endpoint workers call.
+#   type:     openrouter (default) | openai
+#   base_url: required for the openai type (operator-supplied)
+#   api_key:  bearer key for the endpoint
+# CMX_LLM_ENDPOINT__TYPE / CMX_LLM_ENDPOINT__BASE_URL / CMX_LLM_ENDPOINT__API_KEY
+llm_endpoint:
+  type: openrouter
+  # base_url: https://your-llm-endpoint.example/v1
+  api_key: ""
 
 # ─── Task skills ──────────────────────────────────────────────────────────────
 

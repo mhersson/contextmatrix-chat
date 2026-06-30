@@ -16,9 +16,9 @@ func validServiceConfig() ServiceConfig {
 	return ServiceConfig{
 		ContextMatrixURL: "http://contextmatrix:8080",
 		APIKey:           "0123456789abcdef0123456789abcdef", // 32 chars
-		BaseImage:        "ghcr.io/example/chat@sha256:" + repeatHex(64),
-		OpenRouterAPIKey: "sk-or-test",
-		ImagePullPolicy:  "if-not-present",
+		BaseImage:       "ghcr.io/example/chat@sha256:" + repeatHex(64),
+		LLMEndpoint:     LLMEndpoint{Type: "openrouter", APIKey: "sk-or-test"},
+		ImagePullPolicy: "if-not-present",
 		MaxConcurrent:    5,
 		Port:             9093,
 		SecretsDir:       "/var/run/cm-chat/secrets",
@@ -79,7 +79,9 @@ max_concurrent: 12
 container_memory_limit: 4294967296
 container_pids_limit: 256
 secrets_dir: /opt/secrets
-openrouter_api_key: sk-or-fromfile
+llm_endpoint:
+  type: openrouter
+  api_key: sk-or-fromfile
 webhook_replay_skew_seconds: 120
 webhook_replay_cache_size: 4096
 message_dedup_ttl_seconds: 300
@@ -118,7 +120,8 @@ worker_extra_env:
 	assert.Equal(t, int64(4294967296), cfg.ContainerMemoryBytes)
 	assert.Equal(t, int64(256), cfg.ContainerPidsLimit)
 	assert.Equal(t, "/opt/secrets", cfg.SecretsDir)
-	assert.Equal(t, "sk-or-fromfile", cfg.OpenRouterAPIKey)
+	assert.Equal(t, "openrouter", cfg.LLMEndpoint.Type)
+	assert.Equal(t, "sk-or-fromfile", cfg.LLMEndpoint.APIKey)
 	assert.Equal(t, 120*time.Second, cfg.ReplaySkew)
 	assert.Equal(t, 4096, cfg.ReplayCacheSize)
 	assert.Equal(t, 300*time.Second, cfg.MessageDedupTTL)
@@ -143,7 +146,8 @@ func TestServiceEnvOverridesFile(t *testing.T) {
 contextmatrix_url: http://from-file:8080
 api_key: filekeyfilekeyfilekeyfilekeyfile
 base_image: ghcr.io/example/chat:v1
-openrouter_api_key: sk-or-file
+llm_endpoint:
+  api_key: sk-or-file
 chat_run_dir: /var/run/file
 github:
   auth_mode: pat
@@ -155,7 +159,7 @@ github:
 
 	t.Setenv("CMX_CONTEXTMATRIX_URL", "http://from-env:8080")
 	t.Setenv("CMX_PORT", "7777")
-	t.Setenv("CMX_OPENROUTER_API_KEY", "sk-or-env")
+	t.Setenv("CMX_LLM_ENDPOINT__API_KEY", "sk-or-env")
 	t.Setenv("CMX_GITHUB__AUTH_MODE", "pat")
 	t.Setenv("CMX_GITHUB__PAT__TOKEN", "ghp_env")
 	t.Setenv("CMX_COMPACTION__THRESHOLD", "0.90")
@@ -166,7 +170,7 @@ github:
 
 	assert.Equal(t, "http://from-env:8080", cfg.ContextMatrixURL)
 	assert.Equal(t, 7777, cfg.Port)
-	assert.Equal(t, "sk-or-env", cfg.OpenRouterAPIKey)
+	assert.Equal(t, "sk-or-env", cfg.LLMEndpoint.APIKey)
 	assert.Equal(t, "ghp_env", cfg.GitHub.PAT.Token)
 	assert.InDelta(t, 0.90, cfg.Compaction.Threshold, 1e-9)
 	assert.Equal(t, "/var/run/env", cfg.ChatRunDir)
@@ -212,12 +216,12 @@ func TestServiceValidate(t *testing.T) {
 		assert.Contains(t, err.Error(), "base_image")
 	})
 
-	t.Run("missing openrouter_api_key errors", func(t *testing.T) {
+	t.Run("missing llm_endpoint.api_key errors", func(t *testing.T) {
 		cfg := validServiceConfig()
-		cfg.OpenRouterAPIKey = ""
+		cfg.LLMEndpoint.APIKey = ""
 		err := cfg.Validate()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "openrouter_api_key")
+		assert.Contains(t, err.Error(), "llm_endpoint.api_key")
 	})
 
 	t.Run("bad image_pull_policy errors", func(t *testing.T) {
@@ -388,13 +392,61 @@ func TestServiceAdminPort_Validate(t *testing.T) {
 	})
 }
 
+func TestServiceLLMEndpointLoadsAndValidates(t *testing.T) {
+	clearServiceEnv(t)
+
+	content := `
+contextmatrix_url: http://contextmatrix:8080
+api_key: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+base_image: ghcr.io/example/chat@sha256:` + repeatHex(64) + `
+image_pull_policy: if-not-present
+max_concurrent: 5
+port: 9093
+secrets_dir: /var/run/cm-chat/secrets
+chat_run_dir: /var/run/cm-chat/sessions
+llm_endpoint:
+  type: openai
+  base_url: https://your-llm-endpoint.example/v1
+  api_key: k
+compaction:
+  threshold: 0.85
+  keep_recent_turns: 6
+github:
+  auth_mode: pat
+  pat:
+    token: ghp_test
+`
+	path := filepath.Join(t.TempDir(), "serve.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	cfg, err := LoadService(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, "openai", cfg.LLMEndpoint.Type)
+	assert.Equal(t, "https://your-llm-endpoint.example/v1", cfg.LLMEndpoint.BaseURL)
+	assert.Equal(t, "k", cfg.LLMEndpoint.APIKey)
+	require.NoError(t, cfg.Validate())
+}
+
+func TestServiceLLMEndpointOpenAIRequiresBaseURL(t *testing.T) {
+	cfg := &ServiceConfig{
+		ContextMatrixURL: "http://contextmatrix:8080",
+		APIKey:           "0123456789abcdef0123456789abcdef",
+		LLMEndpoint:      LLMEndpoint{Type: "openai", APIKey: "k"},
+	}
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "base_url")
+}
+
 // clearServiceEnv unsets any CMX_* vars that could leak into a default/file
 // test from the developer's shell. t.Setenv restores them after the test.
 func clearServiceEnv(t *testing.T) {
 	t.Helper()
 
 	for _, e := range []string{
-		"CMX_CONTEXTMATRIX_URL", "CMX_PORT", "CMX_OPENROUTER_API_KEY",
+		"CMX_CONTEXTMATRIX_URL", "CMX_PORT", "CMX_LLM_ENDPOINT__API_KEY",
+		"CMX_LLM_ENDPOINT__TYPE", "CMX_LLM_ENDPOINT__BASE_URL",
 		"CMX_API_KEY", "CMX_BASE_IMAGE", "CMX_MAX_CONCURRENT",
 		"CMX_GITHUB__AUTH_MODE", "CMX_GITHUB__PAT__TOKEN",
 		"CMX_ADMIN_PORT",
