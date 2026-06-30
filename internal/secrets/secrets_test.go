@@ -210,8 +210,12 @@ func TestRefresherWritesAndRefreshes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "llm-static-key", s.Get("LLM_API_KEY"))
 	// LLM_BASE_URL and LLM_TYPE were not set → must be absent.
-	assert.Equal(t, "", s.Get("LLM_BASE_URL"))
-	assert.Equal(t, "", s.Get("LLM_TYPE"))
+	assert.Empty(t, s.Get("LLM_BASE_URL"))
+	assert.Empty(t, s.Get("LLM_TYPE"))
+	// Strengthen: the keys must also be absent from the raw file bytes.
+	data, _ := os.ReadFile(path)
+	assert.NotContains(t, string(data), "LLM_BASE_URL")
+	assert.NotContains(t, string(data), "LLM_TYPE")
 
 	cancel()
 

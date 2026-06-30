@@ -105,6 +105,16 @@ func TestEpochLoop_InboxClosedAfterClear(t *testing.T) {
 	assert.Equal(t, 1, epoch)
 }
 
+// TestReasoningRaw verifies that reasoningRaw returns nil for an empty effort
+// and a valid JSON object for standard and non-standard tiers.
+func TestReasoningRaw(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, reasoningRaw(""))
+	assert.JSONEq(t, `{"effort":"medium"}`, string(reasoningRaw("medium")))
+	assert.JSONEq(t, `{"effort":"xhigh"}`, string(reasoningRaw("xhigh")))
+}
+
 // TestEpochLoop_RunError verifies that a non-clear error from run propagates.
 func TestEpochLoop_RunError(t *testing.T) {
 	t.Parallel()

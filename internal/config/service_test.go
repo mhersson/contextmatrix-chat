@@ -224,6 +224,14 @@ func TestServiceValidate(t *testing.T) {
 		assert.Contains(t, err.Error(), "llm_endpoint.api_key")
 	})
 
+	t.Run("unknown llm_endpoint.type errors", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.LLMEndpoint = LLMEndpoint{Type: "anthropic", APIKey: "k"}
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "openrouter")
+	})
+
 	t.Run("bad image_pull_policy errors", func(t *testing.T) {
 		cfg := validServiceConfig()
 		cfg.ImagePullPolicy = "sometimes"
