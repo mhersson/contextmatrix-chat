@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -71,6 +73,38 @@ func TestResolveEmptyPointerYieldsNoSkills(t *testing.T) {
 
 	_, err := r.Resolve(context.Background())
 	require.Error(t, err, "an empty remote URL means there is no skills source")
+}
+
+// TestGitCloneRejectsDashLeadingRef verifies that gitClone rejects a URL or
+// ref beginning with '-' BEFORE invoking git. The "before exec" property is
+// verified by checking that no .git directory exists in dest after the call:
+// git init is the first exec step, so its absence proves git was never called.
+// Without the validation guard, git init runs and creates .git/ before the
+// fetch step fails on the bad ref/URL, so the test fails pre-fix.
+func TestGitCloneRejectsDashLeadingRef(t *testing.T) {
+	t.Parallel()
+
+	r := NewResolver("http://localhost", "key", t.TempDir(), fakeGen{}, nil)
+
+	ctx := context.Background()
+
+	// ref begins with '-': rejected before exec, so .git must not be created.
+	dest1 := t.TempDir()
+
+	err := r.gitClone(ctx, "https://example.test/repo.git", "-branch", dest1, "tok")
+	require.Error(t, err, "a ref starting with '-' must be rejected")
+
+	_, statErr := os.Stat(filepath.Join(dest1, ".git"))
+	assert.True(t, os.IsNotExist(statErr), "git must not be invoked: .git must not exist when ref is rejected")
+
+	// URL begins with '-': also rejected before exec.
+	dest2 := t.TempDir()
+
+	err = r.gitClone(ctx, "--upload-pack=evil", "main", dest2, "tok")
+	require.Error(t, err, "a URL starting with '-' must be rejected")
+
+	_, statErr = os.Stat(filepath.Join(dest2, ".git"))
+	assert.True(t, os.IsNotExist(statErr), "git must not be invoked: .git must not exist when URL is rejected")
 }
 
 func TestResolveDoesNotCacheFailure(t *testing.T) {
