@@ -338,13 +338,17 @@ func (e *DockerExecutor) waitAndCleanup(
 		e.metrics.ContainerDuration.WithLabelValues(outcome).Observe(time.Since(startedAt).Seconds())
 	}
 
-	e.tracker.Remove(sessionID)
-
 	log.Info("container exited", "exit_code", exitCode)
 
+	// Run onExit (chatExit's run-dir teardown) BEFORE releasing the tracker slot.
+	// While the session is still tracked, a concurrent same-session /chat/start
+	// stays 409-blocked (chat.go conflict check), so it cannot recreate the run
+	// dir and have its freshly written primer/resume deleted by this cleanup.
 	if e.onExit != nil {
 		e.onExit(sessionID, exitCode)
 	}
+
+	e.tracker.Remove(sessionID)
 }
 
 // Stop gracefully stops the tracked container for sessionID (SIGTERM, then

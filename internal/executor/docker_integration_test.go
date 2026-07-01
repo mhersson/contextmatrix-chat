@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -299,4 +300,54 @@ func TestIntegration_StopAllAndCleanupOrphans(t *testing.T) {
 	for _, c := range left {
 		assert.NotEqual(t, "true", c.Labels[labelChat], "no chat container should remain")
 	}
+}
+
+// TestIntegration_OnExitRunsWhileTracked asserts that waitAndCleanup fires
+// onExit (chatExit's run-dir teardown) before it releases the tracker slot.
+// If the tracker slot were released first, a concurrent same-session
+// /chat/start could pass the conflict check, recreate the run dir, and write
+// a fresh primer.txt/resume.jsonl that this cleanup would then delete out
+// from under the restarted session.
+func TestIntegration_OnExitRunsWhileTracked(t *testing.T) {
+	integrationGuard(t)
+
+	tracker := NewTracker(8)
+
+	var trackedAtExit atomic.Bool
+
+	done := make(chan struct{})
+
+	var once sync.Once
+
+	exec := newTestExecutor(t, Config{
+		Tracker: tracker,
+		OnExit: func(sessionID string, _ int64) {
+			_, ok := tracker.Get(sessionID)
+			trackedAtExit.Store(ok)
+			once.Do(func() { close(done) })
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const sessionID = "ordering-session-1"
+
+	require.NoError(t, exec.Launch(ctx, LaunchSpec{
+		SessionID:   sessionID,
+		Image:       alpineImage,
+		MemoryBytes: 256 * 1024 * 1024,
+		PidsLimit:   128,
+		Cmd:         []string{"sh", "-c", "true"}, // exits 0 immediately
+	}))
+
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("onExit did not fire")
+	}
+
+	assert.True(t, trackedAtExit.Load(),
+		"onExit (chatExit run-dir teardown) must run while the session is still tracked, "+
+			"so a concurrent same-session /chat/start stays 409-blocked until cleanup completes")
 }
