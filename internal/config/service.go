@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -36,8 +37,11 @@ type GitHubPATConfig struct {
 }
 
 // GitHubConfig is the unified GitHub auth block. Set AuthMode to "app" or "pat".
+// Host is a convenience for GitHub Enterprise: when set (and APIBaseURL is
+// empty), APIBaseURL is derived as https://<host>/api/v3 at load time.
 type GitHubConfig struct {
 	AuthMode   string          `koanf:"auth_mode"`
+	Host       string          `koanf:"host"`
 	APIBaseURL string          `koanf:"api_base_url"`
 	App        GitHubAppConfig `koanf:"app"`
 	PAT        GitHubPATConfig `koanf:"pat"`
@@ -181,6 +185,9 @@ func LoadService(path string) (*ServiceConfig, error) {
 
 // toConfig assembles the typed config from the wire form.
 func (r serviceRaw) toConfig() (*ServiceConfig, error) {
+	gh := r.GitHub
+	gh.deriveAPIBaseURL()
+
 	return &ServiceConfig{
 		ContextMatrixURL:          r.ContextMatrixURL,
 		ContainerContextMatrixURL: r.ContainerContextMatrixURL,
@@ -194,7 +201,7 @@ func (r serviceRaw) toConfig() (*ServiceConfig, error) {
 		ContainerPidsLimit:        r.ContainerPidsLimit,
 		SecretsDir:                r.SecretsDir,
 		LLMEndpoint:               r.LLMEndpoint,
-		GitHub:                    r.GitHub,
+		GitHub:                    gh,
 		WorkerExtraEnv:            r.WorkerExtraEnv,
 		ReasoningEffort:           r.ReasoningEffort,
 		ReplaySkew:                time.Duration(r.ReplaySkewSeconds) * time.Second,
@@ -207,6 +214,24 @@ func (r serviceRaw) toConfig() (*ServiceConfig, error) {
 		Compaction:                r.Compaction,
 		ChatRunDir:                r.ChatRunDir,
 	}, nil
+}
+
+// deriveAPIBaseURL fills APIBaseURL from Host when only Host is set: any
+// user-supplied scheme is stripped and the standard GitHub Enterprise Server
+// "/api/v3" path is appended over https. An explicit api_base_url always wins so
+// operators can target non-standard layouts (e.g. GHEC-DR api.acme.ghe.com). The
+// derived URL flows to githubauth.WithAPIBaseURL in serve.go.
+func (g *GitHubConfig) deriveAPIBaseURL() {
+	if g.Host == "" || g.APIBaseURL != "" {
+		return
+	}
+
+	host := g.Host
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+len("://"):]
+	}
+
+	g.APIBaseURL = "https://" + host + "/api/v3"
 }
 
 // isNotExist reports whether err is a missing-file error from the file
@@ -296,6 +321,25 @@ func (c *ServiceConfig) Validate() error {
 // validate checks the GitHub auth block, mirroring the runner/agent contract:
 // exactly one auth path is populated per auth_mode.
 func (g *GitHubConfig) validate() error {
+	// Host accepts either a bare hostname or a full URL. A missing scheme is
+	// synthesised so the same host check applies; a bare hostname like
+	// "ghe.example.com" is the documented common case.
+	if g.Host != "" {
+		hostForCheck := g.Host
+		if !strings.Contains(hostForCheck, "://") {
+			hostForCheck = "https://" + hostForCheck
+		}
+
+		u, err := url.Parse(hostForCheck)
+		if err != nil {
+			return fmt.Errorf("github.host: invalid host %q: %w", g.Host, err)
+		}
+
+		if u.Hostname() == "" {
+			return fmt.Errorf("github.host: host is required in %q", g.Host)
+		}
+	}
+
 	switch g.AuthMode {
 	case "app":
 		if g.App.AppID == 0 {
