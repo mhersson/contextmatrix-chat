@@ -20,6 +20,31 @@ func TestDialectFromType(t *testing.T) {
 	assert.Equal(t, llm.DialectOpenRouter, dialectFromType(""))
 }
 
+func TestHostFromRepoURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"enterprise host", "https://acme.ghe.com/org/repo.git", "acme.ghe.com"},
+		{"github.com", "https://github.com/org/repo.git", "github.com"},
+		{"empty", "", ""},
+		{"scp-style yields no host", "git@github.com:org/repo.git", ""},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tc.want, hostFromRepoURL(tc.url))
+		})
+	}
+}
+
 // TestEpochLoop_ClearedOnceThenDone verifies that a /clear triggers a second
 // epoch: two epochs run, the second task comes from the inbox, and History is
 // nil in the second epoch.

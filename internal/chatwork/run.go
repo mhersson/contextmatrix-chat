@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -271,6 +272,7 @@ func buildToolRegistry(ctx context.Context, gitToken string, mcpBase http.RoundT
 	bashTimeout := envIntDefault("CMX_BASH_TIMEOUT_MAX_SECONDS", 600)
 
 	bashTool := tools.NewBashTool(workspaceRoot).WithMaxTimeout(bashTimeout)
+
 	if gitToken != "" {
 		// Expose the GitHub installation token as GH_TOKEN so the model can use
 		// `gh` (e.g. `gh pr create`). Git auth flows through the rotating
@@ -278,7 +280,16 @@ func buildToolRegistry(ctx context.Context, gitToken string, mcpBase http.RoundT
 		// equivalent hook. Mirrors the agent backend (worker/pr.go injects
 		// GH_TOKEN=CM_GIT_TOKEN). The redactor masks the token from all tool
 		// output, so `env` cannot leak it into the transcript.
-		bashTool = bashTool.WithExtraEnv([]string{"GH_TOKEN=" + gitToken})
+		ghEnv := []string{"GH_TOKEN=" + gitToken}
+
+		// gh cannot infer a GitHub Enterprise host (e.g. acme.ghe.com) from the
+		// git remote and refuses to open a PR without it; GH_HOST names it
+		// explicitly. Harmless for github.com. Mirrors the runner entrypoint.
+		if host := hostFromRepoURL(os.Getenv("CM_CHAT_REPO_URL")); host != "" {
+			ghEnv = append(ghEnv, "GH_HOST="+host)
+		}
+
+		bashTool = bashTool.WithExtraEnv(ghEnv)
 	}
 
 	ts := []tools.Tool{
@@ -325,6 +336,22 @@ func dirFromURL(u string) string {
 	}
 
 	return "repo"
+}
+
+// hostFromRepoURL returns the host[:port] of an https repo URL, or "" when
+// repoURL is empty or not a parseable URL with a host (e.g. an scp-style
+// remote). Used to set GH_HOST so gh recognizes a GitHub Enterprise host.
+func hostFromRepoURL(repoURL string) string {
+	if repoURL == "" {
+		return ""
+	}
+
+	u, err := url.Parse(repoURL)
+	if err != nil {
+		return ""
+	}
+
+	return u.Host
 }
 
 // envFloatDefault parses an optional float64 env var, returning def when the
