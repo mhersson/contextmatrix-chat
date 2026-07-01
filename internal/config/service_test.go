@@ -351,6 +351,96 @@ func TestServiceValidate(t *testing.T) {
 	})
 }
 
+func TestGitHubHostDerivesAPIBaseURL(t *testing.T) {
+	cases := []struct {
+		name       string
+		host       string
+		apiBaseURL string
+		want       string
+	}{
+		{"bare host derives api/v3", "ghe.example.com", "", "https://ghe.example.com/api/v3"},
+		{"explicit api_base_url wins", "ghe.example.com", "https://api.acme.ghe.com", "https://api.acme.ghe.com"},
+		{"full-url host accepted", "https://ghe.example.com", "", "https://ghe.example.com/api/v3"},
+		{"no host leaves api_base_url empty", "", "", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := serviceRaw{GitHub: GitHubConfig{Host: tc.host, APIBaseURL: tc.apiBaseURL}}
+
+			cfg, err := raw.toConfig()
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, cfg.GitHub.APIBaseURL)
+		})
+	}
+}
+
+func TestGitHubHostEnvBinding(t *testing.T) {
+	clearServiceEnv(t)
+	t.Setenv("CMX_GITHUB__HOST", "ghe.example.com")
+
+	cfg, err := LoadService(filepath.Join(t.TempDir(), "nope.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "ghe.example.com", cfg.GitHub.Host)
+	assert.Equal(t, "https://ghe.example.com/api/v3", cfg.GitHub.APIBaseURL,
+		"CMX_GITHUB__HOST must bind and derive the api base url")
+}
+
+func TestGitHubHostValidation(t *testing.T) {
+	t.Run("bare host passes", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.GitHub.Host = "ghe.example.com"
+		require.NoError(t, cfg.Validate())
+	})
+
+	t.Run("full url host passes", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.GitHub.Host = "https://ghe.example.com"
+		require.NoError(t, cfg.Validate())
+	})
+
+	t.Run("garbage host errors", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.GitHub.Host = "https://"
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "github.host")
+	})
+}
+
+func TestCACertFileValidation(t *testing.T) {
+	t.Run("empty disables (valid)", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.CACertFile = ""
+		require.NoError(t, cfg.Validate())
+	})
+
+	t.Run("missing file errors", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.CACertFile = filepath.Join(t.TempDir(), "nope.pem")
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ca_cert_file")
+	})
+
+	t.Run("existing file passes", func(t *testing.T) {
+		cfg := validServiceConfig()
+		path := filepath.Join(t.TempDir(), "ca.pem")
+		require.NoError(t, os.WriteFile(path, []byte("placeholder"), 0o600))
+		cfg.CACertFile = path
+		require.NoError(t, cfg.Validate())
+	})
+}
+
+func TestCACertFileEnvBinding(t *testing.T) {
+	clearServiceEnv(t)
+	t.Setenv("CMX_CA_CERT_FILE", "/host/ca.pem")
+
+	cfg, err := LoadService(filepath.Join(t.TempDir(), "nope.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "/host/ca.pem", cfg.CACertFile)
+}
+
 func TestServiceAdminPort_DefaultZero(t *testing.T) {
 	clearServiceEnv(t)
 
@@ -456,10 +546,10 @@ func clearServiceEnv(t *testing.T) {
 		"CMX_CONTEXTMATRIX_URL", "CMX_PORT", "CMX_LLM_ENDPOINT__API_KEY",
 		"CMX_LLM_ENDPOINT__TYPE", "CMX_LLM_ENDPOINT__BASE_URL",
 		"CMX_API_KEY", "CMX_BASE_IMAGE", "CMX_MAX_CONCURRENT",
-		"CMX_GITHUB__AUTH_MODE", "CMX_GITHUB__PAT__TOKEN",
+		"CMX_GITHUB__AUTH_MODE", "CMX_GITHUB__PAT__TOKEN", "CMX_GITHUB__HOST",
 		"CMX_ADMIN_PORT",
 		"CMX_COMPACTION__THRESHOLD", "CMX_COMPACTION__KEEP_RECENT_TURNS",
-		"CMX_CHAT_RUN_DIR",
+		"CMX_CHAT_RUN_DIR", "CMX_CA_CERT_FILE",
 	} {
 		if _, ok := os.LookupEnv(e); ok {
 			t.Setenv(e, "")

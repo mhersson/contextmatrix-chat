@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,6 +16,12 @@ import (
 
 	"github.com/mhersson/contextmatrix-chat/internal/mcpbridge"
 )
+
+// roundTripperFunc adapts a function to http.RoundTripper so a test can inject a
+// base transport and observe that Connect routes MCP requests through it.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 const (
 	toolName   = "list_projects"
@@ -47,7 +54,7 @@ func TestBridgeConnect(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "")
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -62,7 +69,7 @@ func TestBridgeBoardToolNames(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "")
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -75,7 +82,7 @@ func TestBridgeExecute(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "")
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -94,7 +101,7 @@ func TestBridgeSchema(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "")
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -146,7 +153,7 @@ func TestBridgeBearerHeader(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, apiKey)
+	b, err := mcpbridge.Connect(ctx, hs.URL, apiKey, nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -155,6 +162,78 @@ func TestBridgeBearerHeader(t *testing.T) {
 	auth := gotAuth
 	mu.Unlock()
 	assert.Equal(t, "Bearer "+apiKey, auth)
+}
+
+func TestBridgeUsesBaseTransport(t *testing.T) {
+	t.Run("base transport carries requests without an api key", func(t *testing.T) {
+		hs := newTestServer(t)
+		defer hs.Close()
+
+		var count atomic.Int32
+
+		base := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			count.Add(1)
+
+			return http.DefaultTransport.RoundTrip(req)
+		})
+
+		ctx := context.Background()
+		b, err := mcpbridge.Connect(ctx, hs.URL, "", base)
+		require.NoError(t, err)
+
+		defer b.Close()
+
+		assert.Positive(t, count.Load(), "the injected base transport must carry MCP requests")
+	})
+
+	t.Run("base transport composes under a bearer key", func(t *testing.T) {
+		// The base transport (stand-in for the CA transport) must still carry the
+		// request AND the bearer header must be applied on top — proving
+		// bearerTransport wraps the injected base rather than replacing it.
+		server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "0.0.1"}, nil)
+		server.AddTool(&mcp.Tool{
+			Name:        toolName,
+			InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+		}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+		})
+
+		mcpHandler := mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server { return server }, nil)
+
+		var (
+			mu      sync.Mutex
+			gotAuth string
+		)
+
+		hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			gotAuth = r.Header.Get("Authorization")
+			mu.Unlock()
+			mcpHandler.ServeHTTP(w, r)
+		}))
+		defer hs.Close()
+
+		var count atomic.Int32
+
+		base := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			count.Add(1)
+
+			return http.DefaultTransport.RoundTrip(req)
+		})
+
+		ctx := context.Background()
+		b, err := mcpbridge.Connect(ctx, hs.URL, "super-secret", base)
+		require.NoError(t, err)
+
+		defer b.Close()
+
+		assert.Positive(t, count.Load(), "the base transport must carry requests even when a bearer key is set")
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		assert.Equal(t, "Bearer super-secret", gotAuth, "the bearer header must be applied on top of the base transport")
+	})
 }
 
 func TestBridgeExecuteErrorNoImages(t *testing.T) {
@@ -178,7 +257,7 @@ func TestBridgeExecuteErrorNoImages(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "")
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -210,7 +289,7 @@ func TestBridgeExecuteSurfacesImages(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "")
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -256,7 +335,7 @@ func TestBridgeExecuteCoercesStringScalars(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "")
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()

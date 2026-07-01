@@ -21,6 +21,12 @@ import (
 // the path is not operator-configurable.
 const skillsMountPath = "/run/cm-skills"
 
+// caCertMountPath is the fixed in-container path where the optional operator CA
+// PEM (config: ca_cert_file) is bind-mounted read-only. The worker points its
+// harness LLM client, MCP bridge, and git (GIT_SSL_CAINFO) at this path so
+// egress TLS trusts the extra CA.
+const caCertMountPath = "/run/cm-ca/ca.crt"
+
 // handleChatStart starts a long-lived chat container for the given session. It
 // creates the per-session run directory, writes resume.jsonl and primer.txt,
 // builds the LaunchSpec, and delegates to the executor. The response body
@@ -137,6 +143,17 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CMX_TASK_SKILLS_DIR="+skillsMountPath)
 	}
 
+	// Optional extra CA: tell the worker the in-container cert path so its
+	// harness LLM client and MCP bridge trust it, and point git at it via
+	// GIT_SSL_CAINFO. The matching read-only bind is added below. (Chat's worker
+	// uses git but not gh, so no GH_CA_BUNDLE is needed.)
+	if s.caCertFile != "" {
+		env = append(env,
+			"CMX_CA_CERT_FILE="+caCertMountPath,
+			"GIT_SSL_CAINFO="+caCertMountPath,
+		)
+	}
+
 	// Operator-supplied extra env is appended after the system vars so that
 	// explicit operator entries take precedence over CM_*/CMX_* defaults for
 	// any duplicate keys.
@@ -150,6 +167,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if skillsHostDir != "" {
 		binds = append(binds, skillsHostDir+":"+skillsMountPath+":ro")
+	}
+
+	if s.caCertFile != "" {
+		binds = append(binds, s.caCertFile+":"+caCertMountPath+":ro")
 	}
 
 	spec := executor.LaunchSpec{
@@ -264,22 +285,13 @@ func (s *Server) handleChatEnd(w http.ResponseWriter, r *http.Request) {
 // stdin. A /clear content writes a TypeClear frame instead of TypeUserMessage.
 // Dedup is keyed by (sessionID, messageID): a retry with an already-delivered
 // messageID returns a cached 200 ack without re-writing to stdin.
+//
+// The stdinLock spans both the dedup check-and-record and the stdin write so
+// that concurrent in-flight retries (re-signed, so the replay cache does not
+// catch them) cannot both pass the check and deliver the frame twice.
 func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	var p protocol.MessagePayload
 	if !s.decode(w, r, &p) {
-		return
-	}
-
-	// Retried request whose first attempt already delivered: return a cached ack
-	// without re-writing the frame. Record only after a successful write, so a
-	// 404 or write failure never poisons the cache for a valid retry.
-	if s.dedup.Contains(p.SessionID, p.MessageID) {
-		writeJSON(w, http.StatusOK, protocol.SuccessResponse{
-			OK:        true,
-			Message:   "duplicate message acknowledged",
-			MessageID: p.MessageID,
-		})
-
 		return
 	}
 
@@ -302,12 +314,33 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Hold stdinLock across the atomic check-and-record and the write so no
+	// concurrent retry can slip through between the two operations.
 	mu := s.stdinLock(p.SessionID)
 	mu.Lock()
-	err := frames.Write(run.Stdin, frame)
-	mu.Unlock()
 
+	if s.dedup.CheckAndRecord(p.SessionID, p.MessageID) {
+		mu.Unlock()
+
+		writeJSON(w, http.StatusOK, protocol.SuccessResponse{
+			OK:        true,
+			Message:   "duplicate message acknowledged",
+			MessageID: p.MessageID,
+		})
+
+		return
+	}
+
+	err := frames.Write(run.Stdin, frame)
 	if err != nil {
+		// Roll back the dedup record BEFORE releasing stdinLock. Unlocking first
+		// opens a window in which a concurrent retry acquires the lock, sees the
+		// still-recorded entry via CheckAndRecord, and returns a duplicate-ack for
+		// a frame that never delivered. Rollback takes the dedup cache's own mutex,
+		// so holding stdinLock across it introduces no lock-order cycle.
+		s.dedup.Rollback(p.SessionID, p.MessageID)
+		mu.Unlock()
+
 		s.logger.Error("message stdin write failed",
 			"session_id", p.SessionID, "error", err)
 		writeError(w, http.StatusInternalServerError, protocol.CodeInternal, "write failed")
@@ -315,8 +348,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delivered: record the message_id so a retry is deduped.
-	s.dedup.Record(p.SessionID, p.MessageID)
+	mu.Unlock()
 
 	writeJSON(w, http.StatusAccepted, protocol.SuccessResponse{
 		OK:        true,

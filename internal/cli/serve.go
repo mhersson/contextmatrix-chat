@@ -175,6 +175,7 @@ func runServe(ctx context.Context, configPath string) error {
 			BashTimeoutMaxSeconds:     cfg.BashTimeoutMaxSeconds,
 			WorkerExtraEnv:            cfg.WorkerExtraEnv,
 			ReasoningEffort:           cfg.ReasoningEffort,
+			CACertFile:                cfg.CACertFile,
 		},
 		Replay:   replay,
 		Dedup:    dedup,

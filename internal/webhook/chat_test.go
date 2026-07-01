@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,6 +82,23 @@ func (c *stdinCapture) IsClosed() bool {
 	defer c.mu.Unlock()
 
 	return c.closed
+}
+
+// failOnceWriter fails its first Write with a fixed error, then delegates to the
+// embedded stdinCapture. It drives the /message write-failure path so a test can
+// confirm the dedup record is rolled back and the retry is delivered.
+type failOnceWriter struct {
+	stdinCapture
+	failed atomic.Bool
+	err    error
+}
+
+func (w *failOnceWriter) Write(p []byte) (int, error) {
+	if w.failed.CompareAndSwap(false, true) {
+		return 0, w.err
+	}
+
+	return w.stdinCapture.Write(p)
 }
 
 // fakeExecutor records Launch calls and injects a Run (with a stdinCapture)
@@ -557,6 +576,64 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 	})
 }
 
+func TestChatStart_CACertMountAndEnv(t *testing.T) {
+	t.Run("configured: read-only bind and CA env present", func(t *testing.T) {
+		tracker := executor.NewTracker(10)
+		fe := &fakeExecutor{tracker: tracker}
+
+		srv := NewServer(Config{
+			APIKey:   testAPIKey,
+			Executor: fe,
+			Tracker:  tracker,
+			Chat: ChatConfig{
+				Image:          testImage,
+				MCPURL:         testMCPURL,
+				SecretsHostDir: "/host/secrets",
+				ChatRunDirBase: t.TempDir(),
+				MaxConcurrent:  10,
+				CACertFile:     "/host/ca.pem",
+			},
+		})
+
+		body := mustJSON(t, protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"})
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+		require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+		spec := fe.Launched()[0]
+		assert.Contains(t, spec.Binds, "/host/ca.pem:/run/cm-ca/ca.crt:ro",
+			"ca_cert_file must be bind-mounted read-only into the container")
+
+		envMap := envToMap(spec.Env)
+		assert.Equal(t, "/run/cm-ca/ca.crt", envMap["CMX_CA_CERT_FILE"],
+			"the worker learns the in-container cert path via CMX_CA_CERT_FILE")
+		assert.Equal(t, "/run/cm-ca/ca.crt", envMap["GIT_SSL_CAINFO"],
+			"git in the container trusts the extra CA via GIT_SSL_CAINFO")
+	})
+
+	t.Run("unset: no bind and no CA env", func(t *testing.T) {
+		srv, _, fe := newChatServer(t) // newChatServer leaves CACertFile empty
+
+		body := mustJSON(t, protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"})
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+		require.Equal(t, http.StatusAccepted, w.Code)
+
+		spec := fe.Launched()[0]
+		for _, b := range spec.Binds {
+			assert.NotContains(t, b, "/run/cm-ca", "no CA bind when ca_cert_file is unset")
+		}
+
+		envMap := envToMap(spec.Env)
+
+		_, hasCert := envMap["CMX_CA_CERT_FILE"]
+		assert.False(t, hasCert, "no CMX_CA_CERT_FILE when ca_cert_file is unset")
+
+		_, hasGit := envMap["GIT_SSL_CAINFO"]
+		assert.False(t, hasGit, "no GIT_SSL_CAINFO when ca_cert_file is unset")
+	})
+}
+
 func TestChatStart_NoSkillsWhenResolverEmpty(t *testing.T) {
 	tracker := executor.NewTracker(10)
 	fe := &fakeExecutor{tracker: tracker}
@@ -773,6 +850,49 @@ func TestMessage_DedupCachedAck(t *testing.T) {
 	assert.Len(t, stdin.Bytes(), bytesAfterFirst, "stdin should not receive a second write")
 }
 
+// TestMessage_WriteFailureRollsBackDedup confirms a failed stdin write rolls the
+// dedup record back so a later retry of the same message_id is delivered rather
+// than dup-acked. handleMessage performs the Rollback while stdinLock is still
+// held, closing the window a concurrent retry could otherwise slip through.
+func TestMessage_WriteFailureRollsBackDedup(t *testing.T) {
+	srv, tracker, _ := newChatServer(t)
+
+	stdin := &failOnceWriter{err: errors.New("stdin broken")}
+	tracker.AddIfUnderLimit(&executor.Run{
+		ContainerID: "cid-1",
+		SessionID:   testSession,
+		Stdin:       stdin,
+	})
+
+	payload := protocol.MessagePayload{
+		SessionID: testSession,
+		Content:   "deliver me",
+		MessageID: "msg-retry",
+	}
+	body := mustJSON(t, payload)
+
+	// First delivery fails at the stdin write → 500. The dedup entry recorded by
+	// CheckAndRecord must be rolled back on this path.
+	w1 := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w1, signedPostBodyAt(t, "/message", body, nowTS()))
+	require.Equal(t, http.StatusInternalServerError, w1.Code, "body: %s", w1.Body.String())
+
+	// Retry with the same message_id (fresh timestamp so the replay cache admits
+	// it) must be DELIVERED, not dup-acked.
+	ts2 := strconv.FormatInt(time.Now().Add(time.Second).Unix(), 10)
+	w2 := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w2, signedPostBodyAt(t, "/message", body, ts2))
+	require.Equal(t, http.StatusAccepted, w2.Code,
+		"retry must be delivered after a failed write; body: %s", w2.Body.String())
+
+	// The frame reached stdin on the retry.
+	var f frames.Frame
+	require.NoError(t, json.Unmarshal(bytes.TrimRight(stdin.Bytes(), "\n"), &f))
+	assert.Equal(t, frames.TypeUserMessage, f.Type)
+	assert.Equal(t, "deliver me", f.Content)
+	assert.Equal(t, "msg-retry", f.MessageID)
+}
+
 func TestMessage_EmptyMessageIDNeverDeduped(t *testing.T) {
 	srv, tracker, _ := newChatServer(t)
 
@@ -827,6 +947,82 @@ func TestMessage_HMACRequired(t *testing.T) {
 	srv.Routes().ServeHTTP(w, r)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// TestMessageDedupConcurrent verifies that concurrent deliveries of the same
+// message_id write exactly one user_message frame. Before the fix the Contains
+// → Write → Record sequence has no lock spanning the gap, so two goroutines
+// can both pass Contains and both write to stdin.
+func TestMessageDedupConcurrent(t *testing.T) {
+	t.Parallel()
+
+	const n = 50
+
+	srv, tracker, _ := newChatServer(t)
+
+	stdin := &stdinCapture{}
+	tracker.AddIfUnderLimit(&executor.Run{
+		ContainerID: "cid-1",
+		SessionID:   testSession,
+		Stdin:       stdin,
+	})
+
+	payload := protocol.MessagePayload{
+		SessionID: testSession,
+		Content:   "hello",
+		MessageID: "msg-race",
+	}
+	body := mustJSON(t, payload)
+
+	// Build n requests with distinct timestamps so the replay cache sees each
+	// as a fresh request; all carry the same message_id, simulating n concurrent
+	// in-flight retries of the same delivery.
+	base := time.Now()
+	requests := make([]*http.Request, n)
+
+	for i := range n {
+		ts := strconv.FormatInt(base.Add(time.Duration(i)*time.Second).Unix(), 10)
+		requests[i] = signedPostBodyAt(t, "/message", body, ts)
+	}
+
+	start := make(chan struct{})
+
+	var wg sync.WaitGroup
+
+	wg.Add(n)
+
+	for _, req := range requests {
+		req := req
+
+		go func() {
+			defer wg.Done()
+
+			<-start
+
+			srv.Routes().ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	// Count user_message frames written to stdin.
+	rd := frames.NewReader(bytes.NewReader(stdin.Bytes()))
+
+	frameCount := 0
+
+	for {
+		f, err := rd.Next()
+		if err != nil {
+			break
+		}
+
+		if f.Type == frames.TypeUserMessage {
+			frameCount++
+		}
+	}
+
+	assert.Equal(t, 1, frameCount, "exactly one user_message frame must be written for concurrent retries of the same message_id")
 }
 
 // ---- /health with tracker ---------------------------------------------------

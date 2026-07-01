@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/mhersson/contextmatrix-chat/internal/mcpbridge"
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
+	"github.com/mhersson/contextmatrix-chat/internal/tlsca"
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
@@ -79,6 +81,22 @@ func Run(ctx context.Context) error {
 		clientOpts = append(clientOpts, llm.WithBaseURL(llmBaseURL))
 	}
 
+	// When an extra CA is bind-mounted (ca_cert_file), route the LLM client's
+	// outbound TLS through a transport that trusts it so egress via a
+	// TLS-inspecting proxy validates. The same transport is shared with the MCP
+	// bridge below. Fatal on a malformed PEM: a misconfigured CA would otherwise
+	// fail every request with an opaque x509 error.
+	var caHTTPClient *http.Client
+
+	if caCertPath := os.Getenv("CMX_CA_CERT_FILE"); caCertPath != "" {
+		caHTTPClient, err = tlsca.HTTPClientWithCA(caCertPath)
+		if err != nil {
+			return fmt.Errorf("build CA http client: %w", err)
+		}
+
+		clientOpts = append(clientOpts, llm.WithHTTPClient(caHTTPClient))
+	}
+
 	client := llm.NewClient(llmKey, clientOpts...)
 	ctxWindow := defaultContextWindow
 	model := os.Getenv("CM_MODEL")
@@ -89,8 +107,15 @@ func Run(ctx context.Context) error {
 		ctxWindow = entry.ContextLength
 	}
 
-	// 5. Tool registry: filesystem/shell tools + optional skill tool + MCP board tools.
-	reg, bridge, err := buildToolRegistry(ctx, gitToken)
+	// 5. Tool registry: filesystem/shell tools + optional skill tool + MCP board
+	// tools. Share the CA transport (when configured) so board tool calls trust
+	// the same extra CA as the LLM client.
+	var mcpBase http.RoundTripper
+	if caHTTPClient != nil {
+		mcpBase = caHTTPClient.Transport
+	}
+
+	reg, bridge, err := buildToolRegistry(ctx, gitToken, mcpBase)
 	if err != nil {
 		return err
 	}
@@ -207,6 +232,12 @@ func epochLoop(
 
 		cfg.History = nil
 
+		// Discard messages that arrived before the /clear. Without this drain
+		// a stale user_message already sitting in the inbox would be returned
+		// by Wait and become the next epoch's primer, silently losing the real
+		// re-sent task that follows the clear.
+		inbox.Drain()
+
 		msg, werr := inbox.Wait(ctx)
 		if werr != nil {
 			return nil
@@ -225,12 +256,14 @@ func epochLoop(
 // buildToolRegistry assembles the model-facing tool registry: filesystem/shell
 // tools rooted at /workspace, the optional skill tool, and the MCP board tools
 // from the Connect bridge. gitToken, when non-empty, is exposed to the bash tool
-// as GH_TOKEN so the model can run `gh` (e.g. `gh pr create`).
-func buildToolRegistry(ctx context.Context, gitToken string) (*tools.Registry, *mcpbridge.Bridge, error) {
+// as GH_TOKEN so the model can run `gh` (e.g. `gh pr create`). mcpBase is the
+// outbound RoundTripper for the MCP bridge (nil uses http.DefaultTransport); it
+// carries the extra CA trust when ca_cert_file is configured.
+func buildToolRegistry(ctx context.Context, gitToken string, mcpBase http.RoundTripper) (*tools.Registry, *mcpbridge.Bridge, error) {
 	mcpURL := os.Getenv("CM_MCP_URL")
 	mcpAPIKey := os.Getenv("CM_MCP_API_KEY")
 
-	bridge, err := mcpbridge.Connect(ctx, mcpURL, mcpAPIKey)
+	bridge, err := mcpbridge.Connect(ctx, mcpURL, mcpAPIKey, mcpBase)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to mcp: %w", err)
 	}

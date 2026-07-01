@@ -97,6 +97,19 @@ secrets_dir: /var/run/cm-chat/secrets
 #   HTTP_PROXY: http://proxy.example.com:3128
 #   NO_PROXY: localhost,127.0.0.1
 
+# Optional host path to a PEM file of extra CA certificate(s) — e.g. the CA of a
+# TLS-inspecting egress proxy. Container-only: when set, the file is bind-mounted
+# read-only into each worker at /run/cm-ca/ca.crt and the worker's outbound TLS
+# (harness LLM client, MCP bridge) and the code-driven initial git clone
+# (GIT_SSL_CAINFO) trust it in addition to the system store. NOTE: model-invoked
+# bash-tool commands (curl/pip/npm, and any model-run git/gh) go through the
+# harness bash tool, which scrubs env, so they do NOT trust this CA without a
+# harness change — intentionally out of scope. The host-side service (GitHub auth,
+# task-skills fetch) uses the OS/pod trust store and is intentionally NOT affected.
+# Empty disables it; when set the file must exist on the host. Must be a readable PEM.
+# CMX_CA_CERT_FILE
+# ca_cert_file: /etc/contextmatrix-chat/egress-ca.pem
+
 # ─── LLM endpoint ─────────────────────────────────────────────────────────────
 # The inference endpoint workers call.
 #   type:     openrouter (default) | openai
@@ -137,7 +150,15 @@ github:
   # CMX_GITHUB__AUTH_MODE
   auth_mode: pat
 
-  # Optional GitHub API base URL. Defaults to https://api.github.com.
+  # Optional GitHub Enterprise host (bare hostname or full URL). When set and
+  # api_base_url is empty, api_base_url is derived as https://<host>/api/v3.
+  # Convenience for the common GHE Server layout; set api_base_url directly for
+  # non-standard layouts (e.g. GHEC-DR https://api.acme.ghe.com).
+  # CMX_GITHUB__HOST
+  # host: ghe.example.com
+
+  # Optional GitHub API base URL. Defaults to https://api.github.com. Overrides
+  # any value derived from host.
   # CMX_GITHUB__API_BASE_URL
   # api_base_url: https://api.github.com
 

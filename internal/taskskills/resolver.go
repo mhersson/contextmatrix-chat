@@ -155,6 +155,12 @@ func (r *Resolver) fetchPointer(ctx context.Context) (gitURL, ref string, err er
 // token as an http.extraheader (mirrors the worker's credEnv pattern). When ref
 // is empty it fetches the remote's default branch (HEAD).
 func (r *Resolver) gitClone(ctx context.Context, gitURL, ref, dest, token string) error {
+	// Reject dash-leading args before any exec: git interprets them as flags.
+	// Both gitURL and ref are CM-sourced config that must not be option strings.
+	if strings.HasPrefix(gitURL, "-") || strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("git clone: url and ref must not begin with '-' (got url=%q ref=%q)", gitURL, ref)
+	}
+
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return fmt.Errorf("mkdir skills dest: %w", err)
 	}
@@ -167,7 +173,9 @@ func (r *Resolver) gitClone(ctx context.Context, gitURL, ref, dest, token string
 	steps := [][]string{
 		{"init", "-q"},
 		{"remote", "add", "origin", gitURL},
-		{"fetch", "--depth", "1", "origin", fetchRef},
+		// '--' separates options from the ref spec so a ref that looks like a
+		// flag is passed as a positional argument. Mirrors run.go's clone guard.
+		{"fetch", "--depth", "1", "origin", "--", fetchRef},
 		{"checkout", "-q", "FETCH_HEAD"},
 	}
 
