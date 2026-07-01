@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,6 +82,23 @@ func (c *stdinCapture) IsClosed() bool {
 	defer c.mu.Unlock()
 
 	return c.closed
+}
+
+// failOnceWriter fails its first Write with a fixed error, then delegates to the
+// embedded stdinCapture. It drives the /message write-failure path so a test can
+// confirm the dedup record is rolled back and the retry is delivered.
+type failOnceWriter struct {
+	stdinCapture
+	failed atomic.Bool
+	err    error
+}
+
+func (w *failOnceWriter) Write(p []byte) (int, error) {
+	if w.failed.CompareAndSwap(false, true) {
+		return 0, w.err
+	}
+
+	return w.stdinCapture.Write(p)
 }
 
 // fakeExecutor records Launch calls and injects a Run (with a stdinCapture)
@@ -771,6 +790,49 @@ func TestMessage_DedupCachedAck(t *testing.T) {
 	require.Equal(t, http.StatusOK, w2.Code)
 	assert.Contains(t, w2.Body.String(), "duplicate")
 	assert.Len(t, stdin.Bytes(), bytesAfterFirst, "stdin should not receive a second write")
+}
+
+// TestMessage_WriteFailureRollsBackDedup confirms a failed stdin write rolls the
+// dedup record back so a later retry of the same message_id is delivered rather
+// than dup-acked. handleMessage performs the Rollback while stdinLock is still
+// held, closing the window a concurrent retry could otherwise slip through.
+func TestMessage_WriteFailureRollsBackDedup(t *testing.T) {
+	srv, tracker, _ := newChatServer(t)
+
+	stdin := &failOnceWriter{err: errors.New("stdin broken")}
+	tracker.AddIfUnderLimit(&executor.Run{
+		ContainerID: "cid-1",
+		SessionID:   testSession,
+		Stdin:       stdin,
+	})
+
+	payload := protocol.MessagePayload{
+		SessionID: testSession,
+		Content:   "deliver me",
+		MessageID: "msg-retry",
+	}
+	body := mustJSON(t, payload)
+
+	// First delivery fails at the stdin write → 500. The dedup entry recorded by
+	// CheckAndRecord must be rolled back on this path.
+	w1 := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w1, signedPostBodyAt(t, "/message", body, nowTS()))
+	require.Equal(t, http.StatusInternalServerError, w1.Code, "body: %s", w1.Body.String())
+
+	// Retry with the same message_id (fresh timestamp so the replay cache admits
+	// it) must be DELIVERED, not dup-acked.
+	ts2 := strconv.FormatInt(time.Now().Add(time.Second).Unix(), 10)
+	w2 := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w2, signedPostBodyAt(t, "/message", body, ts2))
+	require.Equal(t, http.StatusAccepted, w2.Code,
+		"retry must be delivered after a failed write; body: %s", w2.Body.String())
+
+	// The frame reached stdin on the retry.
+	var f frames.Frame
+	require.NoError(t, json.Unmarshal(bytes.TrimRight(stdin.Bytes(), "\n"), &f))
+	assert.Equal(t, frames.TypeUserMessage, f.Type)
+	assert.Equal(t, "deliver me", f.Content)
+	assert.Equal(t, "msg-retry", f.MessageID)
 }
 
 func TestMessage_EmptyMessageIDNeverDeduped(t *testing.T) {

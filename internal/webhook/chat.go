@@ -311,18 +311,23 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := frames.Write(run.Stdin, frame)
-	mu.Unlock()
-
 	if err != nil {
-		// Roll back the dedup record so a subsequent legitimate retry can
-		// still be delivered — a failed write must not permanently silence it.
+		// Roll back the dedup record BEFORE releasing stdinLock. Unlocking first
+		// opens a window in which a concurrent retry acquires the lock, sees the
+		// still-recorded entry via CheckAndRecord, and returns a duplicate-ack for
+		// a frame that never delivered. Rollback takes the dedup cache's own mutex,
+		// so holding stdinLock across it introduces no lock-order cycle.
 		s.dedup.Rollback(p.SessionID, p.MessageID)
+		mu.Unlock()
+
 		s.logger.Error("message stdin write failed",
 			"session_id", p.SessionID, "error", err)
 		writeError(w, http.StatusInternalServerError, protocol.CodeInternal, "write failed")
 
 		return
 	}
+
+	mu.Unlock()
 
 	writeJSON(w, http.StatusAccepted, protocol.SuccessResponse{
 		OK:        true,
