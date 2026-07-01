@@ -254,10 +254,11 @@ func epochLoop(
 
 // buildToolRegistry assembles the model-facing tool registry: filesystem/shell
 // tools rooted at /workspace, the optional skill tool, and the MCP board tools
-// from the Connect bridge. gitToken, when non-empty, is exposed to the bash tool
-// as GH_TOKEN so the model can run `gh` (e.g. `gh pr create`). mcpBase is the
-// outbound RoundTripper for the MCP bridge (nil uses http.DefaultTransport); it
-// carries the extra CA trust when ca_cert_file is configured.
+// from the Connect bridge. gitToken, when non-empty, gets a `gh` PATH shim
+// installed for the bash tool so the model can run `gh` (e.g. `gh pr create`)
+// with a token read fresh per invocation. mcpBase is the outbound RoundTripper
+// for the MCP bridge (nil uses http.DefaultTransport); it carries the extra CA
+// trust when ca_cert_file is configured.
 func buildToolRegistry(ctx context.Context, gitToken string, mcpBase http.RoundTripper) (*tools.Registry, *mcpbridge.Bridge, error) {
 	mcpURL := os.Getenv("CM_MCP_URL")
 	mcpAPIKey := os.Getenv("CM_MCP_API_KEY")
@@ -272,22 +273,28 @@ func buildToolRegistry(ctx context.Context, gitToken string, mcpBase http.RoundT
 	bashTool := tools.NewBashTool(workspaceRoot).WithMaxTimeout(bashTimeout)
 
 	if gitToken != "" {
-		// Expose the GitHub installation token as GH_TOKEN so the model can use
-		// `gh` (e.g. `gh pr create`). Git auth flows through the rotating
-		// credential helper, but gh reads GH_TOKEN from the environment and has no
-		// equivalent hook. Mirrors the agent backend (worker/pr.go injects
-		// GH_TOKEN=CM_GIT_TOKEN). The redactor masks the token from all tool
-		// output, so `env` cannot leak it into the transcript.
-		ghEnv := []string{"GH_TOKEN=" + gitToken}
+		var ghEnv []string
 
-		// gh cannot infer a GitHub Enterprise host (e.g. acme.ghe.com) from the
-		// git remote and refuses to open a PR without it; GH_HOST names it
-		// explicitly. Harmless for github.com. Mirrors the runner entrypoint.
+		// gh reads GH_TOKEN from the env and has no hook into the rotating
+		// credential helper git uses; a baked token goes stale in a long session
+		// (App installation tokens expire ~60m). Install a `gh` shim on PATH that
+		// reads CM_GIT_TOKEN fresh from the secrets file per invocation instead.
+		if dir, err := installGHWrapper(secretsEnvPath); err != nil {
+			slog.Warn("gh wrapper install failed; gh may be unavailable this session", "error", err)
+		} else {
+			ghEnv = append(ghEnv, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		}
+
+		// gh cannot infer a GitHub Enterprise host from the git remote and refuses
+		// to open a PR without it; GH_HOST names it explicitly. Harmless for
+		// github.com. Mirrors the runner entrypoint.
 		if host := hostFromRepoURL(os.Getenv("CM_CHAT_REPO_URL")); host != "" {
 			ghEnv = append(ghEnv, "GH_HOST="+host)
 		}
 
-		bashTool = bashTool.WithExtraEnv(ghEnv)
+		if len(ghEnv) > 0 {
+			bashTool = bashTool.WithExtraEnv(ghEnv)
+		}
 	}
 
 	ts := []tools.Tool{
