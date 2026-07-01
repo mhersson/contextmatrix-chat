@@ -100,10 +100,13 @@ secrets_dir: /var/run/cm-chat/secrets
 # Optional host path to a PEM file of extra CA certificate(s) — e.g. the CA of a
 # TLS-inspecting egress proxy. Container-only: when set, the file is bind-mounted
 # read-only into each worker at /run/cm-ca/ca.crt and the worker's outbound TLS
-# (harness LLM client, MCP bridge) and git (GIT_SSL_CAINFO) trust it in addition
-# to the system store. The host-side service (GitHub auth, task-skills fetch)
-# uses the OS/pod trust store and is intentionally NOT affected. Empty disables
-# it; when set the file must exist on the host. Must be a readable PEM.
+# (harness LLM client, MCP bridge) and the code-driven initial git clone
+# (GIT_SSL_CAINFO) trust it in addition to the system store. NOTE: model-invoked
+# bash-tool commands (curl/pip/npm, and any model-run git/gh) go through the
+# harness bash tool, which scrubs env, so they do NOT trust this CA without a
+# harness change — intentionally out of scope. The host-side service (GitHub auth,
+# task-skills fetch) uses the OS/pod trust store and is intentionally NOT affected.
+# Empty disables it; when set the file must exist on the host. Must be a readable PEM.
 # CMX_CA_CERT_FILE
 # ca_cert_file: /etc/contextmatrix-chat/egress-ca.pem
 
