@@ -341,6 +341,14 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		s.dedup.Rollback(p.SessionID, p.MessageID)
 		mu.Unlock()
 
+		if errors.Is(err, frames.ErrFrameTooLarge) {
+			s.logger.Warn("message rejected: frame too large",
+				"session_id", p.SessionID, "message_id", p.MessageID)
+			writeError(w, http.StatusRequestEntityTooLarge, protocol.CodeTooLarge, "message content too large")
+
+			return
+		}
+
 		s.logger.Error("message stdin write failed",
 			"session_id", p.SessionID, "error", err)
 		writeError(w, http.StatusInternalServerError, protocol.CodeInternal, "write failed")
