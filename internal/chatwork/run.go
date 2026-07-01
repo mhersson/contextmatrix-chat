@@ -233,13 +233,11 @@ func epochLoop(
 
 		cfg.History = nil
 
-		// Discard messages that arrived before the /clear. Without this drain
-		// a stale user_message already sitting in the inbox would be returned
-		// by Wait and become the next epoch's primer, silently losing the real
-		// re-sent task that follows the clear.
-		inbox.Drain()
-
-		msg, werr := inbox.Wait(ctx)
+		// The clear boundary (drop of pre-clear messages) was set in Pump when
+		// the clear frame was read, in-order with the frame stream. NextAfterClear
+		// releases that hold and blocks for the re-sent primer, which cannot have
+		// been swallowed by the dying epoch.
+		msg, werr := inbox.NextAfterClear(ctx)
 		if werr != nil {
 			return nil
 		}
