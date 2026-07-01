@@ -54,9 +54,12 @@ func Run(ctx context.Context) error {
 	gitToken := src.Get("CM_GIT_TOKEN")
 
 	// 2. Configure the git credential helper so clones authenticate via the
-	// rotating token in the secrets env file. Non-fatal: a degraded git-auth
-	// environment must not kill an otherwise-usable interactive session.
-	if err := ConfigureGitCredentialHelper(ctx, secretsEnvPath); err != nil {
+	// rotating token in the secrets env file. Scoped to the repo's host (GHE-aware)
+	// so the token is never offered to an unrelated https host. Non-fatal: a
+	// degraded git-auth environment must not kill an otherwise-usable interactive
+	// session.
+	ghHost := hostFromRepoURL(os.Getenv("CM_CHAT_REPO_URL"))
+	if err := ConfigureGitCredentialHelper(ctx, secretsEnvPath, ghHost); err != nil {
 		slog.Warn("git credential helper setup failed; continuing without git auth", "error", err)
 	}
 
