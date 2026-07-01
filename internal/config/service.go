@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -78,6 +79,7 @@ type ServiceConfig struct {
 	ContainerMemoryBytes      int64
 	ContainerPidsLimit        int64
 	SecretsDir                string
+	CACertFile                string
 	LLMEndpoint               LLMEndpoint
 	GitHub                    GitHubConfig
 	WorkerExtraEnv            map[string]string
@@ -109,6 +111,7 @@ type serviceRaw struct {
 	ContainerMemoryLimit      int64             `koanf:"container_memory_limit"`
 	ContainerPidsLimit        int64             `koanf:"container_pids_limit"`
 	SecretsDir                string            `koanf:"secrets_dir"`
+	CACertFile                string            `koanf:"ca_cert_file"`
 	LLMEndpoint               LLMEndpoint       `koanf:"llm_endpoint"`
 	GitHub                    GitHubConfig      `koanf:"github"`
 	WorkerExtraEnv            map[string]string `koanf:"worker_extra_env"`
@@ -200,6 +203,7 @@ func (r serviceRaw) toConfig() (*ServiceConfig, error) {
 		ContainerMemoryBytes:      r.ContainerMemoryLimit,
 		ContainerPidsLimit:        r.ContainerPidsLimit,
 		SecretsDir:                r.SecretsDir,
+		CACertFile:                r.CACertFile,
 		LLMEndpoint:               r.LLMEndpoint,
 		GitHub:                    gh,
 		WorkerExtraEnv:            r.WorkerExtraEnv,
@@ -305,6 +309,14 @@ func (c *ServiceConfig) Validate() error {
 
 	if c.SecretsDir == "" {
 		return fmt.Errorf("secrets_dir is required")
+	}
+
+	// ca_cert_file is optional (empty disables it). When set it must exist on the
+	// host so the worker container's read-only bind mount cannot fail at launch.
+	if c.CACertFile != "" {
+		if _, err := os.Stat(c.CACertFile); err != nil {
+			return fmt.Errorf("ca_cert_file does not exist: %w", err)
+		}
 	}
 
 	if c.Compaction.Threshold <= 0 || c.Compaction.Threshold > 1 {

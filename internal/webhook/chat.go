@@ -21,6 +21,12 @@ import (
 // the path is not operator-configurable.
 const skillsMountPath = "/run/cm-skills"
 
+// caCertMountPath is the fixed in-container path where the optional operator CA
+// PEM (config: ca_cert_file) is bind-mounted read-only. The worker points its
+// harness LLM client, MCP bridge, and git (GIT_SSL_CAINFO) at this path so
+// egress TLS trusts the extra CA.
+const caCertMountPath = "/run/cm-ca/ca.crt"
+
 // handleChatStart starts a long-lived chat container for the given session. It
 // creates the per-session run directory, writes resume.jsonl and primer.txt,
 // builds the LaunchSpec, and delegates to the executor. The response body
@@ -137,6 +143,17 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CMX_TASK_SKILLS_DIR="+skillsMountPath)
 	}
 
+	// Optional extra CA: tell the worker the in-container cert path so its
+	// harness LLM client and MCP bridge trust it, and point git at it via
+	// GIT_SSL_CAINFO. The matching read-only bind is added below. (Chat's worker
+	// uses git but not gh, so no GH_CA_BUNDLE is needed.)
+	if s.caCertFile != "" {
+		env = append(env,
+			"CMX_CA_CERT_FILE="+caCertMountPath,
+			"GIT_SSL_CAINFO="+caCertMountPath,
+		)
+	}
+
 	// Operator-supplied extra env is appended after the system vars so that
 	// explicit operator entries take precedence over CM_*/CMX_* defaults for
 	// any duplicate keys.
@@ -150,6 +167,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if skillsHostDir != "" {
 		binds = append(binds, skillsHostDir+":"+skillsMountPath+":ro")
+	}
+
+	if s.caCertFile != "" {
+		binds = append(binds, s.caCertFile+":"+caCertMountPath+":ro")
 	}
 
 	spec := executor.LaunchSpec{

@@ -36,20 +36,25 @@ func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // Connect dials mcpURL, authenticates with apiKey when non-empty, lists tools,
-// and returns a ready Bridge. An error from Connect or ListTools is fatal.
-func Connect(ctx context.Context, mcpURL, apiKey string) (*Bridge, error) {
-	var httpClient *http.Client
+// and returns a ready Bridge. base is the outbound RoundTripper carrying every
+// MCP request; a nil base uses http.DefaultTransport. A non-nil base lets the
+// caller inject a CA-augmented transport (see the worker's ca_cert_file
+// support); when apiKey is set it is wrapped by bearerTransport so the CA trust
+// and the bearer header compose on the same connection. An error from Connect or
+// ListTools is fatal.
+func Connect(ctx context.Context, mcpURL, apiKey string, base http.RoundTripper) (*Bridge, error) {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+
+	rt := base
 	if apiKey != "" {
-		httpClient = &http.Client{
-			Transport: &bearerTransport{apiKey: apiKey, base: http.DefaultTransport},
-		}
-	} else {
-		httpClient = http.DefaultClient
+		rt = &bearerTransport{apiKey: apiKey, base: base}
 	}
 
 	transport := &mcp.StreamableClientTransport{
 		Endpoint:   mcpURL,
-		HTTPClient: httpClient,
+		HTTPClient: &http.Client{Transport: rt},
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "contextmatrix-chat", Version: "0.1.0"}, nil)

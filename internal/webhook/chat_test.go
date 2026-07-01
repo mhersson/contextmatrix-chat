@@ -576,6 +576,64 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 	})
 }
 
+func TestChatStart_CACertMountAndEnv(t *testing.T) {
+	t.Run("configured: read-only bind and CA env present", func(t *testing.T) {
+		tracker := executor.NewTracker(10)
+		fe := &fakeExecutor{tracker: tracker}
+
+		srv := NewServer(Config{
+			APIKey:   testAPIKey,
+			Executor: fe,
+			Tracker:  tracker,
+			Chat: ChatConfig{
+				Image:          testImage,
+				MCPURL:         testMCPURL,
+				SecretsHostDir: "/host/secrets",
+				ChatRunDirBase: t.TempDir(),
+				MaxConcurrent:  10,
+				CACertFile:     "/host/ca.pem",
+			},
+		})
+
+		body := mustJSON(t, protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"})
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+		require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+		spec := fe.Launched()[0]
+		assert.Contains(t, spec.Binds, "/host/ca.pem:/run/cm-ca/ca.crt:ro",
+			"ca_cert_file must be bind-mounted read-only into the container")
+
+		envMap := envToMap(spec.Env)
+		assert.Equal(t, "/run/cm-ca/ca.crt", envMap["CMX_CA_CERT_FILE"],
+			"the worker learns the in-container cert path via CMX_CA_CERT_FILE")
+		assert.Equal(t, "/run/cm-ca/ca.crt", envMap["GIT_SSL_CAINFO"],
+			"git in the container trusts the extra CA via GIT_SSL_CAINFO")
+	})
+
+	t.Run("unset: no bind and no CA env", func(t *testing.T) {
+		srv, _, fe := newChatServer(t) // newChatServer leaves CACertFile empty
+
+		body := mustJSON(t, protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"})
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+		require.Equal(t, http.StatusAccepted, w.Code)
+
+		spec := fe.Launched()[0]
+		for _, b := range spec.Binds {
+			assert.NotContains(t, b, "/run/cm-ca", "no CA bind when ca_cert_file is unset")
+		}
+
+		envMap := envToMap(spec.Env)
+
+		_, hasCert := envMap["CMX_CA_CERT_FILE"]
+		assert.False(t, hasCert, "no CMX_CA_CERT_FILE when ca_cert_file is unset")
+
+		_, hasGit := envMap["GIT_SSL_CAINFO"]
+		assert.False(t, hasGit, "no GIT_SSL_CAINFO when ca_cert_file is unset")
+	})
+}
+
 func TestChatStart_NoSkillsWhenResolverEmpty(t *testing.T) {
 	tracker := executor.NewTracker(10)
 	fe := &fakeExecutor{tracker: tracker}

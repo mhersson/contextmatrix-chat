@@ -408,6 +408,39 @@ func TestGitHubHostValidation(t *testing.T) {
 	})
 }
 
+func TestCACertFileValidation(t *testing.T) {
+	t.Run("empty disables (valid)", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.CACertFile = ""
+		require.NoError(t, cfg.Validate())
+	})
+
+	t.Run("missing file errors", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.CACertFile = filepath.Join(t.TempDir(), "nope.pem")
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ca_cert_file")
+	})
+
+	t.Run("existing file passes", func(t *testing.T) {
+		cfg := validServiceConfig()
+		path := filepath.Join(t.TempDir(), "ca.pem")
+		require.NoError(t, os.WriteFile(path, []byte("placeholder"), 0o600))
+		cfg.CACertFile = path
+		require.NoError(t, cfg.Validate())
+	})
+}
+
+func TestCACertFileEnvBinding(t *testing.T) {
+	clearServiceEnv(t)
+	t.Setenv("CMX_CA_CERT_FILE", "/host/ca.pem")
+
+	cfg, err := LoadService(filepath.Join(t.TempDir(), "nope.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "/host/ca.pem", cfg.CACertFile)
+}
+
 func TestServiceAdminPort_DefaultZero(t *testing.T) {
 	clearServiceEnv(t)
 
@@ -516,7 +549,7 @@ func clearServiceEnv(t *testing.T) {
 		"CMX_GITHUB__AUTH_MODE", "CMX_GITHUB__PAT__TOKEN", "CMX_GITHUB__HOST",
 		"CMX_ADMIN_PORT",
 		"CMX_COMPACTION__THRESHOLD", "CMX_COMPACTION__KEEP_RECENT_TURNS",
-		"CMX_CHAT_RUN_DIR",
+		"CMX_CHAT_RUN_DIR", "CMX_CA_CERT_FILE",
 	} {
 		if _, ok := os.LookupEnv(e); ok {
 			t.Setenv(e, "")

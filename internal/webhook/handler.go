@@ -62,6 +62,11 @@ type ChatConfig struct {
 	// ReasoningEffort is the static reasoning effort forwarded as
 	// CMX_REASONING_EFFORT to every worker container. Empty disables it.
 	ReasoningEffort string
+	// CACertFile is an optional host path to a PEM of extra CA certificate(s).
+	// When set, handleChatStart bind-mounts it read-only into each worker at
+	// caCertMountPath and points the worker's TLS (harness LLM client, MCP
+	// bridge) and git at it. Empty disables it.
+	CACertFile string
 }
 
 // Config carries the dependencies NewServer needs. Pointers may be shared with
@@ -124,6 +129,7 @@ type Server struct {
 	bashTimeoutMaxSeconds     int
 	workerExtraEnv            map[string]string
 	reasoningEffort           string
+	caCertFile                string
 
 	hub *logbridge.Hub
 
@@ -197,6 +203,7 @@ func NewServer(cfg Config) *Server {
 		bashTimeoutMaxSeconds:     cfg.Chat.BashTimeoutMaxSeconds,
 		workerExtraEnv:            cfg.Chat.WorkerExtraEnv,
 		reasoningEffort:           cfg.Chat.ReasoningEffort,
+		caCertFile:                cfg.Chat.CACertFile,
 		hub:                       cfg.Hub,
 		replay:                    replay,
 		dedup:                     dedup,
