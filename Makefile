@@ -13,6 +13,8 @@ GOLANGCI_LINT_VERSION ?= v2.12.2
 build:
 	go build ./...
 	go build -trimpath -o contextmatrix-chat ./cmd/contextmatrix-chat
+install:
+	go install ./cmd/contextmatrix-chat
 test:
 	go test ./...
 test-race:
