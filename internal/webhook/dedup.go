@@ -96,6 +96,73 @@ func (c *DedupCache) Contains(sessionID, messageID string) bool {
 	return false
 }
 
+// CheckAndRecord atomically checks whether the (sessionID, messageID) pair is
+// already present and, if not, records it. It returns true when the pair was
+// already in the cache inside the TTL window (the caller should return a
+// cached ack), and false when the pair was fresh and has now been recorded
+// (the caller must attempt delivery). An empty messageID always returns false
+// and records nothing. Callers that get false must call Rollback on delivery
+// failure so a legitimate retry is not permanently silenced.
+func (c *DedupCache) CheckAndRecord(sessionID, messageID string) bool {
+	if messageID == "" {
+		return false
+	}
+
+	key := dedupKey(sessionID, messageID)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := c.now()
+
+	if el, ok := c.index[key]; ok {
+		entry := el.Value.(*dedupEntry)
+		if c.ttl <= 0 || now.Sub(entry.stored) <= c.ttl {
+			return true // already delivered inside TTL window
+		}
+		// Expired: reap and fall through to record a fresh entry.
+		c.entries.Remove(el)
+		delete(c.index, key)
+	}
+
+	el := c.entries.PushBack(&dedupEntry{key: key, stored: now})
+	c.index[key] = el
+
+	if c.capacity > 0 {
+		for c.entries.Len() > c.capacity {
+			oldest := c.entries.Front()
+			if oldest == nil {
+				break
+			}
+
+			c.entries.Remove(oldest)
+			delete(c.index, oldest.Value.(*dedupEntry).key)
+		}
+	}
+
+	return false
+}
+
+// Rollback removes a just-recorded (sessionID, messageID) pair from the cache.
+// It is called when a delivery fails after CheckAndRecord has already recorded
+// the pair, so a subsequent retry can still be delivered. An empty messageID
+// is a no-op.
+func (c *DedupCache) Rollback(sessionID, messageID string) {
+	if messageID == "" {
+		return
+	}
+
+	key := dedupKey(sessionID, messageID)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if el, ok := c.index[key]; ok {
+		c.entries.Remove(el)
+		delete(c.index, key)
+	}
+}
+
 // Record marks the (sessionID, messageID) pair as processed so a subsequent
 // Contains returns true within the TTL window. It is called only AFTER the
 // message has been delivered, so a failed delivery never poisons the cache. An

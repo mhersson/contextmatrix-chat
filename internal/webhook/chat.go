@@ -264,22 +264,13 @@ func (s *Server) handleChatEnd(w http.ResponseWriter, r *http.Request) {
 // stdin. A /clear content writes a TypeClear frame instead of TypeUserMessage.
 // Dedup is keyed by (sessionID, messageID): a retry with an already-delivered
 // messageID returns a cached 200 ack without re-writing to stdin.
+//
+// The stdinLock spans both the dedup check-and-record and the stdin write so
+// that concurrent in-flight retries (re-signed, so the replay cache does not
+// catch them) cannot both pass the check and deliver the frame twice.
 func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	var p protocol.MessagePayload
 	if !s.decode(w, r, &p) {
-		return
-	}
-
-	// Retried request whose first attempt already delivered: return a cached ack
-	// without re-writing the frame. Record only after a successful write, so a
-	// 404 or write failure never poisons the cache for a valid retry.
-	if s.dedup.Contains(p.SessionID, p.MessageID) {
-		writeJSON(w, http.StatusOK, protocol.SuccessResponse{
-			OK:        true,
-			Message:   "duplicate message acknowledged",
-			MessageID: p.MessageID,
-		})
-
 		return
 	}
 
@@ -302,21 +293,36 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Hold stdinLock across the atomic check-and-record and the write so no
+	// concurrent retry can slip through between the two operations.
 	mu := s.stdinLock(p.SessionID)
 	mu.Lock()
+
+	if s.dedup.CheckAndRecord(p.SessionID, p.MessageID) {
+		mu.Unlock()
+
+		writeJSON(w, http.StatusOK, protocol.SuccessResponse{
+			OK:        true,
+			Message:   "duplicate message acknowledged",
+			MessageID: p.MessageID,
+		})
+
+		return
+	}
+
 	err := frames.Write(run.Stdin, frame)
 	mu.Unlock()
 
 	if err != nil {
+		// Roll back the dedup record so a subsequent legitimate retry can
+		// still be delivered — a failed write must not permanently silence it.
+		s.dedup.Rollback(p.SessionID, p.MessageID)
 		s.logger.Error("message stdin write failed",
 			"session_id", p.SessionID, "error", err)
 		writeError(w, http.StatusInternalServerError, protocol.CodeInternal, "write failed")
 
 		return
 	}
-
-	// Delivered: record the message_id so a retry is deduped.
-	s.dedup.Record(p.SessionID, p.MessageID)
 
 	writeJSON(w, http.StatusAccepted, protocol.SuccessResponse{
 		OK:        true,

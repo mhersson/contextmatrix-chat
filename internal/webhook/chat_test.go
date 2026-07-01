@@ -829,6 +829,82 @@ func TestMessage_HMACRequired(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
+// TestMessageDedupConcurrent verifies that concurrent deliveries of the same
+// message_id write exactly one user_message frame. Before the fix the Contains
+// → Write → Record sequence has no lock spanning the gap, so two goroutines
+// can both pass Contains and both write to stdin.
+func TestMessageDedupConcurrent(t *testing.T) {
+	t.Parallel()
+
+	const n = 50
+
+	srv, tracker, _ := newChatServer(t)
+
+	stdin := &stdinCapture{}
+	tracker.AddIfUnderLimit(&executor.Run{
+		ContainerID: "cid-1",
+		SessionID:   testSession,
+		Stdin:       stdin,
+	})
+
+	payload := protocol.MessagePayload{
+		SessionID: testSession,
+		Content:   "hello",
+		MessageID: "msg-race",
+	}
+	body := mustJSON(t, payload)
+
+	// Build n requests with distinct timestamps so the replay cache sees each
+	// as a fresh request; all carry the same message_id, simulating n concurrent
+	// in-flight retries of the same delivery.
+	base := time.Now()
+	requests := make([]*http.Request, n)
+
+	for i := range n {
+		ts := strconv.FormatInt(base.Add(time.Duration(i)*time.Second).Unix(), 10)
+		requests[i] = signedPostBodyAt(t, "/message", body, ts)
+	}
+
+	start := make(chan struct{})
+
+	var wg sync.WaitGroup
+
+	wg.Add(n)
+
+	for _, req := range requests {
+		req := req
+
+		go func() {
+			defer wg.Done()
+
+			<-start
+
+			srv.Routes().ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	// Count user_message frames written to stdin.
+	rd := frames.NewReader(bytes.NewReader(stdin.Bytes()))
+
+	frameCount := 0
+
+	for {
+		f, err := rd.Next()
+		if err != nil {
+			break
+		}
+
+		if f.Type == frames.TypeUserMessage {
+			frameCount++
+		}
+	}
+
+	assert.Equal(t, 1, frameCount, "exactly one user_message frame must be written for concurrent retries of the same message_id")
+}
+
 // ---- /health with tracker ---------------------------------------------------
 
 func TestHealth_ReturnsTrackerCount(t *testing.T) {
