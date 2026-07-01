@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
@@ -26,7 +27,6 @@ func TestEpochLoop_ClearedOnceThenDone(t *testing.T) {
 	t.Parallel()
 
 	inbox := newChatInbox()
-	inbox.push(harness.UserMessage{MessageID: "m1", Content: "re-sent primer"})
 
 	clearCh := make(chan struct{}, 1)
 	cfg := &harness.Config{
@@ -38,6 +38,19 @@ func TestEpochLoop_ClearedOnceThenDone(t *testing.T) {
 
 	var secondHistory []llm.Message
 
+	// Push the re-sent primer from a goroutine AFTER epoch 1 finishes. The
+	// brief sleep gives epochLoop time to call Drain() (which runs right after
+	// run() returns) before the push arrives, so the primer is not itself
+	// drained. Without the drain fix, a pre-queued primer would be lost to
+	// Drain(); pushing it here after the fact avoids that ordering problem.
+	epoch1Done := make(chan struct{})
+
+	go func() {
+		<-epoch1Done
+		time.Sleep(time.Millisecond)
+		inbox.push(harness.UserMessage{MessageID: "m1", Content: "re-sent primer"})
+	}()
+
 	run := func(_ context.Context, task string) (bool, error) {
 		epoch++
 
@@ -45,6 +58,10 @@ func TestEpochLoop_ClearedOnceThenDone(t *testing.T) {
 
 		if epoch == 2 {
 			secondHistory = cfg.History
+		}
+
+		if epoch == 1 {
+			close(epoch1Done)
 		}
 
 		return epoch == 1, nil // epoch 1: cleared; epoch 2: done
@@ -113,6 +130,48 @@ func TestReasoningRaw(t *testing.T) {
 	assert.Nil(t, reasoningRaw(""))
 	assert.JSONEq(t, `{"effort":"medium"}`, string(reasoningRaw("medium")))
 	assert.JSONEq(t, `{"effort":"xhigh"}`, string(reasoningRaw("xhigh")))
+}
+
+// TestClearDrainsPendingMessage verifies that epochLoop discards messages
+// already queued in the inbox when a /clear fires. Without the drain a stale
+// user_message sitting in the inbox before the clear becomes the next epoch's
+// primer, silently losing the human's re-sent task.
+func TestClearDrainsPendingMessage(t *testing.T) {
+	t.Parallel()
+
+	inbox := newChatInbox()
+
+	// Stale message queued before /clear fires (simulates a message already
+	// in-flight when the user hits clear).
+	inbox.push(harness.UserMessage{MessageID: "stale", Content: "stale-primer"})
+
+	clearCh := make(chan struct{}, 1)
+	cfg := &harness.Config{}
+
+	epoch := 0
+
+	run := func(_ context.Context, _ string) (bool, error) {
+		epoch++
+
+		if epoch == 1 {
+			// Simulate no re-sent primer: close the inbox so Wait returns
+			// ErrInboxClosed after the stale message is drained. Before the
+			// fix, Wait returns the stale message and epoch 2 runs.
+			inbox.closeInbox()
+
+			return true, nil // cleared
+		}
+
+		return false, nil
+	}
+
+	err := epochLoop(context.Background(), clearCh, inbox, cfg, "initial", run)
+	require.NoError(t, err)
+
+	// Before fix: stale message was returned by Wait → epoch 2 ran → epoch == 2.
+	// After fix:  Drain() drops the stale message → Wait returns ErrInboxClosed
+	//             → loop exits after epoch 1.
+	assert.Equal(t, 1, epoch, "stale pre-clear message must be drained; no second epoch without a fresh primer")
 }
 
 // TestEpochLoop_RunError verifies that a non-clear error from run propagates.
