@@ -55,7 +55,7 @@ internal/chatwork/             → container-side work loop: secrets, git creden
 internal/mcpbridge/            → dials CM's /mcp, lists board tools, adapts each to a harness tools.Tool
 internal/logbridge/            → Hub fanning container log frames to SSE subscribers (per-session or all)
 internal/frames/               → JSON-Lines control protocol written to container stdin (user-message, clear)
-internal/secrets/              → host-side secrets staging: writes the shared env file (OpenRouter key + rotating GitHub token), atomic write+rename
+internal/secrets/              → host-side secrets staging: writes the shared env file (LLM endpoint API key + rotating GitHub token), atomic write+rename
 internal/metrics/              → Prometheus metric set on a dedicated registry
 docker/Dockerfile.worker       → worker image; entrypoint `contextmatrix-chat work`
 ```
@@ -84,7 +84,7 @@ here.
 - `contextmatrix-protocol` — webhook/payload + log-entry types
 - `contextmatrix-githubauth` — GitHub App / PAT token generation
 - Go MCP SDK (`github.com/modelcontextprotocol/go-sdk`) — MCP client
-- OpenRouter via the harness `llm` client (raw HTTP, no SDK)
+- An OpenAI-compatible LLM endpoint (OpenRouter by default) via the harness `llm` client (raw HTTP, no SDK)
 - testify
 
 ## Coding conventions
@@ -147,7 +147,7 @@ we got here.
    `<container_contextmatrix_url>/mcp`, lists board tools, and offers them to the
    model alongside the filesystem/shell tools rooted at `/workspace`.
 7. **Secrets are staged, never baked.** serve writes `<secrets_dir>/shared/env`
-   (OpenRouter key + rotating GitHub token) and bind-mounts it read-only at
+   (LLM endpoint API key + rotating GitHub token) and bind-mounts it read-only at
    `/run/cm-secrets`. The worker's git credential helper reads the token on each
    call, so rotation is transparent. Secrets are redacted from all tool output
    and events.

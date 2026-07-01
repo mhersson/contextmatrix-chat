@@ -2,6 +2,7 @@ package chatwork
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -44,7 +45,9 @@ func Run(ctx context.Context) error {
 		return fmt.Errorf("read secrets: %w", err)
 	}
 
-	openRouterKey := src.Get("OPENROUTER_API_KEY")
+	llmKey := src.Get("LLM_API_KEY")
+	llmBaseURL := src.Get("LLM_BASE_URL")
+	llmType := src.Get("LLM_TYPE")
 	gitToken := src.Get("CM_GIT_TOKEN")
 
 	// 2. Configure the git credential helper so clones authenticate via the
@@ -71,7 +74,12 @@ func Run(ctx context.Context) error {
 	// 4. Build the LLM client and resolve the model's context window from the
 	// live catalog. Catalog failures are non-fatal: the default window is used
 	// so the session still runs.
-	client := llm.NewClient(openRouterKey, llm.WithRetry(llm.DefaultRetryPolicy()))
+	clientOpts := []llm.Option{llm.WithRetry(llm.DefaultRetryPolicy()), llm.WithDialect(dialectFromType(llmType))}
+	if llmBaseURL != "" {
+		clientOpts = append(clientOpts, llm.WithBaseURL(llmBaseURL))
+	}
+
+	client := llm.NewClient(llmKey, clientOpts...)
 	ctxWindow := defaultContextWindow
 	model := os.Getenv("CM_MODEL")
 
@@ -105,7 +113,7 @@ func Run(ctx context.Context) error {
 	primer := readPrimer(primerPath)
 
 	// 8. Redactor: mask the secrets from all tool output and event data.
-	red := redact.New([]string{openRouterKey, gitToken, os.Getenv("CM_MCP_API_KEY")})
+	red := redact.New([]string{llmKey, gitToken, os.Getenv("CM_MCP_API_KEY")})
 
 	// 9. Compaction and tool-output config from env, with documented defaults.
 	threshold := envFloatDefault("CMX_COMPACTION_THRESHOLD", defaultCompactionThreshold)
@@ -140,6 +148,7 @@ func Run(ctx context.Context) error {
 		Inbox:              in,
 		RedactToolOutput:   red.Apply,
 		SystemPrompt:       chatSystemPrompt,
+		Reasoning:          reasoningRaw(os.Getenv("CMX_REASONING_EFFORT")),
 	}
 
 	run := func(ctx context.Context, epochTask string) (bool, error) {
@@ -301,6 +310,32 @@ func envFloatDefault(name string, def float64) float64 {
 	}
 
 	return v
+}
+
+// dialectFromType maps the LLM_TYPE env value to the harness wire dialect.
+// "openai" → DialectOpenAI; everything else (including "" and "openrouter") →
+// DialectOpenRouter (byte-identical to the prior default).
+func dialectFromType(s string) llm.Dialect {
+	if s == "openai" {
+		return llm.DialectOpenAI
+	}
+
+	return llm.DialectOpenRouter
+}
+
+// reasoningRaw converts a reasoning effort string to a json.RawMessage for
+// harness.Config.Reasoning. An empty effort returns nil (reasoning disabled).
+func reasoningRaw(effort string) json.RawMessage {
+	if effort == "" {
+		return nil
+	}
+
+	raw, err := (llm.Reasoning{Effort: &effort}).Raw()
+	if err != nil {
+		return nil
+	}
+
+	return raw
 }
 
 // envIntDefault parses an optional integer env var, returning def when the

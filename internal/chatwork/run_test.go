@@ -11,6 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDialectFromType(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, llm.DialectOpenAI, dialectFromType("openai"))
+	assert.Equal(t, llm.DialectOpenRouter, dialectFromType("openrouter"))
+	assert.Equal(t, llm.DialectOpenRouter, dialectFromType(""))
+}
+
 // TestEpochLoop_ClearedOnceThenDone verifies that a /clear triggers a second
 // epoch: two epochs run, the second task comes from the inbox, and History is
 // nil in the second epoch.
@@ -95,6 +103,16 @@ func TestEpochLoop_InboxClosedAfterClear(t *testing.T) {
 	err := epochLoop(context.Background(), clearCh, inbox, cfg, "task", run)
 	require.NoError(t, err) // clean exit when inbox closed between epochs
 	assert.Equal(t, 1, epoch)
+}
+
+// TestReasoningRaw verifies that reasoningRaw returns nil for an empty effort
+// and a valid JSON object for standard and non-standard tiers.
+func TestReasoningRaw(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, reasoningRaw(""))
+	assert.JSONEq(t, `{"effort":"medium"}`, string(reasoningRaw("medium")))
+	assert.JSONEq(t, `{"effort":"xhigh"}`, string(reasoningRaw("xhigh")))
 }
 
 // TestEpochLoop_RunError verifies that a non-clear error from run propagates.

@@ -74,7 +74,7 @@ dependency.
 
 - Go 1.26+ to build.
 - Docker on the host running `serve` (it launches worker containers).
-- An OpenRouter API key with credits.
+- An LLM endpoint API key (OpenRouter by default, or any OpenAI-compatible endpoint).
 - A reachable ContextMatrix instance (REST API + MCP endpoint). ContextMatrix
   supplies the per-session model and MCP API key in the chat-start payload.
 - GitHub authentication — a GitHub App or a fine-grained PAT (used to clone
@@ -99,7 +99,7 @@ dependency.
    mkdir -p ~/.config/contextmatrix-chat
    cp serve.yaml.example ~/.config/contextmatrix-chat/serve.yaml
    # set: contextmatrix_url, container_contextmatrix_url, api_key,
-   #      openrouter_api_key, base_image, chat_run_dir, github.*
+   #      llm_endpoint.api_key, base_image, chat_run_dir, github.*
    ```
 
    Every field also has a `CMX_*` override (see `serve.yaml.example`).
@@ -166,7 +166,8 @@ Every field has a `CMX_*` environment override; nested keys use a double
 underscore (`CMX_GITHUB__AUTH_MODE`, `CMX_COMPACTION__THRESHOLD`).
 `serve.yaml.example` documents every field, its default, and its env override.
 
-Required fields: `contextmatrix_url`, `api_key` (≥ 32 chars), `openrouter_api_key`,
+Required fields: `contextmatrix_url`, `api_key` (≥ 32 chars),
+`llm_endpoint.api_key` (and `llm_endpoint.base_url` when `type` is `openai`),
 `base_image`, `chat_run_dir`, and a `github` auth block
 (`auth_mode: app | pat` with the matching credentials).
 

@@ -51,6 +51,14 @@ type CompactionConfig struct {
 	KeepRecentTurns int     `koanf:"keep_recent_turns"`
 }
 
+// LLMEndpoint is the inference endpoint workers call. Type selects the harness
+// wire dialect ("openrouter" default | "openai"); BaseURL/APIKey address it.
+type LLMEndpoint struct {
+	Type    string `koanf:"type"`
+	BaseURL string `koanf:"base_url"`
+	APIKey  string `koanf:"api_key"`
+}
+
 // ServiceConfig is the host-side chat service configuration. ContextMatrix
 // POSTs lifecycle webhooks at the service; it launches one worker container per
 // chat session.
@@ -66,9 +74,10 @@ type ServiceConfig struct {
 	ContainerMemoryBytes      int64
 	ContainerPidsLimit        int64
 	SecretsDir                string
-	OpenRouterAPIKey          string
+	LLMEndpoint               LLMEndpoint
 	GitHub                    GitHubConfig
 	WorkerExtraEnv            map[string]string
+	ReasoningEffort           string
 	ReplaySkew                time.Duration
 	ReplayCacheSize           int
 	MessageDedupTTL           time.Duration
@@ -96,9 +105,10 @@ type serviceRaw struct {
 	ContainerMemoryLimit      int64             `koanf:"container_memory_limit"`
 	ContainerPidsLimit        int64             `koanf:"container_pids_limit"`
 	SecretsDir                string            `koanf:"secrets_dir"`
-	OpenRouterAPIKey          string            `koanf:"openrouter_api_key"`
+	LLMEndpoint               LLMEndpoint       `koanf:"llm_endpoint"`
 	GitHub                    GitHubConfig      `koanf:"github"`
 	WorkerExtraEnv            map[string]string `koanf:"worker_extra_env"`
+	ReasoningEffort           string            `koanf:"reasoning_effort"`
 	ReplaySkewSeconds         int               `koanf:"webhook_replay_skew_seconds"`
 	ReplayCacheSize           int               `koanf:"webhook_replay_cache_size"`
 	MessageDedupTTLSeconds    int               `koanf:"message_dedup_ttl_seconds"`
@@ -183,9 +193,10 @@ func (r serviceRaw) toConfig() (*ServiceConfig, error) {
 		ContainerMemoryBytes:      r.ContainerMemoryLimit,
 		ContainerPidsLimit:        r.ContainerPidsLimit,
 		SecretsDir:                r.SecretsDir,
-		OpenRouterAPIKey:          r.OpenRouterAPIKey,
+		LLMEndpoint:               r.LLMEndpoint,
 		GitHub:                    r.GitHub,
 		WorkerExtraEnv:            r.WorkerExtraEnv,
+		ReasoningEffort:           r.ReasoningEffort,
 		ReplaySkew:                time.Duration(r.ReplaySkewSeconds) * time.Second,
 		ReplayCacheSize:           r.ReplayCacheSize,
 		MessageDedupTTL:           time.Duration(r.MessageDedupTTLSeconds) * time.Second,
@@ -219,8 +230,18 @@ func (c *ServiceConfig) Validate() error {
 		return fmt.Errorf("api_key must be at least 32 characters, got %d", len(c.APIKey))
 	}
 
-	if c.OpenRouterAPIKey == "" {
-		return fmt.Errorf("openrouter_api_key is required")
+	if c.LLMEndpoint.APIKey == "" {
+		return fmt.Errorf("llm_endpoint.api_key is required")
+	}
+
+	switch c.LLMEndpoint.Type {
+	case "", "openrouter":
+	case "openai":
+		if c.LLMEndpoint.BaseURL == "" {
+			return fmt.Errorf("llm_endpoint.base_url is required when llm_endpoint.type is \"openai\"")
+		}
+	default:
+		return fmt.Errorf("llm_endpoint.type must be \"openrouter\" or \"openai\", got %q", c.LLMEndpoint.Type)
 	}
 
 	if c.BaseImage == "" {

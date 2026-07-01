@@ -79,7 +79,7 @@ container_pids_limit: 512
 # Host directory under which the service stages secrets. It writes
 # <secrets_dir>/shared/env (rewritten ahead of each token expiry) and
 # bind-mounts that directory read-only at /run/cm-secrets inside each container;
-# workers read their GitHub token and OpenRouter key from /run/cm-secrets/env.
+# workers read their GitHub token and LLM endpoint API key (OpenRouter by default) from /run/cm-secrets/env.
 # Default: /var/run/cm-chat/secrets.
 # CMX_SECRETS_DIR
 secrets_dir: /var/run/cm-chat/secrets
@@ -97,12 +97,16 @@ secrets_dir: /var/run/cm-chat/secrets
 #   HTTP_PROXY: http://proxy.example.com:3128
 #   NO_PROXY: localhost,127.0.0.1
 
-# ─── OpenRouter ───────────────────────────────────────────────────────────────
-
-# OpenRouter API key written to the shared secrets env file so workers can
-# authenticate with OpenRouter. Required.
-# CMX_OPENROUTER_API_KEY
-openrouter_api_key: ""
+# ─── LLM endpoint ─────────────────────────────────────────────────────────────
+# The inference endpoint workers call.
+#   type:     openrouter (default) | openai
+#   base_url: required for the openai type (operator-supplied)
+#   api_key:  bearer key for the endpoint
+# CMX_LLM_ENDPOINT__TYPE / CMX_LLM_ENDPOINT__BASE_URL / CMX_LLM_ENDPOINT__API_KEY
+llm_endpoint:
+  type: openrouter
+  # base_url: https://your-llm-endpoint.example/v1
+  api_key: ""
 
 # ─── Task skills ──────────────────────────────────────────────────────────────
 
@@ -186,3 +190,11 @@ bash_timeout_max_seconds: 600
 # Forwarded as CMX_TOOL_OUTPUT_MAX_BYTES. Default: 131072.
 # CMX_TOOL_OUTPUT_MAX_BYTES
 tool_output_max_bytes: 131072
+
+# Static reasoning effort applied to every chat session (low | medium | high).
+# Forwarded as CMX_REASONING_EFFORT to every worker container. Leave empty (the
+# default) to send nothing — reasoning is off. Footgun: this is sent to every
+# selected model; the endpoint must accept reasoning_effort on all served models,
+# or leave empty.
+# CMX_REASONING_EFFORT
+# reasoning_effort: ""
