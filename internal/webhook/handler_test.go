@@ -44,3 +44,15 @@ func TestReadyz_OKAndDraining(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, w2.Code)
 	assert.Contains(t, w2.Body.String(), "draining")
 }
+
+func TestDropSessionReclaimsStdinLock(t *testing.T) {
+	t.Parallel()
+
+	srv := NewServer(Config{})
+
+	first := srv.stdinLock("sess-1")
+	srv.DropSession("sess-1")
+	second := srv.stdinLock("sess-1")
+
+	assert.NotSame(t, first, second, "DropSession must reclaim the entry so a later lock is a fresh mutex")
+}
