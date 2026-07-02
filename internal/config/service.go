@@ -288,6 +288,12 @@ func (c *ServiceConfig) Validate() error {
 		return fmt.Errorf("image_pull_policy must be never|if-not-present|always, got %q", c.ImagePullPolicy)
 	}
 
+	switch c.ReasoningEffort {
+	case "", "low", "medium", "high":
+	default:
+		return fmt.Errorf("reasoning_effort must be low|medium|high (or empty), got %q", c.ReasoningEffort)
+	}
+
 	if c.MaxConcurrent < 1 {
 		return fmt.Errorf(
 			"max_concurrent must be >= 1, got %d: 0 disables the webhook capacity pre-check "+

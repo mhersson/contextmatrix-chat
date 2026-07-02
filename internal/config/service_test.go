@@ -351,6 +351,20 @@ func TestServiceValidate(t *testing.T) {
 	})
 }
 
+func TestServiceValidate_ReasoningEffort(t *testing.T) {
+	t.Parallel()
+
+	ok := validServiceConfig()
+	ok.ReasoningEffort = "high"
+	require.NoError(t, ok.Validate())
+
+	bad := validServiceConfig()
+	bad.ReasoningEffort = "extreme"
+	err := bad.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reasoning_effort")
+}
+
 func TestGitHubHostDerivesAPIBaseURL(t *testing.T) {
 	cases := []struct {
 		name       string
