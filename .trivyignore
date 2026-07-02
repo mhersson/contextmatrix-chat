@@ -1,11 +1,21 @@
 # Trivy suppressions for the worker image scan (.github/workflows/ci.yaml).
-# Each entry documents a vulnerability we have evaluated and accepted; add a
-# bare CVE id on its own line to actively suppress one.
+# Each entry documents a vulnerability we have evaluated and accepted; the
+# bare CVE id on its own line is what actively suppresses it. Review on each
+# worker-image bump and delete entries whose fix has shipped.
 
 # CVE-2026-33671 — npm-bundled tinyglobby/picomatch 4.0.3 ReDoS (4.0.4 fixes);
 # only npm's transitive, single-tenant worker, unreachable from a prompt attacker.
+CVE-2026-33671
 
 # CVE-2026-34040 — Docker SDK Moby daemon authz-bypass (v29.3.1 fixes);
 # the chat service uses the Docker *client* only, against a trusted local
 # daemon; govulncheck reports no finding. v28->v29 major bump pending
 # Dependabot review.
+CVE-2026-34040
+
+# CVE-2026-48815 — npm-bundled sigstore 4.1.0: certificateOIDs verification
+# constraints are silently dropped and never enforced (4.1.1 fixes). npm CLI's
+# own transitive dependency, exercised only when npm verifies registry
+# attestations inside the single-tenant worker; clears when a base-image npm
+# upgrade ships the fixed sigstore.
+CVE-2026-48815
