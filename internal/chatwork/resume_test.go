@@ -21,33 +21,6 @@ func TestSeedHistory(t *testing.T) {
 		assert.Nil(t, SeedHistory(&protocol.ChatResumeContext{}))
 	})
 
-	t.Run("full role set mapped in order", func(t *testing.T) {
-		rc := &protocol.ChatResumeContext{
-			Turns: []protocol.ChatResumeTurn{
-				{Seq: 1, Role: "user", Content: "hello"},
-				{Seq: 2, Role: "assistant_text", Content: "hi there"},
-				{Seq: 3, Role: "assistant_thinking", Content: "thinking..."},
-				{Seq: 4, Role: "tool_call", Content: `{"tool":"read_file"}`},
-				{Seq: 5, Role: "tool_result", Content: "file contents"},
-				{Seq: 6, Role: "system", Content: "system note"},
-			},
-		}
-
-		msgs := SeedHistory(rc)
-
-		require.Len(t, msgs, 5)
-		assert.Equal(t, "user", msgs[0].Role)
-		assert.Equal(t, "hello", msgs[0].Content)
-		assert.Equal(t, "assistant", msgs[1].Role)
-		assert.Equal(t, "hi there", msgs[1].Content)
-		assert.Equal(t, "system", msgs[2].Role)
-		assert.JSONEq(t, `{"tool":"read_file"}`, msgs[2].Content)
-		assert.Equal(t, "system", msgs[3].Role)
-		assert.Equal(t, "file contents", msgs[3].Content)
-		assert.Equal(t, "system", msgs[4].Role)
-		assert.Equal(t, "system note", msgs[4].Content)
-	})
-
 	t.Run("empty content turns dropped", func(t *testing.T) {
 		rc := &protocol.ChatResumeContext{
 			Turns: []protocol.ChatResumeTurn{
@@ -57,22 +30,6 @@ func TestSeedHistory(t *testing.T) {
 		}
 
 		assert.Nil(t, SeedHistory(rc))
-	})
-
-	t.Run("assistant_thinking and thinking skipped", func(t *testing.T) {
-		rc := &protocol.ChatResumeContext{
-			Turns: []protocol.ChatResumeTurn{
-				{Seq: 1, Role: "assistant_thinking", Content: "internal reasoning"},
-				{Seq: 2, Role: "thinking", Content: "more reasoning"},
-				{Seq: 3, Role: "user", Content: "question"},
-			},
-		}
-
-		msgs := SeedHistory(rc)
-
-		require.Len(t, msgs, 1)
-		assert.Equal(t, "user", msgs[0].Role)
-		assert.Equal(t, "question", msgs[0].Content)
 	})
 
 	t.Run("unknown role skipped forward-compatible", func(t *testing.T) {
@@ -89,35 +46,49 @@ func TestSeedHistory(t *testing.T) {
 		assert.Equal(t, "user", msgs[0].Role)
 	})
 
-	t.Run("assistant and text aliases map to assistant", func(t *testing.T) {
+	t.Run("wire role set mapped in order", func(t *testing.T) {
+		// CM's transcript builder (contextmatrix internal/chat/transcript)
+		// emits exactly four roles on the wire: user, assistant_text,
+		// tool_call, tool_result_summary.
 		rc := &protocol.ChatResumeContext{
 			Turns: []protocol.ChatResumeTurn{
-				{Seq: 1, Role: "assistant", Content: "raw assistant"},
-				{Seq: 2, Role: "text", Content: "raw text"},
+				{Seq: 1, Role: "user", Content: "hello"},
+				{Seq: 2, Role: "assistant_text", Content: "hi there"},
+				{Seq: 3, Role: "tool_call", Content: `{"tool":"read_file"}`},
+				{Seq: 4, Role: "tool_result_summary", Content: "→ ok"},
 			},
 		}
 
 		msgs := SeedHistory(rc)
 
-		require.Len(t, msgs, 2)
-		assert.Equal(t, "assistant", msgs[0].Role)
-		assert.Equal(t, "raw assistant", msgs[0].Content)
+		require.Len(t, msgs, 4)
+		assert.Equal(t, "user", msgs[0].Role)
+		assert.Equal(t, "hello", msgs[0].Content)
 		assert.Equal(t, "assistant", msgs[1].Role)
-		assert.Equal(t, "raw text", msgs[1].Content)
+		assert.Equal(t, "hi there", msgs[1].Content)
+		assert.Equal(t, "system", msgs[2].Role)
+		assert.JSONEq(t, `{"tool":"read_file"}`, msgs[2].Content)
+		assert.Equal(t, "system", msgs[3].Role)
+		assert.Equal(t, "→ ok", msgs[3].Content)
 	})
 
-	t.Run("stderr folds to system", func(t *testing.T) {
-		rc := &protocol.ChatResumeContext{
-			Turns: []protocol.ChatResumeTurn{
-				{Seq: 1, Role: "stderr", Content: "error output"},
-			},
+	t.Run("roles CM never sends are skipped", func(t *testing.T) {
+		// The first five were handled by the old vestigial mapping; the
+		// rest are filtered by CM before the wire. None may seed history.
+		for _, role := range []string{
+			"assistant", "text", "tool_result", "system", "stderr",
+			"assistant_thinking", "thinking",
+		} {
+			t.Run(role, func(t *testing.T) {
+				rc := &protocol.ChatResumeContext{
+					Turns: []protocol.ChatResumeTurn{
+						{Seq: 1, Role: role, Content: "some content"},
+					},
+				}
+
+				assert.Nil(t, SeedHistory(rc), "role %q must not seed history", role)
+			})
 		}
-
-		msgs := SeedHistory(rc)
-
-		require.Len(t, msgs, 1)
-		assert.Equal(t, "system", msgs[0].Role)
-		assert.Equal(t, "error output", msgs[0].Content)
 	})
 }
 
@@ -213,7 +184,8 @@ func TestLoadResume(t *testing.T) {
 		turns := []protocol.ChatResumeTurn{
 			{Seq: 1, Role: "user", Content: "question"},
 			{Seq: 2, Role: "assistant_text", Content: "answer"},
-			{Seq: 3, Role: "assistant_thinking", Content: "thinking"},
+			{Seq: 3, Role: "tool_call", Content: `{"tool":"bash"}`},
+			{Seq: 4, Role: "tool_result_summary", Content: "→ failed: exit status 1"},
 		}
 
 		f, err := os.Create(path)
@@ -231,10 +203,13 @@ func TestLoadResume(t *testing.T) {
 		require.NoError(t, err)
 
 		msgs := SeedHistory(rc)
-		require.Len(t, msgs, 2)
+		require.Len(t, msgs, 4)
 		assert.Equal(t, "user", msgs[0].Role)
 		assert.Equal(t, "question", msgs[0].Content)
 		assert.Equal(t, "assistant", msgs[1].Role)
 		assert.Equal(t, "answer", msgs[1].Content)
+		assert.Equal(t, "system", msgs[2].Role)
+		assert.Equal(t, "system", msgs[3].Role)
+		assert.Equal(t, "→ failed: exit status 1", msgs[3].Content)
 	})
 }

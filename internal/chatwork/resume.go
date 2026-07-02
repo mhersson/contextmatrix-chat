@@ -13,9 +13,12 @@ import (
 )
 
 // SeedHistory maps a bounded ChatResumeContext into []llm.Message for seeding
-// Config.History in the harness. Thinking turns are skipped; tool calls,
-// tool results, stderr, and system turns fold into orientation messages.
-// Returns nil for a nil rc or when all turns are filtered out.
+// Config.History in the harness. CM's transcript builder puts exactly four
+// roles on the wire: "user", "assistant_text", "tool_call", and
+// "tool_result_summary". User and assistant turns map directly; tool calls
+// and tool-result summaries fold into system orientation messages. Any other
+// role is skipped (forward compatibility). Returns nil for a nil rc or when
+// all turns are filtered out.
 func SeedHistory(rc *protocol.ChatResumeContext) []llm.Message {
 	if rc == nil || len(rc.Turns) == 0 {
 		return nil
@@ -31,9 +34,9 @@ func SeedHistory(rc *protocol.ChatResumeContext) []llm.Message {
 		switch t.Role {
 		case "user":
 			msgs = append(msgs, llm.Message{Role: "user", Content: t.Content})
-		case "assistant_text", "assistant", "text":
+		case "assistant_text":
 			msgs = append(msgs, llm.Message{Role: "assistant", Content: t.Content})
-		case "tool_call", "tool_result", "system", "stderr":
+		case "tool_call", "tool_result_summary":
 			msgs = append(msgs, llm.Message{Role: "system", Content: t.Content})
 		}
 	}
