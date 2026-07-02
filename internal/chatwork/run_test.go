@@ -46,6 +46,29 @@ func TestHostFromRepoURL(t *testing.T) {
 	}
 }
 
+func TestGitHost(t *testing.T) {
+	tests := []struct {
+		name    string
+		gitHost string
+		repoURL string
+		want    string
+	}{
+		{"configured host wins over repo URL", "acme.ghe.com", "https://github.com/org/repo.git", "acme.ghe.com"},
+		{"configured host without repo URL (cross-project)", "acme.ghe.com", "", "acme.ghe.com"},
+		{"falls back to repo URL host", "", "https://acme.ghe.com/org/repo.git", "acme.ghe.com"},
+		{"neither set", "", "", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CM_GIT_HOST", tc.gitHost)
+			t.Setenv("CM_CHAT_REPO_URL", tc.repoURL)
+
+			assert.Equal(t, tc.want, gitHost())
+		})
+	}
+}
+
 // TestClearBoundaryDeliversPostClearPrimer verifies that a /clear during
 // active work establishes an epoch boundary: a stale in-flight message queued
 // before the clear is dropped, and the re-sent primer that follows the clear

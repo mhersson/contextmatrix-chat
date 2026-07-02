@@ -576,6 +576,72 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 	})
 }
 
+func TestChatStart_GitHostEnv(t *testing.T) {
+	t.Run("set when githubHost configured", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := executor.NewTracker(10)
+		fe := &fakeExecutor{tracker: tracker}
+
+		srv := NewServer(Config{
+			APIKey:   testAPIKey,
+			Executor: fe,
+			Tracker:  tracker,
+			Chat: ChatConfig{
+				Image:          testImage,
+				MCPURL:         testMCPURL,
+				SecretsHostDir: "/host/secrets",
+				ChatRunDirBase: t.TempDir(),
+				MaxConcurrent:  10,
+				GitHubHost:     "acme.ghe.com",
+			},
+		})
+
+		// No RepoURL: a cross-project session must still learn the git host.
+		body := mustJSON(t, protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"})
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+		require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+		launched := fe.Launched()
+		require.Len(t, launched, 1)
+
+		envMap := envToMap(launched[0].Env)
+		assert.Equal(t, "acme.ghe.com", envMap["CM_GIT_HOST"])
+	})
+
+	t.Run("absent when githubHost empty", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := executor.NewTracker(10)
+		fe := &fakeExecutor{tracker: tracker}
+
+		srv := NewServer(Config{
+			APIKey:   testAPIKey,
+			Executor: fe,
+			Tracker:  tracker,
+			Chat: ChatConfig{
+				Image:          testImage,
+				MCPURL:         testMCPURL,
+				SecretsHostDir: "/host/secrets",
+				ChatRunDirBase: t.TempDir(),
+				MaxConcurrent:  10,
+			},
+		})
+
+		body := mustJSON(t, protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"})
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+		require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+		launched := fe.Launched()
+		require.Len(t, launched, 1)
+
+		_, has := envToMap(launched[0].Env)["CM_GIT_HOST"]
+		assert.False(t, has, "CM_GIT_HOST must not be set when github.host is not configured")
+	})
+}
+
 func TestChatStart_CACertMountAndEnv(t *testing.T) {
 	t.Run("configured: read-only bind and CA env present", func(t *testing.T) {
 		tracker := executor.NewTracker(10)

@@ -23,6 +23,7 @@ func TestInstallGHWrapper(t *testing.T) {
 	s := string(script)
 	assert.Contains(t, s, "grep '^CM_GIT_TOKEN=' '/run/cm-secrets/env'", "reads the token fresh per call")
 	assert.Contains(t, s, "exec /usr/bin/gh \"$@\"", "execs the real gh by absolute path (no recursion)")
+	assert.Contains(t, s, "export GH_TOKEN GH_ENTERPRISE_TOKEN", "exports the enterprise token so gh authenticates against GHES hosts")
 	assert.NotContains(t, s, "ghp_", "no literal token embedded")
 
 	info, err := os.Stat(path)

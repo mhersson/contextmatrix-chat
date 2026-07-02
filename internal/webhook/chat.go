@@ -123,6 +123,14 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CM_CHAT_REPO_URL="+p.RepoURL)
 	}
 
+	// The host the git token is minted for (github.host in serve config). The
+	// worker scopes its git credential helper and GH_HOST to it; without this
+	// the worker falls back to the seeded repo URL's host, which is absent in
+	// cross-project sessions and would leave GHE clones without credentials.
+	if s.githubHost != "" {
+		env = append(env, "CM_GIT_HOST="+s.githubHost)
+	}
+
 	if p.Resume != nil {
 		env = append(env, "CM_CHAT_RESUME=1")
 	}

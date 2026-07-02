@@ -422,6 +422,26 @@ func TestGitHubHostValidation(t *testing.T) {
 	})
 }
 
+func TestGitHubBareHost(t *testing.T) {
+	cases := []struct {
+		name string
+		host string
+		want string
+	}{
+		{"bare host unchanged", "ghe.example.com", "ghe.example.com"},
+		{"scheme stripped", "https://ghe.example.com", "ghe.example.com"},
+		{"port kept", "https://ghe.example.com:8443", "ghe.example.com:8443"},
+		{"empty stays empty", "", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := GitHubConfig{Host: tc.host}
+			assert.Equal(t, tc.want, g.BareHost())
+		})
+	}
+}
+
 func TestCACertFileValidation(t *testing.T) {
 	t.Run("empty disables (valid)", func(t *testing.T) {
 		cfg := validServiceConfig()

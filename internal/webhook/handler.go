@@ -67,6 +67,11 @@ type ChatConfig struct {
 	// caCertMountPath and points the worker's TLS (harness LLM client, MCP
 	// bridge) and git at it. Empty disables it.
 	CACertFile string
+	// GitHubHost is the GitHub Enterprise host (serve config github.host) the
+	// git token is minted for, forwarded to each worker as CM_GIT_HOST so the
+	// git credential helper and gh are scoped to it even when the session has
+	// no seeded repo URL (cross-project chats). Empty means github.com.
+	GitHubHost string
 }
 
 // Config carries the dependencies NewServer needs. Pointers may be shared with
@@ -130,6 +135,7 @@ type Server struct {
 	workerExtraEnv            map[string]string
 	reasoningEffort           string
 	caCertFile                string
+	githubHost                string
 
 	hub *logbridge.Hub
 
@@ -210,6 +216,7 @@ func NewServer(cfg Config) *Server {
 		workerExtraEnv:            cfg.Chat.WorkerExtraEnv,
 		reasoningEffort:           cfg.Chat.ReasoningEffort,
 		caCertFile:                cfg.Chat.CACertFile,
+		githubHost:                cfg.Chat.GitHubHost,
 		hub:                       cfg.Hub,
 		replay:                    replay,
 		dedup:                     dedup,
