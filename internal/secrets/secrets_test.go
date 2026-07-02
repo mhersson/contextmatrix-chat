@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -254,4 +255,60 @@ func TestRefresherRetriesOnWriteFailure(t *testing.T) {
 	// lands many attempts inside the 200ms window.
 	assert.Greater(t, gen.calls, 1,
 		"write failure must retry on the short backoff, not sleep until token expiry")
+}
+
+// TestRefresherInvokesOnRotateOnEveryWrite verifies OnRotate fires with the
+// freshly minted token after each successful env-file write, including the
+// very first — this is what lets the serve-side log-bridge redactor learn a
+// live GitHub token without a restart.
+func TestRefresherInvokesOnRotateOnEveryWrite(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env")
+
+	now := time.Now()
+	gen := &fakeGenerator{
+		calls: []fakeCall{
+			{token: "tok1", expiresAt: now.Add(60 * time.Millisecond)},
+			{token: "tok2", expiresAt: now.Add(10 * time.Second)},
+		},
+	}
+
+	r := NewRefresher(path, EndpointSecrets{}, gen, nil)
+	r.refreshBefore = 20 * time.Millisecond
+	r.minSleep = 5 * time.Millisecond
+
+	var mu sync.Mutex
+
+	var rotated []string
+
+	r.SetOnRotate(func(token string) {
+		mu.Lock()
+		rotated = append(rotated, token)
+		mu.Unlock()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+
+	go func() { errCh <- r.Run(ctx) }()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return len(rotated) >= 2 && rotated[0] == "tok1" && rotated[1] == "tok2"
+	}, 2*time.Second, 10*time.Millisecond, "expected OnRotate to fire with tok1 then tok2 in order")
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after context cancel")
+	}
 }

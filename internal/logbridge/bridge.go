@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -97,12 +98,23 @@ func (h *Hub) Publish(e protocol.LogEntry) {
 // Bridge maps one worker output line to zero or one published LogEntry.
 type Bridge struct {
 	hub      *Hub
-	redactor *redact.Redactor
+	redactor atomic.Pointer[redact.Redactor]
 }
 
 // New creates a Bridge. r may be nil (no redaction).
 func New(hub *Hub, r *redact.Redactor) *Bridge {
-	return &Bridge{hub: hub, redactor: r}
+	b := &Bridge{hub: hub}
+	b.redactor.Store(r)
+
+	return b
+}
+
+// SetRedactor atomically swaps the redactor used for all lines bridged after
+// the call. Safe for concurrent use with BridgeLine — intended to be called
+// from the secrets Refresher's OnRotate hook so a rotated GitHub token is
+// masked in bridged logs the instant the host mints it, without a restart.
+func (b *Bridge) SetRedactor(r *redact.Redactor) {
+	b.redactor.Store(r)
 }
 
 // BridgeLine maps one worker output line (stdout JSONL event or raw stderr)
@@ -113,7 +125,7 @@ func (b *Bridge) BridgeLine(sessionID string, line []byte, isStderr bool) {
 			Timestamp: time.Now(),
 			SessionID: sessionID,
 			Type:      "stderr",
-			Content:   b.redactor.Apply(string(line)),
+			Content:   b.redactor.Load().Apply(string(line)),
 		})
 
 		return
@@ -129,7 +141,7 @@ func (b *Bridge) BridgeLine(sessionID string, line []byte, isStderr bool) {
 			Timestamp: time.Now(),
 			SessionID: sessionID,
 			Type:      "stderr",
-			Content:   b.redactor.Apply(string(line)),
+			Content:   b.redactor.Load().Apply(string(line)),
 		})
 
 		return
@@ -142,7 +154,7 @@ func (b *Bridge) BridgeLine(sessionID string, line []byte, isStderr bool) {
 
 	entry.Timestamp = time.Now()
 	entry.SessionID = sessionID
-	entry.Content = b.redactor.Apply(entry.Content)
+	entry.Content = b.redactor.Load().Apply(entry.Content)
 
 	b.hub.Publish(entry)
 }
