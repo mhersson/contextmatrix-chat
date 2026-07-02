@@ -154,12 +154,13 @@ type Refresher struct {
 	logger        *slog.Logger
 	refreshBefore time.Duration // default 10m; override in tests
 	minSleep      time.Duration // floor on sleep; default 30s; override in tests
+	retryBackoff  time.Duration // fast retry after a transient failure; default 5s; override in tests
 }
 
 const (
 	defaultRefreshBefore = 10 * time.Minute
 	defaultMinSleep      = 30 * time.Second
-	retryBackoff         = 5 * time.Second
+	defaultRetryBackoff  = 5 * time.Second
 )
 
 // NewRefresher constructs a Refresher. Pass nil for logger to use the default.
@@ -175,6 +176,7 @@ func NewRefresher(path string, endpoint EndpointSecrets, gen TokenGenerator, log
 		logger:        logger,
 		refreshBefore: defaultRefreshBefore,
 		minSleep:      defaultMinSleep,
+		retryBackoff:  defaultRetryBackoff,
 	}
 }
 
@@ -188,12 +190,12 @@ func (r *Refresher) Run(ctx context.Context) error {
 				return nil
 			}
 
-			r.logger.Error("generate token failed, retrying", "error", err, "backoff", retryBackoff)
+			r.logger.Error("generate token failed, retrying", "error", err, "backoff", r.retryBackoff)
 
 			select {
 			case <-ctx.Done():
 				return nil
-			case <-time.After(retryBackoff):
+			case <-time.After(r.retryBackoff):
 				continue
 			}
 		}
@@ -212,11 +214,22 @@ func (r *Refresher) Run(ctx context.Context) error {
 		}
 
 		if err := WriteEnvFile(r.path, vals); err != nil {
-			r.logger.Error("write env file failed", "error", err)
-			// Don't crash; stale file still has the previous token.
-		} else {
-			r.logger.Info("env file written", "expires_at", expiresAt)
+			// A failed write staged no fresh secrets (on the first pass there is no
+			// prior file at all). Retry on the short backoff — NOT the expiry-derived
+			// sleep below: in PAT mode the token expiry is a year-9999 sentinel, so
+			// that sleep would wedge staging for ~8000 years. Bounds the outage to
+			// retryBackoff in every auth mode.
+			r.logger.Error("write env file failed; retrying on backoff", "error", err, "backoff", r.retryBackoff)
+
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(r.retryBackoff):
+				continue
+			}
 		}
+
+		r.logger.Info("env file written", "expires_at", expiresAt)
 
 		sleep := time.Until(expiresAt) - r.refreshBefore
 		if sleep < r.minSleep {
