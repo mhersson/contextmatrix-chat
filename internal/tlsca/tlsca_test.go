@@ -64,7 +64,7 @@ func TestHTTPClientWithCA(t *testing.T) {
 
 func TestTransportWithCA(t *testing.T) {
 	t.Run("empty path returns nil", func(t *testing.T) {
-		tr, err := TransportWithCA("")
+		tr, err := transportWithCA("")
 		require.NoError(t, err)
 		assert.Nil(t, tr, "empty path must return a nil transport so callers fall back to the default")
 	})
@@ -77,7 +77,7 @@ func TestTransportWithCA(t *testing.T) {
 		pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
 		require.NoError(t, os.WriteFile(certPath, pemBytes, 0o600))
 
-		tr, err := TransportWithCA(certPath)
+		tr, err := transportWithCA(certPath)
 		require.NoError(t, err)
 		require.NotNil(t, tr)
 		require.NotNil(t, tr.TLSClientConfig)
