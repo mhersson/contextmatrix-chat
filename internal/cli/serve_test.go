@@ -21,7 +21,7 @@ import (
 )
 
 // stubExecutor implements executor.Executor for unit tests. Kill records the
-// session IDs it receives; Launch, List, and StopAll are no-ops.
+// session IDs it receives; Launch and StopAll are no-ops.
 type stubExecutor struct {
 	kills []string
 }
@@ -36,7 +36,6 @@ func (e *stubExecutor) Kill(_ context.Context, sessionID string) error {
 	return nil
 }
 
-func (e *stubExecutor) List(_ context.Context) ([]*executor.Run, error)    { return nil, nil }
 func (e *stubExecutor) StopAll(_ context.Context) ([]*executor.Run, error) { return nil, nil }
 
 func TestChatExit(t *testing.T) {

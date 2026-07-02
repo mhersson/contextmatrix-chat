@@ -85,7 +85,6 @@ type Executor interface {
 	Launch(ctx context.Context, spec LaunchSpec) error
 	Stop(ctx context.Context, sessionID string) error
 	Kill(ctx context.Context, sessionID string) error
-	List(ctx context.Context) ([]*Run, error)
 	StopAll(ctx context.Context) ([]*Run, error)
 }
 
@@ -394,11 +393,6 @@ func (e *DockerExecutor) Kill(ctx context.Context, sessionID string) error {
 	}
 
 	return nil
-}
-
-// List returns a snapshot of the currently tracked runs.
-func (e *DockerExecutor) List(_ context.Context) ([]*Run, error) {
-	return e.tracker.List(), nil
 }
 
 // StopAll kills every tracked run and returns the runs it killed. The returned
