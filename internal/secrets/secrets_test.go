@@ -216,3 +216,42 @@ func TestRefresherWritesAndRefreshes(t *testing.T) {
 		t.Fatal("Run did not return after context cancel")
 	}
 }
+
+// countingPATGenerator always returns the PAT-mode year-9999 sentinel expiry,
+// so every loop iteration would otherwise take the expiry-derived
+// (~8000-year) sleep.
+type countingPATGenerator struct{ calls int }
+
+func (g *countingPATGenerator) GenerateToken(_ context.Context) (string, time.Time, error) {
+	g.calls++
+
+	return "tok", time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), nil
+}
+
+// TestRefresherRetriesOnWriteFailure ensures a failed env-file write retries
+// on the short backoff instead of sleeping until token expiry.
+func TestRefresherRetriesOnWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	// A regular file where WriteEnvFile needs a directory makes MkdirAll fail
+	// on every attempt — a persistent staging failure (bind-mount not ready,
+	// ENOSPC, permission race).
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o600))
+	path := filepath.Join(blocker, "env") // parent is a file -> MkdirAll errors
+
+	gen := &countingPATGenerator{}
+	r := NewRefresher(path, EndpointSecrets{}, gen, nil)
+	r.retryBackoff = 5 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_ = r.Run(ctx)
+
+	// With the expiry-derived sleep the refresher would call GenerateToken
+	// exactly once, then sleep ~8000 years. Retrying on the short backoff
+	// lands many attempts inside the 200ms window.
+	assert.Greater(t, gen.calls, 1,
+		"write failure must retry on the short backoff, not sleep until token expiry")
+}
