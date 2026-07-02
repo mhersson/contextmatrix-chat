@@ -347,22 +347,11 @@ func (c *ServiceConfig) Validate() error {
 // validate checks the GitHub auth block, mirroring the runner/agent contract:
 // exactly one auth path is populated per auth_mode.
 func (g *GitHubConfig) validate() error {
-	// Host accepts either a bare hostname or a full URL. A missing scheme is
-	// synthesised so the same host check applies; a bare hostname like
-	// "ghe.example.com" is the documented common case.
+	// Host accepts either a bare hostname or a full URL; a missing scheme is
+	// synthesised so the same host check applies either way.
 	if g.Host != "" {
-		hostForCheck := g.Host
-		if !strings.Contains(hostForCheck, "://") {
-			hostForCheck = "https://" + hostForCheck
-		}
-
-		u, err := url.Parse(hostForCheck)
-		if err != nil {
-			return fmt.Errorf("github.host: invalid host %q: %w", g.Host, err)
-		}
-
-		if u.Hostname() == "" {
-			return fmt.Errorf("github.host: host is required in %q", g.Host)
+		if err := validateGitHubHost(g.Host); err != nil {
+			return err
 		}
 	}
 
@@ -393,6 +382,40 @@ func (g *GitHubConfig) validate() error {
 		}
 	default:
 		return fmt.Errorf("github.auth_mode is required: must be \"app\" or \"pat\" (got %q)", g.AuthMode)
+	}
+
+	return nil
+}
+
+// validateGitHubHost accepts either a bare hostname ("ghe.example.com") or a
+// full URL ("https://ghe.example.com") — both documented in serve.yaml.example
+// as valid github.host forms. A bare host has https:// synthesised so the same
+// scheme/host/userinfo checks apply either way, mirroring the agent's
+// validateGitHubHost. Rejecting a non-http(s) scheme and embedded userinfo
+// keeps credentials from surviving into the derived APIBaseURL: BareHost only
+// strips the scheme, not userinfo, so an unchecked host would carry
+// credentials straight into "https://<BareHost>/api/v3".
+func validateGitHubHost(host string) error {
+	forCheck := host
+	if !strings.Contains(forCheck, "://") {
+		forCheck = "https://" + forCheck
+	}
+
+	u, err := url.Parse(forCheck)
+	if err != nil {
+		return fmt.Errorf("github.host: invalid host %q: %w", host, err)
+	}
+
+	if s := strings.ToLower(u.Scheme); s != "http" && s != "https" {
+		return fmt.Errorf("github.host: scheme must be http or https, got %q", host)
+	}
+
+	if u.Hostname() == "" {
+		return fmt.Errorf("github.host: host is required in %q", host)
+	}
+
+	if u.User != nil {
+		return fmt.Errorf("github.host: must not embed userinfo credentials")
 	}
 
 	return nil

@@ -420,6 +420,32 @@ func TestGitHubHostValidation(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "github.host")
 	})
+
+	t.Run("non-http scheme is rejected", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.GitHub.Host = "ftp://ghe.example.com"
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "github.host")
+	})
+
+	t.Run("embedded userinfo is rejected", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.GitHub.Host = "https://user:pw@ghe.example.com"
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "github.host")
+	})
+
+	t.Run("bare host with userinfo-shaped garbage still rejected", func(t *testing.T) {
+		// A bare host has https:// synthesised before parsing, so userinfo
+		// smuggled in without an explicit scheme must be caught the same way.
+		cfg := validServiceConfig()
+		cfg.GitHub.Host = "user:pw@ghe.example.com"
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "github.host")
+	})
 }
 
 func TestGitHubBareHost(t *testing.T) {
