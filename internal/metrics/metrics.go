@@ -15,12 +15,10 @@ import (
 
 // Container-exit outcomes for cm_chat_container_duration_seconds.
 const (
-	OutcomeSuccess     = "success"
-	OutcomeFailure     = "failure"
-	OutcomeTimeout     = "timeout"
-	OutcomeKilled      = "killed"
-	OutcomeEnded       = "ended"
-	OutcomeIdleTimeout = "idle_timeout"
+	OutcomeSuccess = "success"
+	OutcomeFailure = "failure"
+	OutcomeKilled  = "killed"
+	OutcomeEnded   = "ended"
 )
 
 // endpointAllowlist enumerates the request paths the chat service serves. Any

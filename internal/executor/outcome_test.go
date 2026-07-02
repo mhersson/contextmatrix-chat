@@ -12,21 +12,18 @@ import (
 func TestResolveOutcome(t *testing.T) {
 	tests := []struct {
 		name     string
-		timedOut bool
 		reason   string
 		exitCode int64
 		want     string
 	}{
-		{"clean exit", false, "", 0, metrics.OutcomeSuccess},
-		{"nonzero exit", false, "", 1, metrics.OutcomeFailure},
-		{"container timeout wins", true, "", -1, metrics.OutcomeTimeout},
-		{"killed reason", false, metrics.OutcomeKilled, 137, metrics.OutcomeKilled},
-		{"timeout beats reason", true, metrics.OutcomeKilled, -1, metrics.OutcomeTimeout},
+		{"clean exit", "", 0, metrics.OutcomeSuccess},
+		{"nonzero exit", "", 1, metrics.OutcomeFailure},
+		{"killed reason", metrics.OutcomeKilled, 137, metrics.OutcomeKilled},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, resolveOutcome(tc.timedOut, tc.reason, tc.exitCode))
+			assert.Equal(t, tc.want, resolveOutcome(tc.reason, tc.exitCode))
 		})
 	}
 }

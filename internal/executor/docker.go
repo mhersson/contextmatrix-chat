@@ -337,7 +337,7 @@ func (e *DockerExecutor) waitAndCleanup(
 	}
 
 	if e.metrics != nil {
-		outcome := resolveOutcome(false, e.tracker.Reason(sessionID), exitCode)
+		outcome := resolveOutcome(e.tracker.Reason(sessionID), exitCode)
 		e.metrics.ContainerDuration.WithLabelValues(outcome).Observe(time.Since(startedAt).Seconds())
 	}
 
@@ -361,7 +361,8 @@ func (e *DockerExecutor) waitAndCleanup(
 // container transitions to not-running. Returns ErrNotFound when no run is
 // tracked. This is what actually ends a chat session: with StdinOnce=false,
 // closing the attach connection does not EOF the worker, so the container must be
-// stopped explicitly or it runs until the idle reaper.
+// stopped explicitly or it runs until /chat/end stops it (or serve shutdown
+// kills it); there is no idle reaper.
 func (e *DockerExecutor) Stop(ctx context.Context, sessionID string) error {
 	run, ok := e.tracker.Get(sessionID)
 	if !ok {
