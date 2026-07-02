@@ -54,7 +54,7 @@ var (
 
 // LaunchSpec is the fully-resolved description of one container to launch. The
 // caller has already applied any image override and assembled Env and Binds.
-// The webhook handler (Task 2.7) populates the chat-specific env and mounts;
+// The webhook handler populates the chat-specific env and mounts;
 // no chat-specific values are hardcoded here.
 type LaunchSpec struct {
 	SessionID     string
