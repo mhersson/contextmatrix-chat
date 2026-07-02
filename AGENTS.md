@@ -149,8 +149,11 @@ we got here.
 7. **Secrets are staged, never baked.** serve writes `<secrets_dir>/shared/env`
    (LLM endpoint API key + rotating GitHub token) and bind-mounts it read-only at
    `/run/cm-secrets`. The worker's git credential helper reads the token on each
-   call, so rotation is transparent. Secrets are redacted from all tool output
-   and events.
+   call, so rotation is transparent. The helper and `GH_HOST` are scoped to
+   `github.host` (forwarded as `CM_GIT_HOST`; falls back to the seeded repo
+   URL's host, then github.com), so GHE clones authenticate even in
+   cross-project sessions. Secrets are redacted from all tool output and
+   events.
 8. **task-skills come from ContextMatrix** (the single source of truth): serve
    fetches a `{git_remote_url, ref}` pointer from CM, clones it on the host, and
    bind-mounts the clone read-only at `/run/cm-skills`. The model engages them

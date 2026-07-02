@@ -230,12 +230,20 @@ func (g *GitHubConfig) deriveAPIBaseURL() {
 		return
 	}
 
+	g.APIBaseURL = "https://" + g.BareHost() + "/api/v3"
+}
+
+// BareHost returns Host as a bare host[:port], stripping any user-supplied
+// scheme (Host accepts "ghe.example.com" and "https://ghe.example.com" alike).
+// This is the form the worker needs for git credential-helper scoping and
+// GH_HOST. Empty when Host is unset.
+func (g *GitHubConfig) BareHost() string {
 	host := g.Host
 	if i := strings.Index(host, "://"); i >= 0 {
 		host = host[i+len("://"):]
 	}
 
-	g.APIBaseURL = "https://" + host + "/api/v3"
+	return host
 }
 
 // isNotExist reports whether err is a missing-file error from the file

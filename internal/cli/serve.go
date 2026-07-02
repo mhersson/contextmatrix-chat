@@ -186,6 +186,7 @@ func runServe(ctx context.Context, configPath string) error {
 			WorkerExtraEnv:            cfg.WorkerExtraEnv,
 			ReasoningEffort:           cfg.ReasoningEffort,
 			CACertFile:                cfg.CACertFile,
+			GitHubHost:                cfg.GitHub.BareHost(),
 		},
 		Replay:   replay,
 		Dedup:    dedup,

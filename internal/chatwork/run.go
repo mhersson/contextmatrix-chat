@@ -54,11 +54,11 @@ func Run(ctx context.Context) error {
 	gitToken := src.Get("CM_GIT_TOKEN")
 
 	// 2. Configure the git credential helper so clones authenticate via the
-	// rotating token in the secrets env file. Scoped to the repo's host (GHE-aware)
-	// so the token is never offered to an unrelated https host. Non-fatal: a
-	// degraded git-auth environment must not kill an otherwise-usable interactive
-	// session.
-	ghHost := hostFromRepoURL(os.Getenv("CM_CHAT_REPO_URL"))
+	// rotating token in the secrets env file. Scoped to the host the token is
+	// minted for (GHE-aware) so the token is never offered to an unrelated
+	// https host. Non-fatal: a degraded git-auth environment must not kill an
+	// otherwise-usable interactive session.
+	ghHost := gitHost()
 	if err := ConfigureGitCredentialHelper(ctx, secretsEnvPath, ghHost); err != nil {
 		slog.Warn("git credential helper setup failed; continuing without git auth", "error", err)
 	}
@@ -291,7 +291,7 @@ func buildToolRegistry(ctx context.Context, gitToken string, mcpBase http.RoundT
 		// gh cannot infer a GitHub Enterprise host from the git remote and refuses
 		// to open a PR without it; GH_HOST names it explicitly. Harmless for
 		// github.com. Mirrors the runner entrypoint.
-		if host := hostFromRepoURL(os.Getenv("CM_CHAT_REPO_URL")); host != "" {
+		if host := gitHost(); host != "" {
 			ghEnv = append(ghEnv, "GH_HOST="+host)
 		}
 
@@ -344,6 +344,19 @@ func dirFromURL(u string) string {
 	}
 
 	return "repo"
+}
+
+// gitHost returns the host the git token is valid for: the configured
+// github.host forwarded by the launcher as CM_GIT_HOST, falling back to the
+// seeded repo URL's host. The fallback alone is wrong for cross-project
+// sessions (no repo URL → the credential helper would default to github.com
+// while the token is minted for the GHE host). Empty means github.com.
+func gitHost() string {
+	if h := os.Getenv("CM_GIT_HOST"); h != "" {
+		return h
+	}
+
+	return hostFromRepoURL(os.Getenv("CM_CHAT_REPO_URL"))
 }
 
 // hostFromRepoURL returns the host[:port] of an https repo URL, or "" when
