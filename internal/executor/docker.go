@@ -27,9 +27,8 @@ import (
 // Container labels. The chat label marks every container this executor owns so
 // the boot-time orphan sweep can find them by filter.
 const (
-	labelChat          = "contextmatrix.chat"
-	labelSession       = "contextmatrix.session"
-	labelCorrelationID = "contextmatrix.correlation_id"
+	labelChat    = "contextmatrix.chat"
+	labelSession = "contextmatrix.session"
 )
 
 // scannerBufferMax bounds the per-line buffer of the stdout/stderr pump so a
@@ -57,13 +56,12 @@ var (
 // The webhook handler populates the chat-specific env and mounts;
 // no chat-specific values are hardcoded here.
 type LaunchSpec struct {
-	SessionID     string
-	Image         string // image already applied by the caller
-	Env           []string
-	Binds         []string // raw Docker bind specs, e.g. "/host/dir:/container/dir:ro"
-	MemoryBytes   int64
-	PidsLimit     int64
-	CorrelationID string
+	SessionID   string
+	Image       string // image already applied by the caller
+	Env         []string
+	Binds       []string // raw Docker bind specs, e.g. "/host/dir:/container/dir:ro"
+	MemoryBytes int64
+	PidsLimit   int64
 
 	// MCPURL is the CM MCP endpoint the worker connects to. Its hostname is
 	// pinned into the container's /etc/hosts (see buildExtraHosts) so a name
@@ -85,7 +83,6 @@ type Executor interface {
 	Launch(ctx context.Context, spec LaunchSpec) error
 	Stop(ctx context.Context, sessionID string) error
 	Kill(ctx context.Context, sessionID string) error
-	List(ctx context.Context) ([]*Run, error)
 	StopAll(ctx context.Context) ([]*Run, error)
 }
 
@@ -106,10 +103,6 @@ func containerConfig(spec LaunchSpec) (*container.Config, *container.HostConfig)
 	labels := map[string]string{
 		labelChat:    "true",
 		labelSession: spec.SessionID,
-	}
-
-	if spec.CorrelationID != "" {
-		labels[labelCorrelationID] = spec.CorrelationID
 	}
 
 	cfg := &container.Config{
@@ -394,11 +387,6 @@ func (e *DockerExecutor) Kill(ctx context.Context, sessionID string) error {
 	}
 
 	return nil
-}
-
-// List returns a snapshot of the currently tracked runs.
-func (e *DockerExecutor) List(_ context.Context) ([]*Run, error) {
-	return e.tracker.List(), nil
 }
 
 // StopAll kills every tracked run and returns the runs it killed. The returned

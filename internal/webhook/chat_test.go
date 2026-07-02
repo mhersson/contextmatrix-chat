@@ -164,7 +164,6 @@ func (f *fakeExecutor) Stopped() []string {
 }
 
 func (f *fakeExecutor) Kill(_ context.Context, _ string) error             { return nil }
-func (f *fakeExecutor) List(_ context.Context) ([]*executor.Run, error)    { return nil, nil }
 func (f *fakeExecutor) StopAll(_ context.Context) ([]*executor.Run, error) { return nil, nil }
 
 func (f *fakeExecutor) Launched() []executor.LaunchSpec {

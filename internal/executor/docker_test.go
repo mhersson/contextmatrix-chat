@@ -29,19 +29,6 @@ func TestContainerConfig_Labels(t *testing.T) {
 
 	assert.Equal(t, "true", cfg.Labels[labelChat])
 	assert.Equal(t, "sess-abc", cfg.Labels[labelSession])
-	// Correlation ID label is omitted when empty.
-	_, ok := cfg.Labels[labelCorrelationID]
-	assert.False(t, ok)
-}
-
-func TestContainerConfig_CorrelationIDLabel(t *testing.T) {
-	cfg, _ := containerConfig(LaunchSpec{
-		SessionID:     "sess-abc",
-		Image:         "alpine:3",
-		CorrelationID: "corr-123",
-	})
-
-	assert.Equal(t, "corr-123", cfg.Labels[labelCorrelationID])
 }
 
 func TestContainerConfig_EnvPassthrough(t *testing.T) {

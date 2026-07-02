@@ -125,12 +125,11 @@ func TestIntegration_LaunchEchoAndExit(t *testing.T) {
 	const sessionID = "echo-session-1"
 
 	spec := LaunchSpec{
-		SessionID:     sessionID,
-		Image:         alpineImage,
-		MemoryBytes:   256 * 1024 * 1024,
-		PidsLimit:     128,
-		CorrelationID: "corr-echo",
-		Cmd:           []string{"sh", "-c", "read line; echo got:$line; sleep 1"},
+		SessionID:   sessionID,
+		Image:       alpineImage,
+		MemoryBytes: 256 * 1024 * 1024,
+		PidsLimit:   128,
+		Cmd:         []string{"sh", "-c", "read line; echo got:$line; sleep 1"},
 	}
 
 	require.NoError(t, exec.Launch(ctx, spec))
@@ -143,7 +142,6 @@ func TestIntegration_LaunchEchoAndExit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "true", info.Config.Labels[labelChat])
 	assert.Equal(t, sessionID, info.Config.Labels[labelSession])
-	assert.Equal(t, "corr-echo", info.Config.Labels[labelCorrelationID])
 
 	// Drive stdin: the container reads one line, echoes it, then exits 0.
 	_, err = run.Stdin.Write([]byte("hello\n"))

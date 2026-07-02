@@ -18,7 +18,7 @@ import (
 // uses system trust only (nil Transport). A read error, or a PEM that yields no
 // certificates, is returned as an error.
 func HTTPClientWithCA(path string) (*http.Client, error) {
-	tr, err := TransportWithCA(path)
+	tr, err := transportWithCA(path)
 	if err != nil {
 		return nil, err
 	}
@@ -30,16 +30,13 @@ func HTTPClientWithCA(path string) (*http.Client, error) {
 	return &http.Client{Transport: tr}, nil
 }
 
-// TransportWithCA returns an *http.Transport whose TLS config trusts the system
+// transportWithCA returns an *http.Transport whose TLS config trusts the system
 // pool plus the PEM certificate(s) at path. It is cloned from
 // http.DefaultTransport so proxy (ProxyFromEnvironment), timeouts, and
 // connection pooling are preserved — a TLS-inspecting deployment usually implies
 // an explicit HTTP(S) proxy too — overriding only the trust store. An empty path
-// returns (nil, nil) so callers fall back to http.DefaultTransport. It is
-// exported so the MCP bridge can wrap the returned transport with its
-// bearer-token RoundTripper, letting the CA trust and the bearer header compose
-// on the same connection pool.
-func TransportWithCA(path string) (*http.Transport, error) {
+// returns (nil, nil) so callers fall back to http.DefaultTransport.
+func transportWithCA(path string) (*http.Transport, error) {
 	if path == "" {
 		return nil, nil
 	}
