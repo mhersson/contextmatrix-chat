@@ -101,6 +101,24 @@ func runServe(ctx context.Context, configPath string) error {
 		Type:    cfg.LLMEndpoint.Type,
 	}, provider, logger)
 
+	docker, err := executor.NewClient()
+	if err != nil {
+		return fmt.Errorf("docker client: %w", err)
+	}
+
+	tracker := executor.NewTracker(cfg.MaxConcurrent)
+	hub := logbridge.NewHubWithDropObserver(dropAdapter{mx: mx})
+	bridge := logbridge.New(hub, redact.New([]string{cfg.LLMEndpoint.APIKey}))
+
+	// The Refresher knows the new GitHub token the instant it mints it — rebuild
+	// the log-bridge redactor on every rotation (including the immediate first
+	// write) so a live installation token is never bridged to /logs in the
+	// clear. No host-side file watch needed: the Refresher already holds the
+	// token it just minted.
+	refresher.SetOnRotate(func(token string) {
+		bridge.SetRedactor(redact.New([]string{cfg.LLMEndpoint.APIKey, token}))
+	})
+
 	refreshCtx, refreshCancel := context.WithCancel(context.Background())
 	defer refreshCancel()
 
@@ -109,16 +127,6 @@ func runServe(ctx context.Context, configPath string) error {
 			logger.Error("secrets refresher stopped with error", "error", err)
 		}
 	}()
-
-	docker, err := executor.NewClient()
-	if err != nil {
-		return fmt.Errorf("docker client: %w", err)
-	}
-
-	tracker := executor.NewTracker(cfg.MaxConcurrent)
-	hub := logbridge.NewHubWithDropObserver(dropAdapter{mx: mx})
-	redactor := redact.New([]string{cfg.LLMEndpoint.APIKey})
-	bridge := logbridge.New(hub, redactor)
 
 	var srv *webhook.Server
 

@@ -152,9 +152,10 @@ type Refresher struct {
 	endpoint      EndpointSecrets
 	gen           TokenGenerator
 	logger        *slog.Logger
-	refreshBefore time.Duration // default 10m; override in tests
-	minSleep      time.Duration // floor on sleep; default 30s; override in tests
-	retryBackoff  time.Duration // fast retry after a transient failure; default 5s; override in tests
+	refreshBefore time.Duration      // default 10m; override in tests
+	minSleep      time.Duration      // floor on sleep; default 30s; override in tests
+	retryBackoff  time.Duration      // fast retry after a transient failure; default 5s; override in tests
+	onRotate      func(token string) // optional; invoked with the freshly minted token after every successful write, including the first; nil is a no-op.
 }
 
 const (
@@ -178,6 +179,15 @@ func NewRefresher(path string, endpoint EndpointSecrets, gen TokenGenerator, log
 		minSleep:      defaultMinSleep,
 		retryBackoff:  defaultRetryBackoff,
 	}
+}
+
+// SetOnRotate registers fn to be invoked with the freshly minted token
+// immediately after each successful env-file write, including the very
+// first — this is how a caller (the serve-side log-bridge redactor) learns a
+// live GitHub token without watching the file. Not safe to call concurrently
+// with Run; call it before starting Run in a goroutine.
+func (r *Refresher) SetOnRotate(fn func(token string)) {
+	r.onRotate = fn
 }
 
 // Run writes the env file immediately, then rewrites it ahead of each expiry.
@@ -227,6 +237,10 @@ func (r *Refresher) Run(ctx context.Context) error {
 			case <-time.After(r.retryBackoff):
 				continue
 			}
+		}
+
+		if r.onRotate != nil {
+			r.onRotate(token)
 		}
 
 		r.logger.Info("env file written", "expires_at", expiresAt)

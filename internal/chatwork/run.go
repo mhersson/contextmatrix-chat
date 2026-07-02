@@ -21,7 +21,6 @@ import (
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
-	"github.com/mhersson/contextmatrix-harness/redact"
 	"github.com/mhersson/contextmatrix-harness/tools"
 )
 
@@ -141,8 +140,15 @@ func Run(ctx context.Context) error {
 	// 7. Primer: the task string passed as the first user turn.
 	primer := readPrimer(primerPath)
 
-	// 8. Redactor: mask the secrets from all tool output and event data.
-	red := redact.New([]string{llmKey, gitToken, os.Getenv("CM_MCP_API_KEY")})
+	// 8. Redactor: mask the secrets from all tool output and event data. Backed
+	// by a watcher so a token the host rotates mid-session (App installation
+	// tokens expire ~60m) is picked up without restarting the worker.
+	redWatcher, err := newRedactorWatcher(secretsEnvPath, os.Getenv("CM_MCP_API_KEY"))
+	if err != nil {
+		return fmt.Errorf("build redactor: %w", err)
+	}
+
+	go redWatcher.watch(ctx)
 
 	// 9. Compaction and tool-output config from env, with documented defaults.
 	threshold := envFloatDefault("CMX_COMPACTION_THRESHOLD", defaultCompactionThreshold)
@@ -175,7 +181,7 @@ func Run(ctx context.Context) error {
 		Compaction:         &harness.Compaction{Threshold: threshold, KeepRecentTurns: keepRecent},
 		History:            history,
 		Inbox:              in,
-		RedactToolOutput:   red.Apply,
+		RedactToolOutput:   redWatcher.Apply,
 		SystemPrompt:       chatSystemPrompt,
 		Reasoning:          reasoningRaw(os.Getenv("CMX_REASONING_EFFORT")),
 	}

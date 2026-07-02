@@ -479,3 +479,31 @@ func TestHubSubscribers(t *testing.T) {
 		assert.False(t, open, "channel must be closed after Unsubscribe")
 	})
 }
+
+// TestSetRedactorAppliesToSubsequentLines verifies that swapping the
+// redactor via SetRedactor takes effect for lines bridged after the swap and
+// fully replaces (not merges with) the prior redactor — matching the
+// Refresher's OnRotate hook rebuilding the redactor on every token rotation.
+func TestSetRedactorAppliesToSubsequentLines(t *testing.T) {
+	t.Parallel()
+
+	hub := logbridge.NewHub()
+	_, ch := hub.Subscribe("")
+	bridge := logbridge.New(hub, redact.New([]string{"initial-secret-val"}))
+
+	bridge.BridgeLine(testSession, []byte("leaked initial-secret-val here"), true)
+	got := <-ch
+	assert.Equal(t, "leaked [REDACTED] here", got.Content)
+
+	bridge.SetRedactor(redact.New([]string{"rotated-secret-val"}))
+
+	bridge.BridgeLine(testSession, []byte("leaked rotated-secret-val here"), true)
+	got = <-ch
+	assert.Equal(t, "leaked [REDACTED] here", got.Content)
+
+	// Old secret no longer masked once the redactor is swapped: proves a full
+	// replace, not a merge.
+	bridge.BridgeLine(testSession, []byte("leaked initial-secret-val here"), true)
+	got = <-ch
+	assert.Equal(t, "leaked initial-secret-val here", got.Content)
+}
