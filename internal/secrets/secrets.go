@@ -64,10 +64,6 @@ func (s *Source) Get(key string) string {
 	return s.vals[key]
 }
 
-// For returns the same source. The per-run parameter is reserved for a future
-// multi-user mode; it is intentionally ignored today.
-func (s *Source) For(_ string) *Source { return s }
-
 // WriteEnvFile writes vals to path atomically (write-tmp + rename).
 // The directory is created with mode 0700; the file is written with mode 0600.
 // Lines are written in deterministic order: LLM_API_KEY, LLM_BASE_URL,

@@ -33,7 +33,7 @@ func TestConfigureGitCredentialHelper(t *testing.T) {
 	require.NoError(t, os.WriteFile(secretsEnvPath, []byte("CM_GIT_TOKEN=tok1\n"), 0o600))
 
 	ctx := context.Background()
-	require.NoError(t, ConfigureGitCredentialHelper(ctx, secretsEnvPath))
+	require.NoError(t, ConfigureGitCredentialHelper(ctx, secretsEnvPath, ""))
 
 	scriptPath := filepath.Join(os.TempDir(), "cm-git-credential-helper.sh")
 
@@ -58,12 +58,29 @@ func TestConfigureGitCredentialHelper(t *testing.T) {
 	assert.Contains(t, out, "username=x-access-token")
 	assert.Contains(t, out, "password=tok2")
 
-	// Verify git config was applied to the temp gitconfig, not ~/.gitconfig.
-	helperOut, err := exec.Command("git", "config", "--global", "--get", "credential.helper").Output()
+	// Verify git config was applied to the temp gitconfig, not ~/.gitconfig, and
+	// is scoped to the default host (empty host param -> github.com), not global.
+	helperOut, err := exec.Command("git", "config", "--global", "--get", "credential.https://github.com.helper").Output()
 	require.NoError(t, err)
 	assert.Equal(t, scriptPath, strings.TrimSpace(string(helperOut)))
 
 	useHTTPPathOut, err := exec.Command("git", "config", "--global", "--get", "credential.https://github.com.useHttpPath").Output()
 	require.NoError(t, err)
 	assert.Equal(t, "false", strings.TrimSpace(string(useHTTPPathOut)))
+}
+
+func TestConfigureGitCredentialHelperIsHostScoped(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+
+	ctx := context.Background()
+	require.NoError(t, ConfigureGitCredentialHelper(ctx, "/run/cm-secrets/env", "acme.ghe.com"))
+
+	got, err := exec.CommandContext(ctx, "git", "config", "--global", "--get",
+		"credential.https://acme.ghe.com.helper").Output()
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "cm-git-credential-helper.sh")
+
+	// The unscoped global credential.helper must NOT be set (it would answer for any host).
+	err = exec.CommandContext(ctx, "git", "config", "--global", "--get", "credential.helper").Run()
+	assert.Error(t, err, "helper must be host-scoped, not global")
 }

@@ -96,6 +96,47 @@ func TestChatInbox_Wait_ContextCanceled(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
+// TestNextAfterClearSurvivesRacingSecondClear reproduces the double-clear
+// release-window hang: onClear() re-arms held, and if that race lands between
+// NextAfterClear's release step and its first delivery, the held-gated Wait
+// path never unblocks again (nothing else ever clears held). NextAfterClear
+// must deliver regardless of a racing held, since it is the sole consumer once
+// the cleared epoch's harness.Run has returned. The race is timing-dependent,
+// so this loops with a bounded per-iteration timeout: ctx is context.Background
+// (no escape hatch), so a genuine hang never returns and any single timeout is
+// a failure. A short sleep after spawning the goroutine biases the scheduler so
+// it clears its own release step and parks in the blocking wait before the
+// second onClear()+push land — without it, the racing goroutine usually hasn't
+// even started before the main goroutine finishes both steps, so the window is
+// missed almost every time.
+func TestNextAfterClearSurvivesRacingSecondClear(t *testing.T) {
+	t.Parallel()
+
+	for i := range 300 {
+		in := newChatInbox()
+		in.onClear() // first clear boundary
+
+		done := make(chan struct{})
+
+		go func() {
+			_, _ = in.NextAfterClear(context.Background()) // no ctx escape: a real hang never returns
+
+			close(done)
+		}()
+
+		time.Sleep(time.Millisecond) // let the goroutine clear its release step and park
+
+		in.onClear()                                    // second clear races the release window
+		in.push(harness.UserMessage{Content: "primer"}) // the post-second-clear primer
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("NextAfterClear hung after a racing second clear (iter %d)", i)
+		}
+	}
+}
+
 func TestChatInbox_Pump_ClearSignal(t *testing.T) {
 	t.Parallel()
 

@@ -120,14 +120,24 @@ func runServe(ctx context.Context, configPath string) error {
 	redactor := redact.New([]string{cfg.LLMEndpoint.APIKey})
 	bridge := logbridge.New(hub, redactor)
 
+	var srv *webhook.Server
+
+	teardownRunDir := chatExit(hub, cfg.ChatRunDir, logger)
+
 	exec := executor.NewDockerExecutor(executor.Config{
 		Docker:     docker,
 		Tracker:    tracker,
 		PullPolicy: cfg.ImagePullPolicy,
 		OnLog:      bridge.BridgeLine,
-		OnExit:     chatExit(hub, cfg.ChatRunDir, logger),
-		Logger:     logger,
-		Metrics:    mx,
+		OnExit: func(sessionID string, code int64) {
+			teardownRunDir(sessionID, code)
+
+			if srv != nil {
+				srv.DropSession(sessionID)
+			}
+		},
+		Logger:  logger,
+		Metrics: mx,
 	})
 
 	// Force-remove any chat-labeled containers left by a previous process before
@@ -154,7 +164,7 @@ func runServe(ctx context.Context, configPath string) error {
 	skillsCache := filepath.Join(cfg.SecretsDir, "task-skills-cache")
 	skillsResolver := taskskills.NewResolver(cfg.ContextMatrixURL, cfg.APIKey, skillsCache, provider, logger)
 
-	srv := webhook.NewServer(webhook.Config{
+	srv = webhook.NewServer(webhook.Config{
 		APIKey:         cfg.APIKey,
 		Skew:           cfg.ReplaySkew,
 		Executor:       exec,
@@ -193,6 +203,11 @@ func runServe(ctx context.Context, configPath string) error {
 		Handler:           srv.Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	// Unblock in-flight /logs SSE streams when Shutdown starts; otherwise
+	// http.Server.Shutdown waits the full httpShutdownTimeout on a stream that
+	// never goes idle. (Mirror this in contextmatrix-runner's handleLogs.)
+	httpServer.RegisterOnShutdown(srv.CloseSSE)
 
 	adminSrv := buildAdminServer(cfg, srv, mx, logger)
 

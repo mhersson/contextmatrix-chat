@@ -16,6 +16,7 @@ type chatInbox struct {
 	mu      sync.Mutex
 	pending []harness.UserMessage
 	closed  bool
+	held    bool // set by onClear; hides pending from the dying epoch's consumers
 	signal  chan struct{}
 }
 
@@ -45,6 +46,11 @@ func (in *chatInbox) Pump(r io.Reader, clearCh chan<- struct{}) {
 		case frames.TypeUserMessage:
 			in.push(harness.UserMessage{MessageID: f.MessageID, Content: f.Content})
 		case frames.TypeClear:
+			// Drop everything queued before the clear and hold the inbox so
+			// neither the dying epoch's harness nor epochLoop can swallow the
+			// re-sent primer that arrives on the next frame.
+			in.onClear()
+
 			select {
 			case clearCh <- struct{}{}:
 			default:
@@ -79,6 +85,10 @@ func (in *chatInbox) Drain() []harness.UserMessage {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 
+	if in.held {
+		return nil
+	}
+
 	out := in.pending
 	in.pending = nil
 
@@ -92,9 +102,56 @@ func (in *chatInbox) Wait(ctx context.Context) (harness.UserMessage, error) {
 	for {
 		in.mu.Lock()
 
+		if !in.held && len(in.pending) > 0 {
+			msg := in.pending[0]
+			in.pending = in.pending[1:]
+			in.mu.Unlock()
+
+			return msg, nil
+		}
+
+		closed := in.closed
+		in.mu.Unlock()
+
+		if closed {
+			return harness.UserMessage{}, harness.ErrInboxClosed
+		}
+
+		select {
+		case <-ctx.Done():
+			return harness.UserMessage{}, ctx.Err()
+		case <-in.signal:
+		}
+	}
+}
+
+// onClear marks the clear boundary: drop all pre-clear messages and hold the
+// inbox so the current epoch's consumers see no input until NextAfterClear
+// releases it for the next epoch.
+func (in *chatInbox) onClear() {
+	in.mu.Lock()
+	in.pending = nil
+	in.held = true
+	in.mu.Unlock()
+}
+
+// NextAfterClear blocks for the next message — the re-sent primer that becomes
+// the next epoch's task. Called by epochLoop only after the cleared epoch has
+// fully unwound (harness.Run returned), so it is the sole consumer at that
+// point and, unlike Wait, must NOT gate delivery on held: a second /clear
+// racing the release window re-arms held via onClear, and epochLoop is
+// synchronously blocked in this call with nothing else able to clear held
+// again, so gating on it here would wedge forever. held is still cleared on
+// delivery so the next epoch's harness.Run consumes the inbox normally through
+// its own held-gated Wait.
+func (in *chatInbox) NextAfterClear(ctx context.Context) (harness.UserMessage, error) {
+	for {
+		in.mu.Lock()
+
 		if len(in.pending) > 0 {
 			msg := in.pending[0]
 			in.pending = in.pending[1:]
+			in.held = false
 			in.mu.Unlock()
 
 			return msg, nil

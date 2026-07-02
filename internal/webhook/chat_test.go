@@ -922,6 +922,25 @@ func TestMessage_EmptyMessageIDNeverDeduped(t *testing.T) {
 	assert.NotEmpty(t, stdin.Bytes())
 }
 
+func TestMessage_OversizedContentRejected(t *testing.T) {
+	srv, tracker, _ := newChatServer(t)
+
+	stdin := &stdinCapture{}
+	tracker.AddIfUnderLimit(&executor.Run{ContainerID: "cid", SessionID: testSession, Stdin: stdin})
+
+	body := mustJSON(t, protocol.MessagePayload{
+		SessionID: testSession,
+		MessageID: "m1",
+		Content:   strings.Repeat("x", frames.MaxLine),
+	})
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/message", body))
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	assert.Contains(t, w.Body.String(), protocol.CodeTooLarge, "413 must carry the too_large protocol code")
+	assert.Empty(t, stdin.Bytes(), "oversized frame must not reach the container stdin")
+}
+
 func TestMessage_NotFound(t *testing.T) {
 	srv, _, _ := newChatServer(t)
 

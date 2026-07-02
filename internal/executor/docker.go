@@ -54,7 +54,7 @@ var (
 
 // LaunchSpec is the fully-resolved description of one container to launch. The
 // caller has already applied any image override and assembled Env and Binds.
-// The webhook handler (Task 2.7) populates the chat-specific env and mounts;
+// The webhook handler populates the chat-specific env and mounts;
 // no chat-specific values are hardcoded here.
 type LaunchSpec struct {
 	SessionID     string
@@ -76,8 +76,11 @@ type LaunchSpec struct {
 	Cmd []string
 }
 
-// Executor is the seam a future KubernetesExecutor implements. The serve layer
-// depends on this interface, not on DockerExecutor.
+// Executor is the interface for container lifecycle backends. Implementations
+// call Launch to register runs on the shared *Tracker (the run registry holding
+// each run's ContainerID and attached Stdin). The serve/webhook layer depends on
+// both the Executor interface and this shared Tracker for /message delivery and
+// container-ID handoff.
 type Executor interface {
 	Launch(ctx context.Context, spec LaunchSpec) error
 	Stop(ctx context.Context, sessionID string) error
@@ -334,17 +337,21 @@ func (e *DockerExecutor) waitAndCleanup(
 	}
 
 	if e.metrics != nil {
-		outcome := resolveOutcome(false, e.tracker.Reason(sessionID), exitCode)
+		outcome := resolveOutcome(e.tracker.Reason(sessionID), exitCode)
 		e.metrics.ContainerDuration.WithLabelValues(outcome).Observe(time.Since(startedAt).Seconds())
 	}
 
-	e.tracker.Remove(sessionID)
-
 	log.Info("container exited", "exit_code", exitCode)
 
+	// Run onExit (chatExit's run-dir teardown) BEFORE releasing the tracker slot.
+	// While the session is still tracked, a concurrent same-session /chat/start
+	// stays 409-blocked (chat.go conflict check), so it cannot recreate the run
+	// dir and have its freshly written primer/resume deleted by this cleanup.
 	if e.onExit != nil {
 		e.onExit(sessionID, exitCode)
 	}
+
+	e.tracker.Remove(sessionID)
 }
 
 // Stop gracefully stops the tracked container for sessionID (SIGTERM, then
@@ -354,7 +361,8 @@ func (e *DockerExecutor) waitAndCleanup(
 // container transitions to not-running. Returns ErrNotFound when no run is
 // tracked. This is what actually ends a chat session: with StdinOnce=false,
 // closing the attach connection does not EOF the worker, so the container must be
-// stopped explicitly or it runs until the idle reaper.
+// stopped explicitly or it runs until /chat/end stops it (or serve shutdown
+// kills it); there is no idle reaper.
 func (e *DockerExecutor) Stop(ctx context.Context, sessionID string) error {
 	run, ok := e.tracker.Get(sessionID)
 	if !ok {

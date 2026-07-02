@@ -1,7 +1,8 @@
-// Package executor launches and supervises one Docker container per chat
-// session. The Tracker gates concurrency and records per-run state;
-// DockerExecutor owns the container lifecycle behind the Executor interface so
-// a future KubernetesExecutor can slot in without touching the serve layer.
+// Package executor defines the Executor interface for container lifecycle
+// management and the Tracker registry for run state. The serve/webhook layer
+// depends on both: Executor implementations register runs on the shared Tracker,
+// which holds each run's ContainerID and attached Stdin for /message delivery and
+// container-ID handoff.
 package executor
 
 import (

@@ -149,10 +149,16 @@ type Server struct {
 	// stdinMu serializes control-frame writes and stdin closes per session. The
 	// executor documents Run.Stdin as single-writer; webhook handlers run on
 	// independent HTTP goroutines, so a per-session mutex keeps frame bytes from
-	// interleaving on the wire. Entries are never reclaimed: one bare mutex per
-	// session ever seen is a tiny, process-bounded footprint and avoids
-	// delete/recreate races with in-flight writers.
+	// interleaving on the wire. Entries are reclaimed by DropSession once the
+	// session's container exits; see that method's doc for why the earlier
+	// retain-forever design is no longer needed.
 	stdinMu sync.Map // map[string]*sync.Mutex
+
+	// sseShutdown is closed by CloseSSE at drain so every in-flight /logs handler
+	// returns promptly (an SSE stream never idles, so http.Server.Shutdown would
+	// otherwise block the full timeout). Guarded by sseShutdownOnce for idempotency.
+	sseShutdown     chan struct{}
+	sseShutdownOnce sync.Once
 }
 
 // NewServer wires a Server from its dependencies. The replay cache, dedup
@@ -211,7 +217,14 @@ func NewServer(cfg Config) *Server {
 		keepaliveInterval:         cfg.KeepaliveInterval,
 		metrics:                   cfg.Metrics,
 		logger:                    logger,
+		sseShutdown:               make(chan struct{}),
 	}
+}
+
+// CloseSSE unblocks every in-flight /logs SSE handler. Wire it via
+// httpServer.RegisterOnShutdown so SIGTERM drain returns promptly. Idempotent.
+func (s *Server) CloseSSE() {
+	s.sseShutdownOnce.Do(func() { close(s.sseShutdown) })
 }
 
 // stdinLock returns the per-session mutex for sessionID, creating it on first
@@ -221,6 +234,15 @@ func (s *Server) stdinLock(sessionID string) *sync.Mutex {
 	v, _ := s.stdinMu.LoadOrStore(sessionID, &sync.Mutex{})
 
 	return v.(*sync.Mutex)
+}
+
+// DropSession removes the per-session stdin mutex once the session's container
+// has exited (wired into the executor OnExit hook). After the container is gone
+// no writer can hold the lock, so the delete/recreate race the retained-entry
+// design guarded against no longer applies, and the map stops growing without
+// bound over the process lifetime.
+func (s *Server) DropSession(sessionID string) {
+	s.stdinMu.Delete(sessionID)
 }
 
 // Routes returns the mux with every webhook route mounted. The mutating

@@ -99,6 +99,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	env := []string{
 		"CM_CHAT_SESSION=" + p.SessionID,
 		"CM_MCP_URL=" + s.mcpURL,
+		// CM_MCP_API_KEY is per-session and cannot use the process-shared /run/cm-secrets/env
+		// file (unlike the shared LLM key and git token). It is delivered via container env
+		// as a documented tradeoff: the value is visible to docker inspect and /proc/<pid>/environ.
+		// Moving it off env would require a per-session read-only secrets file the worker reads from disk.
 		"CM_MCP_API_KEY=" + p.MCPAPIKey,
 		"CM_MODEL=" + p.Model,
 		"CMX_TOOL_OUTPUT_MAX_BYTES=" + strconv.Itoa(s.toolOutputMaxBytes),
@@ -340,6 +344,14 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		// so holding stdinLock across it introduces no lock-order cycle.
 		s.dedup.Rollback(p.SessionID, p.MessageID)
 		mu.Unlock()
+
+		if errors.Is(err, frames.ErrFrameTooLarge) {
+			s.logger.Warn("message rejected: frame too large",
+				"session_id", p.SessionID, "message_id", p.MessageID)
+			writeError(w, http.StatusRequestEntityTooLarge, protocol.CodeTooLarge, "message content too large")
+
+			return
+		}
 
 		s.logger.Error("message stdin write failed",
 			"session_id", p.SessionID, "error", err)
