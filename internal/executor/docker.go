@@ -76,8 +76,11 @@ type LaunchSpec struct {
 	Cmd []string
 }
 
-// Executor is the seam a future KubernetesExecutor implements. The serve layer
-// depends on this interface, not on DockerExecutor.
+// Executor is the interface for container lifecycle backends. Implementations
+// call Launch to register runs on the shared *Tracker (the run registry holding
+// each run's ContainerID and attached Stdin). The serve/webhook layer depends on
+// both the Executor interface and this shared Tracker for /message delivery and
+// container-ID handoff.
 type Executor interface {
 	Launch(ctx context.Context, spec LaunchSpec) error
 	Stop(ctx context.Context, sessionID string) error
