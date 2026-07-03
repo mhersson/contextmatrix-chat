@@ -25,6 +25,7 @@ type redactorWatcher struct {
 	ptr          atomic.Pointer[redact.Redactor]
 	path         string
 	mcpKey       string
+	llmKey       string
 	pollInterval time.Duration
 	// lastMod is the mtime observed by the most recent successful reload. Set
 	// synchronously in newRedactorWatcher (before the watch goroutine starts)
@@ -36,11 +37,15 @@ type redactorWatcher struct {
 	lastMod time.Time
 }
 
-// newRedactorWatcher builds the initial redactor from path. mcpKey is
-// captured once — CM_MCP_API_KEY is a static per-session env var, not part of
-// the rotating secrets file.
-func newRedactorWatcher(path, mcpKey string) (*redactorWatcher, error) {
-	w := &redactorWatcher{path: path, mcpKey: mcpKey, pollInterval: redactorPollInterval}
+// newRedactorWatcher builds the initial redactor from path. mcpKey and llmKey
+// are captured once — CM_MCP_API_KEY and the resolved LLM_API_KEY (env-first-
+// then-file; see envOrSecret) are static per-session values, not part of the
+// rotating secrets file. llmKey covers the case where a CM-provisioned
+// llm_endpoint (protocol v0.5.0) delivers the key only via container env,
+// never writing it to path — without this, that key would never enter the
+// redaction set and could leak into tool output, events, or logs.
+func newRedactorWatcher(path, mcpKey, llmKey string) (*redactorWatcher, error) {
+	w := &redactorWatcher{path: path, mcpKey: mcpKey, llmKey: llmKey, pollInterval: redactorPollInterval}
 	if err := w.reload(); err != nil {
 		return nil, err
 	}
@@ -70,7 +75,7 @@ func (w *redactorWatcher) reload() error {
 		return err
 	}
 
-	w.ptr.Store(redact.New([]string{src.Get("LLM_API_KEY"), src.Get("CM_GIT_TOKEN"), w.mcpKey}))
+	w.ptr.Store(redact.New([]string{src.Get("LLM_API_KEY"), w.llmKey, src.Get("CM_GIT_TOKEN"), w.mcpKey}))
 	w.lastMod = preReadMod
 
 	return nil

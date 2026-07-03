@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mhersson/contextmatrix-chat/internal/frames"
+	"github.com/mhersson/contextmatrix-chat/internal/secrets"
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
 	"github.com/stretchr/testify/assert"
@@ -208,6 +211,38 @@ func TestClearDrainsPendingMessage(t *testing.T) {
 	// message and NextAfterClear sees the closed, empty inbox → loop exits
 	// after epoch 1.
 	assert.Equal(t, 1, epoch, "stale pre-clear message must be dropped at the clear boundary; no second epoch without a fresh primer")
+}
+
+// TestEnvOrSecret verifies the env-first-then-file resolution used for the
+// CM-provisioned LLM endpoint values: a per-session container env override
+// (set by the launcher when ChatStartPayload.LLMEndpoint is present) wins
+// over the value staged in the shared /run/cm-secrets/env file, including
+// when the override is explicitly empty (the type's canonical default is a
+// real provisioned value, not "absent"). Absent env falls back to the file —
+// today's path for a CM that did not provision an llm endpoint.
+func TestEnvOrSecret(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "env")
+	require.NoError(t, os.WriteFile(path,
+		[]byte("LLM_API_KEY=file-key-123456\nLLM_BASE_URL=https://file.example/v1\n"), 0o600))
+
+	src, err := secrets.Open(path)
+	require.NoError(t, err)
+
+	t.Run("env override wins over file value", func(t *testing.T) {
+		t.Setenv("LLM_API_KEY", "payload-key-123456")
+		assert.Equal(t, "payload-key-123456", envOrSecret("LLM_API_KEY", src))
+	})
+
+	t.Run("env override wins even when explicitly empty", func(t *testing.T) {
+		t.Setenv("LLM_BASE_URL", "")
+		assert.Empty(t, envOrSecret("LLM_BASE_URL", src))
+	})
+
+	t.Run("falls back to file value when env unset", func(t *testing.T) {
+		assert.Equal(t, "file-key-123456", envOrSecret("LLM_API_KEY", src))
+		assert.Equal(t, "https://file.example/v1", envOrSecret("LLM_BASE_URL", src))
+	})
 }
 
 // TestEpochLoop_RunError verifies that a non-clear error from run propagates.

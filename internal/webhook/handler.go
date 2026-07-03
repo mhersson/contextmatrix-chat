@@ -165,6 +165,12 @@ type Server struct {
 	// otherwise block the full timeout). Guarded by sseShutdownOnce for idempotency.
 	sseShutdown     chan struct{}
 	sseShutdownOnce sync.Once
+
+	// llmDeprecationWarnOnce guards the "CM did not provision an llm endpoint"
+	// fallback warning so it logs once per server process, not once per
+	// chat/start request — a live server may serve many sessions from a CM
+	// version that predates the multi-user llm_endpoint payload field.
+	llmDeprecationWarnOnce sync.Once
 }
 
 // NewServer wires a Server from its dependencies. The replay cache, dedup

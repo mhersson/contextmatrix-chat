@@ -135,6 +135,40 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CM_CHAT_RESUME=1")
 	}
 
+	// CM-provisioned LLM endpoint (protocol v0.5.0, ChatStartPayload.LLMEndpoint):
+	// when present, these three values REPLACE the shared-secrets/local-config
+	// LLM values for this session, delivered via the same per-session env
+	// mechanism as CM_CHAT_REPO_URL and CM_MCP_API_KEY above so chatwork/run.go's
+	// env-first-then-file read prefers them over /run/cm-secrets/env. All three
+	// are written even when a field is its zero value (e.g. an empty base_url
+	// meaning "the type's canonical default") — that is a real provisioned
+	// answer, and skipping it would let the stale local-config value leak
+	// through for just that one field.
+	//
+	// Same documented tradeoff as CM_MCP_API_KEY: LLM_API_KEY rides plain
+	// container env (visible to docker inspect and /proc/<pid>/environ) rather
+	// than the read-only bind-mounted secrets file, because it is per-session —
+	// the shared file is one process-wide artifact all live sessions read.
+	// Moving it off env would require a per-session read-only secrets file.
+	// The worker's redactor watcher (newRedactorWatcher's llmKey param) still
+	// masks it from tool output, events, and logs.
+	//
+	// Absent means a CM version that predates multi-user credential
+	// provisioning: today's local llm_endpoint config path applies, plus a
+	// once-per-process (not once-per-session) deprecation warning so a long-
+	// lived server doesn't spam its log across many sessions.
+	if p.LLMEndpoint != nil {
+		env = append(env,
+			"LLM_API_KEY="+p.LLMEndpoint.APIKey,
+			"LLM_BASE_URL="+p.LLMEndpoint.BaseURL,
+			"LLM_TYPE="+p.LLMEndpoint.Type,
+		)
+	} else {
+		s.llmDeprecationWarnOnce.Do(func() {
+			s.logger.Warn("CM did not provision an llm endpoint; using local llm_endpoint config — this fallback is deprecated")
+		})
+	}
+
 	// Resolve task-skills from CM (the single source of truth): fetch the git
 	// pointer, clone once, and bind the clone read-only at skillsMountPath. A
 	// failure or empty pointer means this session runs without the Skill tool —
