@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -163,6 +164,17 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 			"LLM_BASE_URL="+p.LLMEndpoint.BaseURL,
 			"LLM_TYPE="+p.LLMEndpoint.Type,
 		)
+
+		// Arm the host-side log-bridge redactor with this session's provisioned
+		// key BEFORE the container starts, so a key that surfaces on worker stderr
+		// or an unparsable stdout line (e.g. a panic stack trace) is masked before
+		// it reaches the /logs stream. The in-worker redactor covers tool output
+		// and events but never sees worker stderr — that surface is bridged
+		// host-side and this is its only masking. Unregistered on container exit
+		// (DropSession) so the set stays bounded; an empty key is ignored.
+		if s.sessionSecrets != nil {
+			s.sessionSecrets.AddSessionKey(p.SessionID, p.LLMEndpoint.APIKey)
+		}
 	} else {
 		s.llmDeprecationWarnOnce.Do(func() {
 			s.logger.Warn("CM did not provision an llm endpoint; using local llm_endpoint config — this fallback is deprecated")
@@ -202,9 +214,27 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	// Operator-supplied extra env is appended after the system vars so that
 	// explicit operator entries take precedence over CM_*/CMX_* defaults for
-	// any duplicate keys.
+	// any duplicate keys. This is also the operator's escape hatch OVER the
+	// CM-provisioned per-session LLM_* credentials above: because worker_extra_env
+	// is appended last and Docker takes the last value for a duplicate key, an
+	// LLM_API_KEY/LLM_BASE_URL/LLM_TYPE set here overrides what CM provisioned for
+	// this session. Intentional, but surfaced below for operator visibility.
 	for k, v := range s.workerExtraEnv {
 		env = append(env, k+"="+v)
+	}
+
+	// Warn when this session carried a CM-provisioned endpoint AND worker_extra_env
+	// sets an LLM_* key, since that operator value silently overrides the
+	// per-session credential. Log the env NAME(s) only — never the value — and
+	// once per process, matching the sibling deprecation warning, so a long-lived
+	// server with a static worker_extra_env does not spam its log every session.
+	if p.LLMEndpoint != nil {
+		if names := llmExtraEnvKeys(s.workerExtraEnv); len(names) > 0 {
+			s.llmOverrideWarnOnce.Do(func() {
+				s.logger.Warn("worker_extra_env overrides CM-provisioned llm credentials for this session",
+					"env_names", names)
+			})
+		}
 	}
 
 	binds := []string{
@@ -230,6 +260,13 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.executor.Launch(r.Context(), spec); err != nil {
+		// Launch failed: no container will exit, so the OnExit → DropSession path
+		// that normally unregisters this session's key never fires. Forget it here
+		// so a failed start does not leak the key into the redaction set forever.
+		if s.sessionSecrets != nil {
+			s.sessionSecrets.RemoveSessionKey(p.SessionID)
+		}
+
 		if errors.Is(err, executor.ErrCapacity) {
 			writeError(w, http.StatusTooManyRequests, protocol.CodeLimitReached, "concurrency limit reached")
 
@@ -254,6 +291,24 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		OK:          true,
 		ContainerID: containerID,
 	})
+}
+
+// llmExtraEnvKeys returns the sorted LLM_* keys present in extra (operator
+// worker_extra_env). Because worker_extra_env is appended to the container env
+// last, any of these overrides the CM-provisioned per-session LLM_* credential
+// (Docker: last duplicate wins). Returns nil when there are none.
+func llmExtraEnvKeys(extra map[string]string) []string {
+	var keys []string
+
+	for k := range extra {
+		if strings.HasPrefix(k, "LLM_") {
+			keys = append(keys, k)
+		}
+	}
+
+	slices.Sort(keys)
+
+	return keys
 }
 
 // writeResumeJSONL writes one JSON line per ChatResumeTurn to the named file.

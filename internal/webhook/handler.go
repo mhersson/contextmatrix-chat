@@ -28,6 +28,17 @@ type SkillsResolver interface {
 	Resolve(ctx context.Context) (string, error)
 }
 
+// SessionSecretRegistry records and forgets a session's CM-provisioned LLM key
+// so the host-side log-bridge redactor masks it in bridged worker stderr and
+// unparsable stdout (the only masking those surfaces get). handleChatStart
+// registers the key before the container starts; DropSession (and the
+// launch-failure path) forgets it so the set stays bounded.
+// *logbridge.RedactorRegistry satisfies it.
+type SessionSecretRegistry interface {
+	AddSessionKey(sessionID, key string)
+	RemoveSessionKey(sessionID string)
+}
+
 // ChatConfig carries the static, per-process chat backend settings. All fields
 // are set at serve startup; they are not reloaded at runtime.
 type ChatConfig struct {
@@ -89,6 +100,11 @@ type Config struct {
 	// the dir to bind read-only into each worker. nil disables task-skills.
 	SkillsResolver SkillsResolver
 
+	// SessionSecrets records each session's CM-provisioned LLM key so the
+	// host-side log-bridge redactor masks it in bridged worker logs. nil disables
+	// per-session registration (bare test servers leave it unset).
+	SessionSecrets SessionSecretRegistry
+
 	// Chat carries the static per-process chat backend settings.
 	Chat ChatConfig
 
@@ -118,6 +134,10 @@ type Server struct {
 
 	executor executor.Executor
 	tracker  *executor.Tracker
+
+	// sessionSecrets registers/unregisters per-session CM-provisioned LLM keys
+	// with the host-side log-bridge redactor. nil in minimal test servers.
+	sessionSecrets SessionSecretRegistry
 
 	// chat config (populated from ChatConfig at NewServer time)
 	image                     string
@@ -171,6 +191,12 @@ type Server struct {
 	// chat/start request — a live server may serve many sessions from a CM
 	// version that predates the multi-user llm_endpoint payload field.
 	llmDeprecationWarnOnce sync.Once
+
+	// llmOverrideWarnOnce guards the "worker_extra_env overrides CM-provisioned
+	// llm credentials" warning so it logs once per server process — a static
+	// worker_extra_env produces the same override on every provisioned session,
+	// and repeating it per request would spam a long-lived server's log.
+	llmOverrideWarnOnce sync.Once
 }
 
 // NewServer wires a Server from its dependencies. The replay cache, dedup
@@ -207,6 +233,7 @@ func NewServer(cfg Config) *Server {
 		skew:                      skew,
 		executor:                  cfg.Executor,
 		tracker:                   cfg.Tracker,
+		sessionSecrets:            cfg.SessionSecrets,
 		image:                     cfg.Chat.Image,
 		mcpURL:                    cfg.Chat.MCPURL,
 		skillsResolver:            cfg.SkillsResolver,
@@ -249,13 +276,21 @@ func (s *Server) stdinLock(sessionID string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
-// DropSession removes the per-session stdin mutex once the session's container
-// has exited (wired into the executor OnExit hook). After the container is gone
-// no writer can hold the lock, so the delete/recreate race the retained-entry
-// design guarded against no longer applies, and the map stops growing without
-// bound over the process lifetime.
+// DropSession removes the per-session stdin mutex and forgets the session's
+// CM-provisioned LLM key from the log-bridge redactor once the session's
+// container has exited (wired into the executor OnExit hook). After the
+// container is gone no writer can hold the lock, so the delete/recreate race the
+// retained-entry design guarded against no longer applies, and both the mutex
+// map and the redaction set stop growing without bound over the process lifetime.
 func (s *Server) DropSession(sessionID string) {
 	s.stdinMu.Delete(sessionID)
+
+	// Forget the session's CM-provisioned LLM key now the container has exited:
+	// no more of its log lines can arrive, so it never needs masking again, and
+	// dropping it keeps the redaction set bounded over the process lifetime.
+	if s.sessionSecrets != nil {
+		s.sessionSecrets.RemoveSessionKey(sessionID)
+	}
 }
 
 // Routes returns the mux with every webhook route mounted. The mutating

@@ -16,7 +16,6 @@ import (
 	"time"
 
 	githubauth "github.com/mhersson/contextmatrix-githubauth"
-	"github.com/mhersson/contextmatrix-harness/redact"
 	protocol "github.com/mhersson/contextmatrix-protocol"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
@@ -108,7 +107,17 @@ func runServe(ctx context.Context, configPath string) error {
 
 	tracker := executor.NewTracker(cfg.MaxConcurrent)
 	hub := logbridge.NewHubWithDropObserver(dropAdapter{mx: mx})
-	bridge := logbridge.New(hub, redact.New([]string{cfg.LLMEndpoint.APIKey}))
+	bridge := logbridge.New(hub, nil)
+
+	// The redactor registry is the single source of truth for the log-bridge
+	// redaction set: the local-config LLM key (static), the rotating GitHub
+	// installation token (updated via OnRotate below), and every live session's
+	// CM-provisioned LLM key (registered at chat-start, forgotten on container
+	// exit). Worker stderr and unparsable stdout are bridged to /logs with only
+	// this redactor applied, so every live secret must be in the union — and
+	// composing every rebuild from that union is what keeps a session key from
+	// being clobbered when the token rotates.
+	redactorRegistry := logbridge.NewRedactorRegistry(bridge, []string{cfg.LLMEndpoint.APIKey})
 
 	// The Refresher knows the new GitHub token the instant it mints it — rebuild
 	// the log-bridge redactor on every rotation (including the immediate first
@@ -116,7 +125,7 @@ func runServe(ctx context.Context, configPath string) error {
 	// clear. No host-side file watch needed: the Refresher already holds the
 	// token it just minted.
 	refresher.SetOnRotate(func(token string) {
-		bridge.SetRedactor(redact.New([]string{cfg.LLMEndpoint.APIKey, token}))
+		redactorRegistry.SetToken(token)
 	})
 
 	refreshCtx, refreshCancel := context.WithCancel(context.Background())
@@ -178,6 +187,7 @@ func runServe(ctx context.Context, configPath string) error {
 		Executor:       exec,
 		Tracker:        tracker,
 		SkillsResolver: skillsResolver,
+		SessionSecrets: redactorRegistry,
 		Hub:            hub,
 		Chat: webhook.ChatConfig{
 			Image:                     cfg.BaseImage,

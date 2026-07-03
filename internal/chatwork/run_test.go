@@ -240,8 +240,33 @@ func TestEnvOrSecret(t *testing.T) {
 	})
 
 	t.Run("falls back to file value when env unset", func(t *testing.T) {
+		// Hermetic: a host or CI that exports LLM_API_KEY/LLM_BASE_URL would
+		// otherwise make envOrSecret return the exported value and fail this
+		// subtest. Explicitly unset (restoring any prior value on cleanup) so the
+		// fallback-to-file path is what is actually exercised.
+		unsetEnv(t, "LLM_API_KEY")
+		unsetEnv(t, "LLM_BASE_URL")
+
 		assert.Equal(t, "file-key-123456", envOrSecret("LLM_API_KEY", src))
 		assert.Equal(t, "https://file.example/v1", envOrSecret("LLM_BASE_URL", src))
+	})
+}
+
+// unsetEnv removes key for the duration of the test, restoring any prior value
+// on cleanup. Used instead of t.Setenv when a test needs the var genuinely
+// ABSENT (os.LookupEnv → ok=false), which t.Setenv cannot express. t.Setenv is
+// incompatible with t.Parallel; unsetEnv shares that constraint, so callers
+// must not mark the test parallel.
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+
+	prev, had := os.LookupEnv(key)
+	require.NoError(t, os.Unsetenv(key))
+
+	t.Cleanup(func() {
+		if had {
+			require.NoError(t, os.Setenv(key, prev))
+		}
 	})
 }
 
