@@ -45,6 +45,13 @@ type Resolver struct {
 
 	mu       sync.Mutex
 	resolved string // cached host dir once a clone has succeeded
+
+	// selfMintWarnOnce guards the "CM did not provision a task-skills clone
+	// token" fallback warning so it logs once per Resolver (a serve process
+	// constructs exactly one), not once per self-mint attempt. A failed clone
+	// is not cached, so a long-lived process can genuinely re-enter the
+	// self-mint path across many chat/start requests.
+	selfMintWarnOnce sync.Once
 }
 
 // NewResolver builds a Resolver. cmURL is ContextMatrix's base URL, apiKey the
@@ -79,18 +86,31 @@ func (r *Resolver) Resolve(ctx context.Context) (string, error) {
 		return r.resolved, nil
 	}
 
-	gitURL, ref, err := r.fetchPointer(ctx)
+	p, err := r.fetchPointer(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	if gitURL == "" {
+	if p.GitRemoteURL == "" {
 		return "", fmt.Errorf("task-skills source has no git_remote_url")
 	}
 
-	token, _, err := r.gen.GenerateToken(ctx)
-	if err != nil {
-		return "", fmt.Errorf("mint skills clone token: %w", err)
+	// Prefer the CM-provisioned clone token when present. Absent means a CM
+	// version that predates provisioned task-skills clone tokens: fall back to
+	// self-minting via the local GitHub token source, plus a once-per-process
+	// deprecation warning (compat-window rule).
+	token := p.Token
+	if token == "" {
+		var terr error
+
+		token, _, terr = r.gen.GenerateToken(ctx)
+		if terr != nil {
+			return "", fmt.Errorf("mint skills clone token: %w", terr)
+		}
+
+		r.selfMintWarnOnce.Do(func() {
+			r.logger.Warn("CM did not provision a task-skills clone token; self-minting via local github config is deprecated")
+		})
 	}
 
 	dest := filepath.Join(r.cacheDir, "task-skills")
@@ -98,7 +118,7 @@ func (r *Resolver) Resolve(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("clear skills cache: %w", err)
 	}
 
-	if err := r.cloner(ctx, gitURL, ref, dest, token); err != nil {
+	if err := r.cloner(ctx, p.GitRemoteURL, p.Ref, dest, token); err != nil {
 		return "", fmt.Errorf("clone task-skills: %w", err)
 	}
 
@@ -107,25 +127,38 @@ func (r *Resolver) Resolve(ctx context.Context) (string, error) {
 	return dest, nil
 }
 
+// pointer is this resolver's local decode target for the task-skills-source
+// response. There is no shared contextmatrix-protocol DTO for this endpoint,
+// so the wire contract (including the token/token_expires_at fields below) is
+// mirrored here rather than imported.
 type pointer struct {
 	GitRemoteURL string `json:"git_remote_url"`
 	Ref          string `json:"ref"`
+	// Token is a CM-provisioned short-lived token for cloning GitRemoteURL.
+	// When present, Resolve clones with it directly instead of self-minting
+	// via gen. Absent means a CM version that predates provisioned task-skills
+	// clone tokens (the compat-window fallback applies).
+	Token string `json:"token,omitempty"`
+	// TokenExpiresAt is the RFC3339 expiry of Token. Decoded for wire-contract
+	// fidelity; currently unused — Resolve caches the clone for the process
+	// lifetime and never re-checks token freshness after a successful clone.
+	TokenExpiresAt string `json:"token_expires_at,omitempty"`
 }
 
 // fetchPointer does a signed GET to /api/chat/task-skills-source.
-func (r *Resolver) fetchPointer(ctx context.Context) (gitURL, ref string, err error) {
+func (r *Resolver) fetchPointer(ctx context.Context) (pointer, error) {
 	const path = "/api/chat/task-skills-source"
 
 	uri, perr := requestURI(r.cmURL + path)
 	if perr != nil {
-		return "", "", perr
+		return pointer{}, perr
 	}
 
 	sig, ts := protocol.SignRequestHeaders(r.apiKey, http.MethodGet, uri, nil)
 
 	req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, r.cmURL+path, nil)
 	if rerr != nil {
-		return "", "", fmt.Errorf("create task-skills-source request: %w", rerr)
+		return pointer{}, fmt.Errorf("create task-skills-source request: %w", rerr)
 	}
 
 	req.Header.Set(protocol.SignatureHeader, sig)
@@ -133,22 +166,22 @@ func (r *Resolver) fetchPointer(ctx context.Context) (gitURL, ref string, err er
 
 	resp, derr := r.http.Do(req) //nolint:gosec // cmURL is operator config
 	if derr != nil {
-		return "", "", fmt.Errorf("fetch task-skills-source: %w", derr)
+		return pointer{}, fmt.Errorf("fetch task-skills-source: %w", derr)
 	}
 
 	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 400 {
-		return "", "", fmt.Errorf("task-skills-source returned %d", resp.StatusCode)
+		return pointer{}, fmt.Errorf("task-skills-source returned %d", resp.StatusCode)
 	}
 
 	var p pointer
 	if uerr := json.Unmarshal(body, &p); uerr != nil {
-		return "", "", fmt.Errorf("parse task-skills-source: %w", uerr)
+		return pointer{}, fmt.Errorf("parse task-skills-source: %w", uerr)
 	}
 
-	return p.GitRemoteURL, p.Ref, nil
+	return p, nil
 }
 
 // gitClone shallow-fetches ref (a SHA, branch, or tag) into dest using the

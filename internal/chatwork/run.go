@@ -47,9 +47,15 @@ func Run(ctx context.Context) error {
 		return fmt.Errorf("read secrets: %w", err)
 	}
 
-	llmKey := src.Get("LLM_API_KEY")
-	llmBaseURL := src.Get("LLM_BASE_URL")
-	llmType := src.Get("LLM_TYPE")
+	// LLM values are env-first-then-file: handleChatStart sets LLM_API_KEY/
+	// LLM_BASE_URL/LLM_TYPE as per-session container env when CM provisions an
+	// llm_endpoint (protocol v0.5.0), the same delivery mechanism as
+	// CM_CHAT_REPO_URL. Absent means a CM version that predates that field —
+	// the values staged in the shared /run/cm-secrets/env file (today's
+	// local-config path) are used instead.
+	llmKey := envOrSecret("LLM_API_KEY", src)
+	llmBaseURL := envOrSecret("LLM_BASE_URL", src)
+	llmType := envOrSecret("LLM_TYPE", src)
 	gitToken := src.Get("CM_GIT_TOKEN")
 
 	// 2. Configure the git credential helper so clones authenticate via the
@@ -143,7 +149,7 @@ func Run(ctx context.Context) error {
 	// 8. Redactor: mask the secrets from all tool output and event data. Backed
 	// by a watcher so a token the host rotates mid-session (App installation
 	// tokens expire ~60m) is picked up without restarting the worker.
-	redWatcher, err := newRedactorWatcher(secretsEnvPath, os.Getenv("CM_MCP_API_KEY"))
+	redWatcher, err := newRedactorWatcher(secretsEnvPath, os.Getenv("CM_MCP_API_KEY"), llmKey)
 	if err != nil {
 		return fmt.Errorf("build redactor: %w", err)
 	}
@@ -379,6 +385,23 @@ func hostFromRepoURL(repoURL string) string {
 	}
 
 	return u.Host
+}
+
+// envOrSecret returns the container env var value for key when the launcher
+// set it — even to an empty string, since a CM-provisioned llm_endpoint
+// (protocol v0.5.0) with an intentionally empty field (e.g. base_url meaning
+// "the type's canonical default") is a real provisioned value, not "absent".
+// Falls back to the shared secrets file (today's local-config path) when the
+// launcher did not set the var at all: a pre-v0.5.0 CM payload with no
+// llm_endpoint. This is how a per-session env override "wins" over the
+// process-shared /run/cm-secrets/env value for LLM_API_KEY/LLM_BASE_URL/
+// LLM_TYPE.
+func envOrSecret(key string, src *secrets.Source) string {
+	if v, ok := os.LookupEnv(key); ok {
+		return v
+	}
+
+	return src.Get(key)
 }
 
 // envFloatDefault parses an optional float64 env var, returning def when the

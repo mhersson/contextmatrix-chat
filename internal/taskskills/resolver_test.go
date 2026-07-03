@@ -1,12 +1,17 @@
 package taskskills
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +24,27 @@ type fakeGen struct{}
 
 func (fakeGen) GenerateToken(context.Context) (string, time.Time, error) {
 	return "tok", time.Now().Add(time.Hour), nil
+}
+
+// recordingGen counts GenerateToken calls so a test can assert that the
+// self-mint path was never reached (e.g. because CM provisioned a
+// task-skills clone token, and the resolver must prefer it).
+type recordingGen struct {
+	calls int32
+}
+
+func (g *recordingGen) GenerateToken(context.Context) (string, time.Time, error) {
+	atomic.AddInt32(&g.calls, 1)
+
+	return "self-minted-tok", time.Now().Add(time.Hour), nil
+}
+
+// discardLogger returns a *slog.Logger that writes nowhere. Most tests below
+// exercise the self-mint fallback, which now logs a once-per-process
+// deprecation warning; a discard logger keeps `go test -v` output focused on
+// genuine failures.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func TestResolveFetchesPointerClonesAndCaches(t *testing.T) {
@@ -44,7 +70,7 @@ func TestResolveFetchesPointerClonesAndCaches(t *testing.T) {
 		return nil
 	}
 
-	r := NewResolver(srv.URL, "key", t.TempDir(), fakeGen{}, nil)
+	r := NewResolver(srv.URL, "key", t.TempDir(), fakeGen{}, discardLogger())
 	r.cloner = cloner
 
 	dir, err := r.Resolve(context.Background())
@@ -122,7 +148,7 @@ func TestResolveDoesNotCacheFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r := NewResolver(srv.URL, "key", t.TempDir(), fakeGen{}, nil)
+	r := NewResolver(srv.URL, "key", t.TempDir(), fakeGen{}, discardLogger())
 	r.cloner = func(context.Context, string, string, string, string) error { return nil }
 
 	_, err := r.Resolve(context.Background())
@@ -130,4 +156,112 @@ func TestResolveDoesNotCacheFailure(t *testing.T) {
 
 	_, err = r.Resolve(context.Background())
 	require.NoError(t, err, "a prior failure is not cached; the next call retries")
+}
+
+// ---- CM-provisioned task-skills clone token --------------------------------
+
+// TestResolveUsesCMProvisionedToken verifies that when the task-skills-source
+// response carries a token, Resolve clones with it directly and never calls
+// the local token generator — the recording generator's zero call count is
+// the proof, not just the token value reaching the cloner.
+func TestResolveUsesCMProvisionedToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"git_remote_url":   "https://example.test/skills.git",
+			"ref":              "abc123",
+			"token":            "cm-provisioned-tok",
+			"token_expires_at": "2026-07-04T00:00:00Z",
+		})
+	}))
+	defer srv.Close()
+
+	var gotTok string
+
+	gen := &recordingGen{}
+
+	r := NewResolver(srv.URL, "key", t.TempDir(), gen, discardLogger())
+	r.cloner = func(_ context.Context, _, _, _, token string) error {
+		gotTok = token
+
+		return nil
+	}
+
+	_, err := r.Resolve(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "cm-provisioned-tok", gotTok, "the CM-provisioned token must be used to clone")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&gen.calls), "the local token generator must not be called when CM provisions a token")
+}
+
+// TestResolveSelfMintsWhenTokenAbsent verifies the compat-window fallback:
+// when the task-skills-source response carries no token, Resolve still
+// self-mints via the local generator, keeping today's path intact.
+func TestResolveSelfMintsWhenTokenAbsent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"git_remote_url": "https://example.test/skills.git",
+			"ref":            "abc123",
+		})
+	}))
+	defer srv.Close()
+
+	var gotTok string
+
+	gen := &recordingGen{}
+
+	r := NewResolver(srv.URL, "key", t.TempDir(), gen, discardLogger())
+	r.cloner = func(_ context.Context, _, _, _, token string) error {
+		gotTok = token
+
+		return nil
+	}
+
+	_, err := r.Resolve(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "self-minted-tok", gotTok, "the self-minted token must be used to clone when CM provisions none")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&gen.calls), "the local token generator must be called exactly once")
+}
+
+// TestResolveSelfMintDeprecationWarnsOncePerProcess verifies that the
+// self-mint fallback warning logs once per Resolver (a serve process
+// constructs exactly one, per NewResolver's call site), not once per
+// self-mint attempt. A failed clone is not cached (see
+// TestResolveDoesNotCacheFailure), so a real long-lived serve process can
+// genuinely re-enter the self-mint path multiple times across chat/start
+// requests from a CM version that predates provisioned clone tokens — the
+// warning must not spam the log on every retry.
+func TestResolveSelfMintDeprecationWarnsOncePerProcess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"git_remote_url": "https://example.test/skills.git",
+			"ref":            "abc123",
+		})
+	}))
+	defer srv.Close()
+
+	var logBuf bytes.Buffer
+
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	r := NewResolver(srv.URL, "key", t.TempDir(), fakeGen{}, logger)
+
+	var cloneAttempts int32
+
+	r.cloner = func(context.Context, string, string, string, string) error {
+		if atomic.AddInt32(&cloneAttempts, 1) <= 2 {
+			return errors.New("simulated clone failure")
+		}
+
+		return nil
+	}
+
+	const wantMsg = "CM did not provision a task-skills clone token; self-minting via local github config is deprecated"
+
+	for range 3 {
+		_, _ = r.Resolve(context.Background())
+	}
+
+	require.Equal(t, int32(3), atomic.LoadInt32(&cloneAttempts),
+		"each retry must reach the cloner: no caching on a prior clone failure")
+	assert.Equal(t, 1, strings.Count(logBuf.String(), wantMsg),
+		"deprecation warning must be logged exactly once per Resolver instance, even across repeated self-mint attempts")
 }
