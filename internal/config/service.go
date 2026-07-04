@@ -48,6 +48,16 @@ type GitHubConfig struct {
 	PAT        GitHubPATConfig `koanf:"pat"`
 }
 
+// Configured reports whether a GitHub auth mode is set locally. False means
+// ContextMatrix provisions git credentials per session instead (via the
+// chat-start payload's git_credentials_token, protocol v0.5.2): the github
+// block may be entirely absent (validate() then permits it), or — if some
+// other field is set while auth_mode is left empty — an invalid partial
+// config that validate() still rejects.
+func (g GitHubConfig) Configured() bool {
+	return g.AuthMode != ""
+}
+
 // CompactionConfig controls in-context compaction. When the conversation
 // reaches Threshold of the model's context window, older turns are dropped and
 // only the most recent KeepRecentTurns turns are retained verbatim.
@@ -267,10 +277,11 @@ func (c *ServiceConfig) Validate() error {
 		return fmt.Errorf("api_key must be at least 32 characters, got %d", len(c.APIKey))
 	}
 
-	if c.LLMEndpoint.APIKey == "" {
-		return fmt.Errorf("llm_endpoint.api_key is required")
-	}
-
+	// llm_endpoint.api_key is intentionally not required here: ContextMatrix
+	// provisions the inference endpoint per session in multi-user deployments
+	// (ChatStartPayload.llm_endpoint), and this block is only a fallback for a
+	// pre-multi-user CM (see GitHubConfig.validate below for the analogous
+	// github fallback).
 	switch c.LLMEndpoint.Type {
 	case "", "openrouter":
 	case "openai":
@@ -345,8 +356,22 @@ func (c *ServiceConfig) Validate() error {
 }
 
 // validate checks the GitHub auth block, mirroring the runner/agent contract:
-// exactly one auth path is populated per auth_mode.
+// exactly one auth path is populated per auth_mode. An entirely empty block
+// (Configured() false and every other field zero) is valid: ContextMatrix
+// provisions a per-session git-credentials bearer instead (see
+// cli.newTokenProvider), and the worker never falls back to a local token
+// provider for anything. A PARTIAL block — some other field set while
+// auth_mode is left empty, e.g. a stray pat.token — is still rejected below
+// via the same "auth_mode is required" error a fully unknown auth_mode
+// produces; silently ignoring it would strand credentials the operator meant
+// to use.
 func (g *GitHubConfig) validate() error {
+	if !g.Configured() &&
+		g.Host == "" && g.APIBaseURL == "" &&
+		g.App == (GitHubAppConfig{}) && g.PAT == (GitHubPATConfig{}) {
+		return nil
+	}
+
 	// Host accepts either a bare hostname or a full URL; a missing scheme is
 	// synthesised so the same host check applies either way.
 	if g.Host != "" {

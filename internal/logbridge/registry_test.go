@@ -101,3 +101,42 @@ func TestRedactorRegistry_EmptyKeyIgnored(t *testing.T) {
 	bridge.BridgeLine(testSession, []byte("plain line"), true)
 	assert.Equal(t, "plain line", recvEntry(t, ch).Content)
 }
+
+// TestRedactorRegistry_MultipleSessionKeysBothMasked is the regression guard
+// for the multi-secret-per-session clobber: a chat session commonly carries
+// BOTH a CM-provisioned LLM key and a CM-provisioned git-credentials bearer
+// (two independent multi-user-mode features), registered under the SAME
+// session ID via two separate AddSessionKey calls. The second call must not
+// silently displace the first — both must stay masked until the session ends,
+// and RemoveSessionKey(sessionID) must forget both together.
+func TestRedactorRegistry_MultipleSessionKeysBothMasked(t *testing.T) {
+	t.Parallel()
+
+	const (
+		llmKey    = "sk-llm-session-key-000000"
+		gitBearer = "sess1.git-credentials-bearer-111111"
+	)
+
+	hub := logbridge.NewHub()
+	_, ch := hub.Subscribe("")
+	bridge := logbridge.New(hub, nil)
+	registry := logbridge.NewRedactorRegistry(bridge, nil)
+
+	registry.AddSessionKey(testSession, llmKey)
+	registry.AddSessionKey(testSession, gitBearer)
+
+	bridge.BridgeLine(testSession, []byte("keys: "+llmKey+" and "+gitBearer), true)
+
+	got := recvEntry(t, ch)
+	assert.NotContains(t, got.Content, llmKey,
+		"the first-registered key must still be masked after a second key is registered for the same session")
+	assert.NotContains(t, got.Content, gitBearer,
+		"the second-registered key must also be masked")
+
+	registry.RemoveSessionKey(testSession)
+	bridge.BridgeLine(testSession, []byte("after removal: "+llmKey+" and "+gitBearer), true)
+
+	got = recvEntry(t, ch)
+	assert.Contains(t, got.Content, llmKey, "removal must forget both keys, not just the last one")
+	assert.Contains(t, got.Content, gitBearer, "removal must forget both keys, not just the last one")
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mhersson/contextmatrix-chat/internal/config"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	"github.com/mhersson/contextmatrix-chat/internal/logbridge"
 	"github.com/mhersson/contextmatrix-chat/internal/webhook"
@@ -93,6 +94,28 @@ func TestComposeMCPURL(t *testing.T) {
 	}
 }
 
+func TestComposeGitCredentialsURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		base string
+		want string
+	}{
+		{"no trailing slash", "http://host:8080", "http://host:8080/api/worker/git-credentials"},
+		{"trailing slash", "http://host:8080/", "http://host:8080/api/worker/git-credentials"},
+		{"double trailing slash", "http://host:8080//", "http://host:8080/api/worker/git-credentials"},
+		{"with subpath", "http://host:8080/contextmatrix", "http://host:8080/contextmatrix/api/worker/git-credentials"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, composeGitCredentialsURL(tt.base))
+		})
+	}
+}
+
 // TestHealthEndpoint is a smoke test: build a Server with a minimal config and
 // verify that GET /health (unauthenticated) returns 200.
 func TestHealthEndpoint(t *testing.T) {
@@ -136,4 +159,50 @@ func TestGracefulShutdown(t *testing.T) {
 
 	assert.True(t, draining.Load(), "draining flag must be set after shutdown")
 	assert.Len(t, exec.kills, 2, "Kill must be called once per tracked session")
+}
+
+func TestNewTokenProvider(t *testing.T) {
+	t.Run("pat auth_mode succeeds", func(t *testing.T) {
+		p, err := newTokenProvider(config.GitHubConfig{AuthMode: "pat", PAT: config.GitHubPATConfig{Token: "ghp_test"}})
+		require.NoError(t, err)
+		assert.NotNil(t, p)
+	})
+
+	t.Run("unknown auth_mode errors", func(t *testing.T) {
+		_, err := newTokenProvider(config.GitHubConfig{AuthMode: "oauth"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "auth_mode")
+	})
+
+	t.Run("unconfigured returns nil provider and nil error", func(t *testing.T) {
+		p, err := newTokenProvider(config.GitHubConfig{})
+		require.NoError(t, err)
+		assert.Nil(t, p, "an empty github block must yield no provider, not an error")
+	})
+}
+
+func TestLocalCredentialConfigIncomplete(t *testing.T) {
+	t.Run("both configured is complete", func(t *testing.T) {
+		cfg := &config.ServiceConfig{
+			GitHub:      config.GitHubConfig{AuthMode: "pat", PAT: config.GitHubPATConfig{Token: "t"}},
+			LLMEndpoint: config.LLMEndpoint{APIKey: "k"},
+		}
+		assert.False(t, localCredentialConfigIncomplete(cfg))
+	})
+
+	t.Run("github absent is incomplete", func(t *testing.T) {
+		cfg := &config.ServiceConfig{LLMEndpoint: config.LLMEndpoint{APIKey: "k"}}
+		assert.True(t, localCredentialConfigIncomplete(cfg))
+	})
+
+	t.Run("llm_endpoint absent is incomplete", func(t *testing.T) {
+		cfg := &config.ServiceConfig{
+			GitHub: config.GitHubConfig{AuthMode: "pat", PAT: config.GitHubPATConfig{Token: "t"}},
+		}
+		assert.True(t, localCredentialConfigIncomplete(cfg))
+	})
+
+	t.Run("both absent is incomplete", func(t *testing.T) {
+		assert.True(t, localCredentialConfigIncomplete(&config.ServiceConfig{}))
+	})
 }

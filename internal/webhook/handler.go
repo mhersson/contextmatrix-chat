@@ -28,11 +28,13 @@ type SkillsResolver interface {
 	Resolve(ctx context.Context) (string, error)
 }
 
-// SessionSecretRegistry records and forgets a session's CM-provisioned LLM key
-// so the host-side log-bridge redactor masks it in bridged worker stderr and
-// unparsable stdout (the only masking those surfaces get). handleChatStart
-// registers the key before the container starts; DropSession (and the
-// launch-failure path) forgets it so the set stays bounded.
+// SessionSecretRegistry records and forgets a session's CM-provisioned secrets
+// (the LLM key, protocol v0.5.0; the git-credentials bearer, protocol v0.5.2 —
+// a session may register either, both, or neither) so the host-side log-bridge
+// redactor masks them in bridged worker stderr and unparsable stdout (the only
+// masking those surfaces get). handleChatStart registers each key before the
+// container starts; DropSession (and the launch-failure path) forgets all of
+// a session's keys in one call so the set stays bounded.
 // *logbridge.RedactorRegistry satisfies it.
 type SessionSecretRegistry interface {
 	AddSessionKey(sessionID, key string)
@@ -82,7 +84,33 @@ type ChatConfig struct {
 	// git token is minted for, forwarded to each worker as CM_GIT_HOST so the
 	// git credential helper and gh are scoped to it even when the session has
 	// no seeded repo URL (cross-project chats). Empty means github.com.
+	// Only meaningful (and only ever forwarded) in the local-github-config
+	// fallback branch — see GitHubConfigured.
 	GitHubHost string
+	// GitHubConfigured mirrors config.GitHubConfig.Configured(): true when the
+	// service has a local github auth_mode configured. It gates two things: (1)
+	// the fail-closed launch guard — a session with no CM-provisioned
+	// git-credentials bearer AND no local github config has no way to
+	// authenticate any git operation, so chat/start refuses it outright; (2)
+	// whether CM_GIT_HOST is meaningful at all — it is only sent when this is
+	// true AND there is no payload token, since a provisioned session is
+	// multi-host by construction (CM resolves the credential per (host, path)
+	// on every worker fetch) and a single static host would be actively wrong.
+	GitHubConfigured bool
+	// GitCredentialsURL is CM's worker git-credentials endpoint
+	// (<container_contextmatrix_url>/api/worker/git-credentials), forwarded to
+	// the worker as CM_GIT_CREDENTIALS_URL alongside the payload's
+	// GitCredentialsToken so the worker can fetch fresh, per-repo credentials
+	// on demand. Only sent when the payload carries a token.
+	GitCredentialsURL string
+	// LLMConfigured mirrors GitHubConfigured for the LLM channel: true when the
+	// service has a local llm_endpoint.api_key configured
+	// (cfg.LLMEndpoint.APIKey != "" at serve.go wiring). It gates the
+	// fail-closed launch guard — a session with no CM-provisioned llm_endpoint
+	// AND no local llm_endpoint config has no way to authenticate any
+	// inference call for its whole lifetime, so chat/start refuses it outright
+	// rather than launching a container that fails opaquely on the first turn.
+	LLMConfigured bool
 }
 
 // Config carries the dependencies NewServer needs. Pointers may be shared with
@@ -100,9 +128,10 @@ type Config struct {
 	// the dir to bind read-only into each worker. nil disables task-skills.
 	SkillsResolver SkillsResolver
 
-	// SessionSecrets records each session's CM-provisioned LLM key so the
-	// host-side log-bridge redactor masks it in bridged worker logs. nil disables
-	// per-session registration (bare test servers leave it unset).
+	// SessionSecrets records each session's CM-provisioned secrets (LLM key,
+	// git-credentials bearer) so the host-side log-bridge redactor masks them
+	// in bridged worker logs. nil disables per-session registration (bare test
+	// servers leave it unset).
 	SessionSecrets SessionSecretRegistry
 
 	// Chat carries the static per-process chat backend settings.
@@ -135,8 +164,9 @@ type Server struct {
 	executor executor.Executor
 	tracker  *executor.Tracker
 
-	// sessionSecrets registers/unregisters per-session CM-provisioned LLM keys
-	// with the host-side log-bridge redactor. nil in minimal test servers.
+	// sessionSecrets registers/unregisters per-session CM-provisioned secrets
+	// (LLM key, git-credentials bearer) with the host-side log-bridge redactor.
+	// nil in minimal test servers.
 	sessionSecrets SessionSecretRegistry
 
 	// chat config (populated from ChatConfig at NewServer time)
@@ -156,6 +186,9 @@ type Server struct {
 	reasoningEffort           string
 	caCertFile                string
 	githubHost                string
+	githubConfigured          bool
+	gitCredentialsURL         string
+	llmConfigured             bool
 
 	hub *logbridge.Hub
 
@@ -197,6 +230,11 @@ type Server struct {
 	// worker_extra_env produces the same override on every provisioned session,
 	// and repeating it per request would spam a long-lived server's log.
 	llmOverrideWarnOnce sync.Once
+
+	// gitDeprecationWarnOnce guards the "CM did not provision git credentials"
+	// fallback warning so it logs once per server process, not once per
+	// chat/start request — mirrors llmDeprecationWarnOnce.
+	gitDeprecationWarnOnce sync.Once
 }
 
 // NewServer wires a Server from its dependencies. The replay cache, dedup
@@ -250,6 +288,9 @@ func NewServer(cfg Config) *Server {
 		reasoningEffort:           cfg.Chat.ReasoningEffort,
 		caCertFile:                cfg.Chat.CACertFile,
 		githubHost:                cfg.Chat.GitHubHost,
+		githubConfigured:          cfg.Chat.GitHubConfigured,
+		gitCredentialsURL:         cfg.Chat.GitCredentialsURL,
+		llmConfigured:             cfg.Chat.LLMConfigured,
 		hub:                       cfg.Hub,
 		replay:                    replay,
 		dedup:                     dedup,
@@ -277,17 +318,21 @@ func (s *Server) stdinLock(sessionID string) *sync.Mutex {
 }
 
 // DropSession removes the per-session stdin mutex and forgets the session's
-// CM-provisioned LLM key from the log-bridge redactor once the session's
-// container has exited (wired into the executor OnExit hook). After the
-// container is gone no writer can hold the lock, so the delete/recreate race the
-// retained-entry design guarded against no longer applies, and both the mutex
-// map and the redaction set stop growing without bound over the process lifetime.
+// CM-provisioned secrets (the LLM key, the git-credentials bearer — a session
+// may register either, both, or neither) from the log-bridge redactor once the
+// session's container has exited (wired into the executor OnExit hook). After
+// the container is gone no writer can hold the lock, so the delete/recreate
+// race the retained-entry design guarded against no longer applies, and both
+// the mutex map and the redaction set stop growing without bound over the
+// process lifetime.
 func (s *Server) DropSession(sessionID string) {
 	s.stdinMu.Delete(sessionID)
 
-	// Forget the session's CM-provisioned LLM key now the container has exited:
-	// no more of its log lines can arrive, so it never needs masking again, and
-	// dropping it keeps the redaction set bounded over the process lifetime.
+	// Forget the session's CM-provisioned secrets now the container has
+	// exited: no more of its log lines can arrive, so they never need masking
+	// again, and dropping them keeps the redaction set bounded over the
+	// process lifetime. A single RemoveSessionKey call forgets every secret
+	// registered under this session ID (see logbridge.RedactorRegistry).
 	if s.sessionSecrets != nil {
 		s.sessionSecrets.RemoveSessionKey(sessionID)
 	}

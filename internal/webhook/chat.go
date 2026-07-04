@@ -66,6 +66,33 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fail-closed: a session with no CM-provisioned git-credentials bearer
+	// (protocol v0.5.2, ChatStartPayload.GitCredentialsToken) and no local
+	// github config has no way to authenticate any git operation for its whole
+	// lifetime. Reject before any side effects (run dir, container) rather than
+	// launching a session that can never clone or push.
+	if p.GitCredentialsToken == "" && !s.githubConfigured {
+		s.logger.Warn("chat/start: no git credential source", "session_id", p.SessionID)
+		writeError(w, http.StatusInternalServerError, protocol.CodeInternal,
+			"CM did not provision git credentials and no local github config exists")
+
+		return
+	}
+
+	// Fail-closed: a session with no CM-provisioned llm_endpoint (protocol
+	// v0.5.0, ChatStartPayload.LLMEndpoint) and no local llm_endpoint config has
+	// no way to authenticate any inference call for its whole lifetime. Reject
+	// before any side effects (run dir, container) rather than launching a
+	// session that starts but fails opaquely on the first turn. Mirrors the git
+	// credentials guard above.
+	if p.LLMEndpoint == nil && !s.llmConfigured {
+		s.logger.Warn("chat/start: no llm credential source", "session_id", p.SessionID)
+		writeError(w, http.StatusInternalServerError, protocol.CodeInternal,
+			"CM did not provision an llm endpoint and no local llm_endpoint config exists")
+
+		return
+	}
+
 	// Create the per-session run directory. The container mounts it at
 	// /run/cm-chat; the entrypoint reads resume.jsonl and primer.txt from there.
 	runDir := filepath.Join(s.chatRunDirBase, p.SessionID)
@@ -124,12 +151,48 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CM_CHAT_REPO_URL="+p.RepoURL)
 	}
 
-	// The host the git token is minted for (github.host in serve config). The
-	// worker scopes its git credential helper and GH_HOST to it; without this
-	// the worker falls back to the seeded repo URL's host, which is absent in
-	// cross-project sessions and would leave GHE clones without credentials.
-	if s.githubHost != "" {
-		env = append(env, "CM_GIT_HOST="+s.githubHost)
+	// Git credentials: CM-provisioned per-session bearer (protocol v0.5.2,
+	// ChatStartPayload.GitCredentialsToken) lets the worker fetch fresh,
+	// per-repo git credentials on demand from CM's
+	// GET /api/worker/git-credentials?host=&path= endpoint — the only design
+	// that works for a cross-project, long-lived chat session, since a single
+	// upfront token cannot cover a repo not yet known at chat-start. Both
+	// CM_GIT_CREDENTIALS_URL and CM_GIT_CREDENTIALS_TOKEN are set only when the
+	// payload carries a token.
+	//
+	// Absent means a CM version that predates worker-fetched credentials: the
+	// worker falls back to the shared-secrets/local-config helper (deprecated),
+	// which is only reachable when local github config exists at all — the
+	// guard above already rejected this request otherwise. CM_GIT_HOST (the
+	// GHE host the LOCAL provider mints for) is meaningful ONLY in this
+	// fallback branch: a provisioned session is multi-host by construction (CM
+	// resolves the credential per (host, path) on every worker fetch), so
+	// sending a single static host there would be actively wrong.
+	if p.GitCredentialsToken != "" {
+		env = append(env,
+			"CM_GIT_CREDENTIALS_URL="+s.gitCredentialsURL,
+			"CM_GIT_CREDENTIALS_TOKEN="+p.GitCredentialsToken,
+		)
+
+		// Same documented tradeoff as CM_MCP_API_KEY/LLM_API_KEY above: the
+		// bearer rides plain container env. Register it with the host-side
+		// log-bridge redactor the same way as the provisioned LLM key — but
+		// note this covers ONLY the bearer. The actual git tokens the worker
+		// mints per operation from CM never transit the chat service (worker
+		// -> CM directly), so this registry cannot know them at all; in-worker
+		// redaction (chatwork/redactor.go's fetched-token tracking) is the only
+		// coverage for those. Accepted limitation, not a gap to close here.
+		if s.sessionSecrets != nil {
+			s.sessionSecrets.AddSessionKey(p.SessionID, p.GitCredentialsToken)
+		}
+	} else {
+		if s.githubHost != "" {
+			env = append(env, "CM_GIT_HOST="+s.githubHost)
+		}
+
+		s.gitDeprecationWarnOnce.Do(func() {
+			s.logger.Warn("CM did not provision git credentials; using local github config — this fallback is deprecated")
+		})
 	}
 
 	if p.Resume != nil {

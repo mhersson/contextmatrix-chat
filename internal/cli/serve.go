@@ -87,18 +87,33 @@ func runServe(ctx context.Context, configPath string) error {
 		return err
 	}
 
-	logger.Info("github token provider initialized", "auth_mode", cfg.GitHub.AuthMode)
+	if provider != nil {
+		logger.Info("github token provider initialized", "auth_mode", cfg.GitHub.AuthMode)
+	}
+
+	if localCredentialConfigIncomplete(cfg) {
+		logger.Info("running in CM-provisioned credential mode")
+	}
 
 	// Secrets refresher: writes <secrets_dir>/shared/env, rewritten ahead of each
 	// token expiry. The worker reads /run/cm-secrets/env, which is <shared> bound
-	// read-only into the container.
+	// read-only into the container. Skipped entirely when github is unconfigured
+	// (provider == nil): the refresher's GenerateToken call would panic on a nil
+	// provider, and every session then either carries a CM-provisioned
+	// git-credentials bearer or is fail-closed rejected by the webhook launch
+	// guard.
 	sharedDir := filepath.Join(cfg.SecretsDir, "shared")
-	envFile := filepath.Join(sharedDir, "env")
-	refresher := secrets.NewRefresher(envFile, secrets.EndpointSecrets{
-		APIKey:  cfg.LLMEndpoint.APIKey,
-		BaseURL: cfg.LLMEndpoint.BaseURL,
-		Type:    cfg.LLMEndpoint.Type,
-	}, provider, logger)
+
+	var refresher *secrets.Refresher
+
+	if provider != nil {
+		envFile := filepath.Join(sharedDir, "env")
+		refresher = secrets.NewRefresher(envFile, secrets.EndpointSecrets{
+			APIKey:  cfg.LLMEndpoint.APIKey,
+			BaseURL: cfg.LLMEndpoint.BaseURL,
+			Type:    cfg.LLMEndpoint.Type,
+		}, provider, logger)
+	}
 
 	docker, err := executor.NewClient()
 	if err != nil {
@@ -110,32 +125,42 @@ func runServe(ctx context.Context, configPath string) error {
 	bridge := logbridge.New(hub, nil)
 
 	// The redactor registry is the single source of truth for the log-bridge
-	// redaction set: the local-config LLM key (static), the rotating GitHub
-	// installation token (updated via OnRotate below), and every live session's
-	// CM-provisioned LLM key (registered at chat-start, forgotten on container
-	// exit). Worker stderr and unparsable stdout are bridged to /logs with only
-	// this redactor applied, so every live secret must be in the union — and
-	// composing every rebuild from that union is what keeps a session key from
-	// being clobbered when the token rotates.
-	redactorRegistry := logbridge.NewRedactorRegistry(bridge, []string{cfg.LLMEndpoint.APIKey})
+	// redaction set: the local-config LLM key (static, when configured), the
+	// rotating GitHub installation token (updated via OnRotate below, when
+	// github is configured), and every live session's CM-provisioned secrets
+	// (LLM key, git-credentials bearer — registered at chat-start, forgotten on
+	// container exit). Worker stderr and unparsable stdout are bridged to /logs
+	// with only this redactor applied, so every live secret must be in the
+	// union — and composing every rebuild from that union is what keeps a
+	// session key from being clobbered when the token rotates. An empty
+	// llm_endpoint.api_key (CM-provisioned fallback) contributes nothing, not a
+	// blank placeholder secret.
+	var staticSecrets []string
+	if cfg.LLMEndpoint.APIKey != "" {
+		staticSecrets = append(staticSecrets, cfg.LLMEndpoint.APIKey)
+	}
 
-	// The Refresher knows the new GitHub token the instant it mints it — rebuild
-	// the log-bridge redactor on every rotation (including the immediate first
-	// write) so a live installation token is never bridged to /logs in the
-	// clear. No host-side file watch needed: the Refresher already holds the
-	// token it just minted.
-	refresher.SetOnRotate(func(token string) {
-		redactorRegistry.SetToken(token)
-	})
+	redactorRegistry := logbridge.NewRedactorRegistry(bridge, staticSecrets)
 
 	refreshCtx, refreshCancel := context.WithCancel(context.Background())
 	defer refreshCancel()
 
-	go func() {
-		if err := refresher.Run(refreshCtx); err != nil {
-			logger.Error("secrets refresher stopped with error", "error", err)
-		}
-	}()
+	if refresher != nil {
+		// The Refresher knows the new GitHub token the instant it mints it —
+		// rebuild the log-bridge redactor on every rotation (including the
+		// immediate first write) so a live installation token is never bridged
+		// to /logs in the clear. No host-side file watch needed: the Refresher
+		// already holds the token it just minted.
+		refresher.SetOnRotate(func(token string) {
+			redactorRegistry.SetToken(token)
+		})
+
+		go func() {
+			if err := refresher.Run(refreshCtx); err != nil {
+				logger.Error("secrets refresher stopped with error", "error", err)
+			}
+		}()
+	}
 
 	var srv *webhook.Server
 
@@ -205,6 +230,9 @@ func runServe(ctx context.Context, configPath string) error {
 			ReasoningEffort:           cfg.ReasoningEffort,
 			CACertFile:                cfg.CACertFile,
 			GitHubHost:                cfg.GitHub.BareHost(),
+			GitHubConfigured:          cfg.GitHub.Configured(),
+			GitCredentialsURL:         composeGitCredentialsURL(base),
+			LLMConfigured:             cfg.LLMEndpoint.APIKey != "",
 		},
 		Replay:   replay,
 		Dedup:    dedup,
@@ -348,9 +376,34 @@ func composeMCPURL(base string) string {
 	return strings.TrimRight(base, "/") + "/mcp"
 }
 
+// composeGitCredentialsURL builds CM's worker git-credentials endpoint URL:
+// <base>/api/worker/git-credentials, with any trailing slash on base trimmed.
+// Forwarded to the worker as CM_GIT_CREDENTIALS_URL alongside the chat-start
+// payload's GitCredentialsToken (protocol v0.5.2) so the worker can fetch
+// fresh, per-repo git credentials on demand.
+func composeGitCredentialsURL(base string) string {
+	return strings.TrimRight(base, "/") + "/api/worker/git-credentials"
+}
+
+// localCredentialConfigIncomplete reports whether either local credential
+// block — github or llm_endpoint — is left unconfigured, meaning
+// ContextMatrix must provision that credential per session for any launch to
+// succeed (see the webhook package's fail-closed launch guard).
+func localCredentialConfigIncomplete(cfg *config.ServiceConfig) bool {
+	return !cfg.GitHub.Configured() || cfg.LLMEndpoint.APIKey == ""
+}
+
 // newTokenProvider selects the GitHub token provider per auth_mode, mirroring
-// the runner/agent: app -> NewAppProvider, pat -> NewPATProvider.
+// the runner/agent: app -> NewAppProvider, pat -> NewPATProvider. An
+// unconfigured github block (Configured() false) returns (nil, nil):
+// ContextMatrix provisions git credentials per session instead (protocol
+// v0.5.2, ChatStartPayload.GitCredentialsToken), and the caller skips
+// constructing the shared secrets refresher entirely.
 func newTokenProvider(gh config.GitHubConfig) (secrets.TokenGenerator, error) {
+	if !gh.Configured() {
+		return nil, nil
+	}
+
 	switch gh.AuthMode {
 	case "app":
 		p, err := githubauth.NewAppProvider(

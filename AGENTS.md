@@ -146,14 +146,32 @@ we got here.
 6. **Board operations go over MCP**, never raw HTTP. The worker dials
    `<container_contextmatrix_url>/mcp`, lists board tools, and offers them to the
    model alongside the filesystem/shell tools rooted at `/workspace`.
-7. **Secrets are staged, never baked.** serve writes `<secrets_dir>/shared/env`
-   (LLM endpoint API key + rotating GitHub token) and bind-mounts it read-only at
-   `/run/cm-secrets`. The worker's git credential helper reads the token on each
-   call, so rotation is transparent. The helper and `GH_HOST` are scoped to
-   `github.host` (forwarded as `CM_GIT_HOST`; falls back to the seeded repo
-   URL's host, then github.com), so GHE clones authenticate even in
-   cross-project sessions. Secrets are redacted from all tool output and
-   events.
+7. **Git credentials are fetched per-repo from CM, in provisioned mode
+   (default, `CM_GIT_CREDENTIALS_TOKEN` set).** At boot, `Run` stages
+   `CM_GIT_CREDENTIALS_URL`/`CM_GIT_CREDENTIALS_TOKEN` into a 0600 scratch
+   config file and registers the global v2 git credential helper and `gh`
+   wrapper; both read only that file, never `os.Getenv`, because the model's
+   git/`gh` calls run through the harness bash tool's scrubbed environment.
+   On every git or `gh` call, the helper/wrapper GETs CM's
+   `/api/worker/git-credentials?host=&path=` with the session's bearer and
+   the target repo's `(host, path)` (from its `origin` remote; empty for a
+   no-origin call, which CM resolves to the instance-wide credential), and
+   mints a fresh token — so rotation is transparent and one session can span
+   multiple projects/hosts. A fetch failure logs one stderr note (never a
+   credential) and continues rather than failing the call: git
+   surfaces its own auth error; `gh` still execs, unauthenticated.
+   Worker-minted tokens are recorded to a scratch file the redactor polls, so
+   they're masked from tool output/events too.
+
+   **Fallback mode (deprecated):** when the operator configures a local
+   `github` block instead of relying on CM-provisioned credentials, serve
+   writes `<secrets_dir>/shared/env` (LLM endpoint API key + one rotating
+   GitHub token) and bind-mounts it read-only at `/run/cm-secrets`; the v1
+   helper and `gh` wrapper read that token on every call. The helper and
+   `GH_HOST` are scoped to `github.host` (forwarded as `CM_GIT_HOST`; falls
+   back to the seeded repo URL's host, then `github.com`) — one host for the
+   whole session, not per-repo. Secrets are redacted from all tool output and
+   events in both modes.
 8. **task-skills come from ContextMatrix** (the single source of truth): serve
    fetches a `{git_remote_url, ref}` pointer from CM, clones it on the host, and
    bind-mounts the clone read-only at `/run/cm-skills`. The model engages them

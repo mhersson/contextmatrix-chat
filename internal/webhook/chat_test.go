@@ -178,23 +178,27 @@ func (f *fakeExecutor) Launched() []executor.LaunchSpec {
 }
 
 // fakeSessionSecrets records AddSessionKey/RemoveSessionKey calls so chat/start
-// and cleanup tests can assert the handler registers a payload LLM key and
-// forgets it. It satisfies SessionSecretRegistry.
+// and cleanup tests can assert the handler registers payload secrets (the LLM
+// key, the git-credentials bearer) and forgets them. It satisfies
+// SessionSecretRegistry. added holds every key registered per session, not
+// just the last one — a session can carry both a provisioned LLM key and a
+// provisioned git-credentials bearer simultaneously, and a naive single-value
+// map would silently let the second AddSessionKey call clobber the first.
 type fakeSessionSecrets struct {
 	mu      sync.Mutex
-	added   map[string]string
+	added   map[string][]string
 	removed []string
 }
 
 func newFakeSessionSecrets() *fakeSessionSecrets {
-	return &fakeSessionSecrets{added: make(map[string]string)}
+	return &fakeSessionSecrets{added: make(map[string][]string)}
 }
 
 func (f *fakeSessionSecrets) AddSessionKey(sessionID, key string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.added[sessionID] = key
+	f.added[sessionID] = append(f.added[sessionID], key)
 }
 
 func (f *fakeSessionSecrets) RemoveSessionKey(sessionID string) {
@@ -204,13 +208,30 @@ func (f *fakeSessionSecrets) RemoveSessionKey(sessionID string) {
 	f.removed = append(f.removed, sessionID)
 }
 
+// addedKey returns the first key registered for sessionID (existing tests
+// register exactly one). Use addedKeys to assert on a session that registers
+// more than one secret.
 func (f *fakeSessionSecrets) addedKey(sessionID string) (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	v, ok := f.added[sessionID]
+	keys := f.added[sessionID]
+	if len(keys) == 0 {
+		return "", false
+	}
 
-	return v, ok
+	return keys[0], true
+}
+
+// addedKeys returns every key registered for sessionID, in registration order.
+func (f *fakeSessionSecrets) addedKeys(sessionID string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([]string, len(f.added[sessionID]))
+	copy(out, f.added[sessionID])
+
+	return out
 }
 
 func (f *fakeSessionSecrets) removedSessions() []string {
@@ -241,6 +262,14 @@ func discardLogger() *slog.Logger {
 
 // newChatServer builds a Server with a real Tracker and a fakeExecutor.
 // chatRunDirBase is set to a temp directory so file-writing tests stay hermetic.
+// GitHubConfigured and LLMConfigured are set to represent an operator with
+// local github/llm_endpoint config present (the pre-provisioning baseline):
+// none of the payloads built by the tests using this helper carry a
+// GitCredentialsToken or LLMEndpoint, so leaving either false would trip the
+// respective fail-closed launch guard (see TestChatStart_GitCredentials* and
+// TestChatStart_LLMEndpoint*) and turn every one of those tests into a 500.
+// Tests that specifically exercise a guard build their own bespoke Server
+// with the relevant flag left unset.
 func newChatServer(t *testing.T) (*Server, *executor.Tracker, *fakeExecutor) {
 	t.Helper()
 
@@ -253,13 +282,15 @@ func newChatServer(t *testing.T) (*Server, *executor.Tracker, *fakeExecutor) {
 		Tracker:        tracker,
 		SkillsResolver: fakeSkillsResolver{dir: "/host/skills"},
 		Chat: ChatConfig{
-			Image:          testImage,
-			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
-			ChatRunDirBase: t.TempDir(),
-			MemoryBytes:    512 * 1024 * 1024,
-			PidsLimit:      128,
-			MaxConcurrent:  10,
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MemoryBytes:      512 * 1024 * 1024,
+			PidsLimit:        128,
+			MaxConcurrent:    10,
+			GitHubConfigured: true,
+			LLMConfigured:    true,
 		},
 		Logger: discardLogger(),
 	})
@@ -539,6 +570,8 @@ func TestChatStart_ConfigEnvForwarded(t *testing.T) {
 			SecretsHostDir:            "/host/secrets",
 			ChatRunDirBase:            t.TempDir(),
 			MaxConcurrent:             10,
+			GitHubConfigured:          true,
+			LLMConfigured:             true,
 			ToolOutputMaxBytes:        65536,
 			CompactionThreshold:       0.75,
 			CompactionKeepRecentTurns: 4,
@@ -579,12 +612,14 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 			Executor: fe,
 			Tracker:  tracker,
 			Chat: ChatConfig{
-				Image:           testImage,
-				MCPURL:          testMCPURL,
-				SecretsHostDir:  "/host/secrets",
-				ChatRunDirBase:  t.TempDir(),
-				MaxConcurrent:   10,
-				ReasoningEffort: "medium",
+				Image:            testImage,
+				MCPURL:           testMCPURL,
+				SecretsHostDir:   "/host/secrets",
+				ChatRunDirBase:   t.TempDir(),
+				MaxConcurrent:    10,
+				ReasoningEffort:  "medium",
+				GitHubConfigured: true,
+				LLMConfigured:    true,
 			},
 			Logger: discardLogger(),
 		})
@@ -612,11 +647,13 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 			Executor: fe,
 			Tracker:  tracker,
 			Chat: ChatConfig{
-				Image:          testImage,
-				MCPURL:         testMCPURL,
-				SecretsHostDir: "/host/secrets",
-				ChatRunDirBase: t.TempDir(),
-				MaxConcurrent:  10,
+				Image:            testImage,
+				MCPURL:           testMCPURL,
+				SecretsHostDir:   "/host/secrets",
+				ChatRunDirBase:   t.TempDir(),
+				MaxConcurrent:    10,
+				GitHubConfigured: true,
+				LLMConfigured:    true,
 			},
 			Logger: discardLogger(),
 		})
@@ -646,12 +683,14 @@ func TestChatStart_GitHostEnv(t *testing.T) {
 			Executor: fe,
 			Tracker:  tracker,
 			Chat: ChatConfig{
-				Image:          testImage,
-				MCPURL:         testMCPURL,
-				SecretsHostDir: "/host/secrets",
-				ChatRunDirBase: t.TempDir(),
-				MaxConcurrent:  10,
-				GitHubHost:     "acme.ghe.com",
+				Image:            testImage,
+				MCPURL:           testMCPURL,
+				SecretsHostDir:   "/host/secrets",
+				ChatRunDirBase:   t.TempDir(),
+				MaxConcurrent:    10,
+				GitHubHost:       "acme.ghe.com",
+				GitHubConfigured: true,
+				LLMConfigured:    true,
 			},
 			Logger: discardLogger(),
 		})
@@ -680,11 +719,13 @@ func TestChatStart_GitHostEnv(t *testing.T) {
 			Executor: fe,
 			Tracker:  tracker,
 			Chat: ChatConfig{
-				Image:          testImage,
-				MCPURL:         testMCPURL,
-				SecretsHostDir: "/host/secrets",
-				ChatRunDirBase: t.TempDir(),
-				MaxConcurrent:  10,
+				Image:            testImage,
+				MCPURL:           testMCPURL,
+				SecretsHostDir:   "/host/secrets",
+				ChatRunDirBase:   t.TempDir(),
+				MaxConcurrent:    10,
+				GitHubConfigured: true,
+				LLMConfigured:    true,
 			},
 			Logger: discardLogger(),
 		})
@@ -712,12 +753,14 @@ func TestChatStart_CACertMountAndEnv(t *testing.T) {
 			Executor: fe,
 			Tracker:  tracker,
 			Chat: ChatConfig{
-				Image:          testImage,
-				MCPURL:         testMCPURL,
-				SecretsHostDir: "/host/secrets",
-				ChatRunDirBase: t.TempDir(),
-				MaxConcurrent:  10,
-				CACertFile:     "/host/ca.pem",
+				Image:            testImage,
+				MCPURL:           testMCPURL,
+				SecretsHostDir:   "/host/secrets",
+				ChatRunDirBase:   t.TempDir(),
+				MaxConcurrent:    10,
+				CACertFile:       "/host/ca.pem",
+				GitHubConfigured: true,
+				LLMConfigured:    true,
 			},
 			Logger: discardLogger(),
 		})
@@ -773,11 +816,13 @@ func TestChatStart_NoSkillsWhenResolverEmpty(t *testing.T) {
 		Tracker:        tracker,
 		SkillsResolver: fakeSkillsResolver{dir: ""},
 		Chat: ChatConfig{
-			Image:          testImage,
-			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
-			ChatRunDirBase: t.TempDir(),
-			MaxConcurrent:  10,
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MaxConcurrent:    10,
+			GitHubConfigured: true,
+			LLMConfigured:    true,
 		},
 		Logger: discardLogger(),
 	})
@@ -897,11 +942,13 @@ func TestChatStart_LLMEndpointAbsent_DeprecationWarnOncePerProcess(t *testing.T)
 		Executor: fe,
 		Tracker:  tracker,
 		Chat: ChatConfig{
-			Image:          testImage,
-			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
-			ChatRunDirBase: t.TempDir(),
-			MaxConcurrent:  10,
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MaxConcurrent:    10,
+			GitHubConfigured: true,
+			LLMConfigured:    true,
 		},
 		Logger: logger,
 	})
@@ -934,11 +981,12 @@ func TestChatStart_RegistersLLMKeyForRedaction(t *testing.T) {
 		Tracker:        tracker,
 		SessionSecrets: fss,
 		Chat: ChatConfig{
-			Image:          testImage,
-			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
-			ChatRunDirBase: t.TempDir(),
-			MaxConcurrent:  10,
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MaxConcurrent:    10,
+			GitHubConfigured: true,
 		},
 		Logger: discardLogger(),
 	})
@@ -974,11 +1022,13 @@ func TestChatStart_NoLLMEndpoint_NoRegistration(t *testing.T) {
 		Tracker:        tracker,
 		SessionSecrets: fss,
 		Chat: ChatConfig{
-			Image:          testImage,
-			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
-			ChatRunDirBase: t.TempDir(),
-			MaxConcurrent:  10,
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MaxConcurrent:    10,
+			GitHubConfigured: true,
+			LLMConfigured:    true,
 		},
 		Logger: discardLogger(),
 	})
@@ -1007,11 +1057,12 @@ func TestChatStart_LaunchFailureUnregistersLLMKey(t *testing.T) {
 		Tracker:        tracker,
 		SessionSecrets: fss,
 		Chat: ChatConfig{
-			Image:          testImage,
-			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
-			ChatRunDirBase: t.TempDir(),
-			MaxConcurrent:  10,
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MaxConcurrent:    10,
+			GitHubConfigured: true,
 		},
 		Logger: discardLogger(),
 	})
@@ -1072,12 +1123,13 @@ func TestChatStart_WorkerExtraEnvLLMOverrideWarns(t *testing.T) {
 		Executor: fe,
 		Tracker:  tracker,
 		Chat: ChatConfig{
-			Image:          testImage,
-			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
-			ChatRunDirBase: t.TempDir(),
-			MaxConcurrent:  10,
-			WorkerExtraEnv: map[string]string{"LLM_API_KEY": "operator-shared-secret-value"},
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MaxConcurrent:    10,
+			WorkerExtraEnv:   map[string]string{"LLM_API_KEY": "operator-shared-secret-value"},
+			GitHubConfigured: true,
 		},
 		Logger: logger,
 	})
@@ -1096,6 +1148,386 @@ func TestChatStart_WorkerExtraEnvLLMOverrideWarns(t *testing.T) {
 	assert.Contains(t, logged, "LLM_API_KEY", "the overriding env NAME must be logged for operator visibility")
 	assert.NotContains(t, logged, "operator-shared-secret-value", "the operator env VALUE must never be logged")
 	assert.NotContains(t, logged, "sk-cm-provisioned-000000", "the CM-provisioned key must never be logged")
+}
+
+// ---- llm endpoint fail-closed guard -------------------------------------------
+
+// wantNoLLMEndpointFailure is the exact fail-closed message chat/start returns
+// when CM did not provision an llm_endpoint AND the service has no local
+// llm_endpoint config to fall back on. Mirrors wantNoGitCredentialsFailure.
+const wantNoLLMEndpointFailure = "CM did not provision an llm endpoint and no local llm_endpoint config exists"
+
+// TestChatStart_LLMEndpointAbsent_NoLocalConfig_Fails verifies the fail-closed
+// launch guard for the LLM channel: no payload llm_endpoint AND no local
+// llm_endpoint config means the worker has no way to call the model for its
+// whole lifetime, so chat/start must fail before any container is launched.
+// GitHubConfigured is set so only the LLM guard is under test here. Mirrors
+// TestChatStart_GitCredentialsAbsent_NoLocalGitHub_Fails.
+func TestChatStart_LLMEndpointAbsent_NoLocalConfig_Fails(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+
+	srv := NewServer(Config{
+		APIKey:   testAPIKey,
+		Executor: fe,
+		Tracker:  tracker,
+		Chat: ChatConfig{
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MaxConcurrent:    10,
+			GitHubConfigured: true,
+			// LLMConfigured intentionally left false.
+		},
+		Logger: discardLogger(),
+	})
+
+	body := mustJSON(t, protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"})
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+
+	assert.NotEqual(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), wantNoLLMEndpointFailure)
+	assert.Empty(t, fe.Launched(), "no container launch without any llm credential source")
+}
+
+// TestChatStart_LLMEndpointPayloadPresent_NoLocalConfig_Proceeds verifies that
+// a CM-provisioned llm_endpoint on the payload is sufficient on its own: the
+// guard must not fire regardless of local llm_endpoint config state.
+func TestChatStart_LLMEndpointPayloadPresent_NoLocalConfig_Proceeds(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+
+	srv := NewServer(Config{
+		APIKey:   testAPIKey,
+		Executor: fe,
+		Tracker:  tracker,
+		Chat: ChatConfig{
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MaxConcurrent:    10,
+			GitHubConfigured: true,
+			// LLMConfigured intentionally left false: the payload alone must be
+			// sufficient regardless of local config state.
+		},
+		Logger: discardLogger(),
+	})
+
+	payload := protocol.ChatStartPayload{
+		SessionID: testSession,
+		Primer:    "hi",
+		LLMEndpoint: &protocol.LLMEndpoint{
+			Type:   "openai",
+			APIKey: "sk-payload-key-123456",
+		},
+	}
+	body := mustJSON(t, payload)
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	envMap := envToMap(fe.Launched()[0].Env)
+	assert.Equal(t, "sk-payload-key-123456", envMap["LLM_API_KEY"])
+}
+
+// TestChatStart_LLMEndpointAbsent_LocalConfigured_Proceeds verifies that
+// without a payload endpoint, but with local llm_endpoint config present,
+// chat/start proceeds via today's shared-secrets/local-config behavior (the
+// once-per-process deprecation warning is covered separately by
+// TestChatStart_LLMEndpointAbsent_DeprecationWarnOncePerProcess). Mirrors
+// TestChatStart_GitCredentialsAbsent_FallbackWhenConfigured.
+func TestChatStart_LLMEndpointAbsent_LocalConfigured_Proceeds(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+
+	srv := NewServer(Config{
+		APIKey:   testAPIKey,
+		Executor: fe,
+		Tracker:  tracker,
+		Chat: ChatConfig{
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MaxConcurrent:    10,
+			GitHubConfigured: true,
+			LLMConfigured:    true,
+		},
+		Logger: discardLogger(),
+	})
+
+	body := mustJSON(t, protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"})
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	launched := fe.Launched()
+	require.Len(t, launched, 1)
+
+	for _, key := range []string{"LLM_API_KEY", "LLM_BASE_URL", "LLM_TYPE"} {
+		_, has := envToMap(launched[0].Env)[key]
+		assert.False(t, has, "%s must not be set when CM did not provision an llm endpoint", key)
+	}
+}
+
+// ---- git credentials (protocol v0.5.2, ChatStartPayload.GitCredentialsToken) -
+
+// wantNoGitCredentialsFailure is the exact fail-closed message chat/start
+// returns when CM did not provision a git-credentials bearer AND the service
+// has no local github config to fall back on.
+const wantNoGitCredentialsFailure = "CM did not provision git credentials and no local github config exists"
+
+// TestChatStart_GitCredentialsTokenFromPayload verifies that a CM-provisioned
+// GitCredentialsToken is delivered to the worker as CM_GIT_CREDENTIALS_URL/
+// CM_GIT_CREDENTIALS_TOKEN, and that CM_GIT_HOST is withheld even when
+// githubHost is configured — provisioned mode is multi-host by construction
+// (CM resolves the credential per (host, path) on every worker fetch), so a
+// single static host would be actively wrong here.
+func TestChatStart_GitCredentialsTokenFromPayload(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+
+	srv := NewServer(Config{
+		APIKey:   testAPIKey,
+		Executor: fe,
+		Tracker:  tracker,
+		Chat: ChatConfig{
+			Image:             testImage,
+			MCPURL:            testMCPURL,
+			SecretsHostDir:    "/host/secrets",
+			ChatRunDirBase:    t.TempDir(),
+			MaxConcurrent:     10,
+			GitHubHost:        "acme.ghe.com",
+			GitCredentialsURL: "http://cm:8080/api/worker/git-credentials",
+			LLMConfigured:     true,
+		},
+		Logger: discardLogger(),
+	})
+
+	payload := protocol.ChatStartPayload{
+		SessionID:           testSession,
+		Primer:              "hi",
+		GitCredentialsToken: "sess-abc123.deadbeef",
+	}
+	body := mustJSON(t, payload)
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	envMap := envToMap(fe.Launched()[0].Env)
+	assert.Equal(t, "http://cm:8080/api/worker/git-credentials", envMap["CM_GIT_CREDENTIALS_URL"])
+	assert.Equal(t, "sess-abc123.deadbeef", envMap["CM_GIT_CREDENTIALS_TOKEN"])
+
+	_, hasGitHost := envMap["CM_GIT_HOST"]
+	assert.False(t, hasGitHost, "CM_GIT_HOST must not be set in provisioned mode: it is multi-host by construction")
+}
+
+// TestChatStart_GitCredentialsTokenRegisteredForRedaction verifies the payload
+// bearer is registered with the host-side log-bridge redactor, the same
+// mechanism as the provisioned LLM key — worker-fetched git tokens themselves
+// never transit the chat service (see credhelper.go), but this bearer does,
+// so it is the one thing this registry CAN cover for the git-credentials flow.
+func TestChatStart_GitCredentialsTokenRegisteredForRedaction(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+	fss := newFakeSessionSecrets()
+
+	srv := NewServer(Config{
+		APIKey:         testAPIKey,
+		Executor:       fe,
+		Tracker:        tracker,
+		SessionSecrets: fss,
+		Chat: ChatConfig{
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			SecretsHostDir: "/host/secrets",
+			ChatRunDirBase: t.TempDir(),
+			MaxConcurrent:  10,
+			LLMConfigured:  true,
+		},
+		Logger: discardLogger(),
+	})
+
+	payload := protocol.ChatStartPayload{
+		SessionID:           testSession,
+		Primer:              "hi",
+		GitCredentialsToken: "sess-abc123.deadbeef",
+	}
+	body := mustJSON(t, payload)
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	keys := fss.addedKeys(testSession)
+	assert.Contains(t, keys, "sess-abc123.deadbeef", "the git-credentials bearer must be registered for redaction")
+}
+
+// TestChatStart_GitCredentialsAndLLMKeyBothRegistered is the regression guard
+// for the registry's single-value-per-session clobber: a session commonly
+// carries BOTH a provisioned LLM key and a provisioned git-credentials bearer
+// (both are independent multi-user-mode features), and registering the
+// second must not silently un-redact the first.
+func TestChatStart_GitCredentialsAndLLMKeyBothRegistered(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+	fss := newFakeSessionSecrets()
+
+	srv := NewServer(Config{
+		APIKey:         testAPIKey,
+		Executor:       fe,
+		Tracker:        tracker,
+		SessionSecrets: fss,
+		Chat: ChatConfig{
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			SecretsHostDir: "/host/secrets",
+			ChatRunDirBase: t.TempDir(),
+			MaxConcurrent:  10,
+		},
+		Logger: discardLogger(),
+	})
+
+	payload := protocol.ChatStartPayload{
+		SessionID:           testSession,
+		Primer:              "hi",
+		GitCredentialsToken: "sess-abc123.deadbeef",
+		LLMEndpoint:         &protocol.LLMEndpoint{Type: "openai", APIKey: "sk-payload-key-123456"},
+	}
+	body := mustJSON(t, payload)
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	keys := fss.addedKeys(testSession)
+	assert.Contains(t, keys, "sess-abc123.deadbeef", "the git-credentials bearer must be registered")
+	assert.Contains(t, keys, "sk-payload-key-123456", "the LLM key must still be registered, not clobbered")
+}
+
+// TestChatStart_GitCredentialsAbsent_FallbackWhenConfigured verifies that
+// without a payload token, but with local github config present, chat/start
+// proceeds via today's shared-secrets behavior — CM_GIT_HOST is still sent
+// when githubHost is configured — plus a once-per-process deprecation warning
+// (mirroring llmDeprecationWarnOnce), not once per request.
+func TestChatStart_GitCredentialsAbsent_FallbackWhenConfigured(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+
+	var logBuf bytes.Buffer
+
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	srv := NewServer(Config{
+		APIKey:   testAPIKey,
+		Executor: fe,
+		Tracker:  tracker,
+		Chat: ChatConfig{
+			Image:            testImage,
+			MCPURL:           testMCPURL,
+			SecretsHostDir:   "/host/secrets",
+			ChatRunDirBase:   t.TempDir(),
+			MaxConcurrent:    10,
+			GitHubHost:       "acme.ghe.com",
+			GitHubConfigured: true,
+			LLMConfigured:    true,
+		},
+		Logger: logger,
+	})
+
+	const wantMsg = "CM did not provision git credentials; using local github config — this fallback is deprecated"
+
+	for _, sess := range []string{"sess-fallback-1", "sess-fallback-2", "sess-fallback-3"} {
+		body := mustJSON(t, protocol.ChatStartPayload{SessionID: sess, Primer: "hi"})
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+		require.Equal(t, http.StatusAccepted, w.Code, "session %s body: %s", sess, w.Body.String())
+
+		launched := fe.Launched()
+		envMap := envToMap(launched[len(launched)-1].Env)
+		assert.Equal(t, "acme.ghe.com", envMap["CM_GIT_HOST"], "session %s", sess)
+
+		_, hasCredsURL := envMap["CM_GIT_CREDENTIALS_URL"]
+		assert.False(t, hasCredsURL, "no CM_GIT_CREDENTIALS_URL without a payload token (session %s)", sess)
+	}
+
+	assert.Equal(t, 1, strings.Count(logBuf.String(), wantMsg),
+		"deprecation warning must be logged exactly once per process across multiple chat/start requests")
+}
+
+// TestChatStart_GitCredentialsAbsent_NoLocalGitHub_Fails verifies the
+// fail-closed launch guard: no payload token AND no local github config means
+// the worker has no way to authenticate any git operation for its whole
+// lifetime, so chat/start must fail before any container is launched.
+func TestChatStart_GitCredentialsAbsent_NoLocalGitHub_Fails(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+
+	srv := NewServer(Config{
+		APIKey:   testAPIKey,
+		Executor: fe,
+		Tracker:  tracker,
+		Chat: ChatConfig{
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			SecretsHostDir: "/host/secrets",
+			ChatRunDirBase: t.TempDir(),
+			MaxConcurrent:  10,
+			// GitHubConfigured intentionally left false.
+		},
+		Logger: discardLogger(),
+	})
+
+	body := mustJSON(t, protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"})
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+
+	assert.NotEqual(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), wantNoGitCredentialsFailure)
+	assert.Empty(t, fe.Launched(), "no container launch without any git credential source")
+}
+
+// TestChatStart_LaunchFailureUnregistersGitCredentialsKey mirrors
+// TestChatStart_LaunchFailureUnregistersLLMKey for the git-credentials bearer:
+// when Launch fails after the key is registered, the handler must forget it —
+// otherwise a leak persists for the process lifetime (DropSession's OnExit
+// path never fires for a container that never started).
+func TestChatStart_LaunchFailureUnregistersGitCredentialsKey(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker, launchErr: errors.New("boom")}
+	fss := newFakeSessionSecrets()
+
+	srv := NewServer(Config{
+		APIKey:         testAPIKey,
+		Executor:       fe,
+		Tracker:        tracker,
+		SessionSecrets: fss,
+		Chat: ChatConfig{
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			SecretsHostDir: "/host/secrets",
+			ChatRunDirBase: t.TempDir(),
+			MaxConcurrent:  10,
+			LLMConfigured:  true,
+		},
+		Logger: discardLogger(),
+	})
+
+	payload := protocol.ChatStartPayload{
+		SessionID:           testSession,
+		Primer:              "hi",
+		GitCredentialsToken: "sess-abc123.deadbeef",
+	}
+	body := mustJSON(t, payload)
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusBadGateway, w.Code, "body: %s", w.Body.String())
+
+	keys := fss.addedKeys(testSession)
+	assert.Contains(t, keys, "sess-abc123.deadbeef", "the key is registered before Launch is attempted")
+	assert.Equal(t, []string{testSession}, fss.removedSessions(),
+		"a failed launch must unregister the session's secrets")
 }
 
 // ---- /chat/end --------------------------------------------------------------

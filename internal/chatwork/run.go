@@ -56,16 +56,52 @@ func Run(ctx context.Context) error {
 	llmKey := envOrSecret("LLM_API_KEY", src)
 	llmBaseURL := envOrSecret("LLM_BASE_URL", src)
 	llmType := envOrSecret("LLM_TYPE", src)
-	gitToken := src.Get("CM_GIT_TOKEN")
 
-	// 2. Configure the git credential helper so clones authenticate via the
-	// rotating token in the secrets env file. Scoped to the host the token is
-	// minted for (GHE-aware) so the token is never offered to an unrelated
-	// https host. Non-fatal: a degraded git-auth environment must not kill an
+	// Backstop for handleChatStart's fail-closed launch guard: that guard
+	// should already have refused to start any session with neither a
+	// CM-provisioned llm_endpoint nor a local llm_endpoint config, so an empty
+	// llmKey here means the guard was bypassed — e.g. an older chat service
+	// paired with a newer, more permissive CM. Fail fast with a legible error
+	// instead of letting the harness LLM client fail opaquely on the first turn.
+	if err := validateLLMKey(llmKey); err != nil {
+		return err
+	}
+
+	gitToken := src.Get("CM_GIT_TOKEN")
+	gitCredentialsToken := os.Getenv("CM_GIT_CREDENTIALS_TOKEN")
+
+	// 2. Configure git credential auth. Provisioned mode (CM_GIT_CREDENTIALS_TOKEN
+	// set, protocol v0.5.2): stage a 0600 config file the git-credential/
+	// gh-wrapper subcommands read from (see gitCredentialsConfigPath's doc for
+	// why NOT env — they run through the harness bash tool's scrubbed
+	// environment) and register the v2 helper GLOBALLY, since a provisioned
+	// session is multi-host by construction. Absent: today's host-scoped,
+	// shared-secrets-file helper (deprecated fallback) applies unchanged. Both
+	// branches are non-fatal: a degraded git-auth environment must not kill an
 	// otherwise-usable interactive session.
-	ghHost := gitHost()
-	if err := ConfigureGitCredentialHelper(ctx, secretsEnvPath, ghHost); err != nil {
-		slog.Warn("git credential helper setup failed; continuing without git auth", "error", err)
+	var selfPath string
+
+	if gitCredentialsToken != "" {
+		if err := secrets.WriteEnvFile(gitCredentialsConfigPath(), map[string]string{
+			"CM_GIT_CREDENTIALS_URL":   os.Getenv("CM_GIT_CREDENTIALS_URL"),
+			"CM_GIT_CREDENTIALS_TOKEN": gitCredentialsToken,
+		}); err != nil {
+			return fmt.Errorf("stage git-credentials config: %w", err)
+		}
+
+		selfPath, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve self path for git credential helper: %w", err)
+		}
+
+		if err := ConfigureGitCredentialHelperV2(ctx, selfPath); err != nil {
+			slog.Warn("git credential helper v2 setup failed; continuing without git auth", "error", err)
+		}
+	} else {
+		ghHost := gitHost()
+		if err := ConfigureGitCredentialHelper(ctx, secretsEnvPath, ghHost); err != nil {
+			slog.Warn("git credential helper setup failed; continuing without git auth", "error", err)
+		}
 	}
 
 	// 3. Clone the project repo into /workspace (best-effort: a clone failure
@@ -124,7 +160,7 @@ func Run(ctx context.Context) error {
 		mcpBase = caHTTPClient.Transport
 	}
 
-	reg, bridge, err := buildToolRegistry(ctx, gitToken, mcpBase)
+	reg, bridge, err := buildToolRegistry(ctx, gitToken, selfPath, mcpBase)
 	if err != nil {
 		return err
 	}
@@ -148,8 +184,10 @@ func Run(ctx context.Context) error {
 
 	// 8. Redactor: mask the secrets from all tool output and event data. Backed
 	// by a watcher so a token the host rotates mid-session (App installation
-	// tokens expire ~60m) is picked up without restarting the worker.
-	redWatcher, err := newRedactorWatcher(secretsEnvPath, os.Getenv("CM_MCP_API_KEY"), llmKey)
+	// tokens expire ~60m) — or a fresh per-repo git token the credential-helper/
+	// gh-wrapper subcommands fetch mid-session (see fetchedTokensPath) — is
+	// picked up without restarting the worker.
+	redWatcher, err := newRedactorWatcher(secretsEnvPath, os.Getenv("CM_MCP_API_KEY"), llmKey, gitCredentialsToken, fetchedTokensPath())
 	if err != nil {
 		return fmt.Errorf("build redactor: %w", err)
 	}
@@ -269,12 +307,18 @@ func epochLoop(
 
 // buildToolRegistry assembles the model-facing tool registry: filesystem/shell
 // tools rooted at /workspace, the optional skill tool, and the MCP board tools
-// from the Connect bridge. gitToken, when non-empty, gets a `gh` PATH shim
-// installed for the bash tool so the model can run `gh` (e.g. `gh pr create`)
-// with a token read fresh per invocation. mcpBase is the outbound RoundTripper
-// for the MCP bridge (nil uses http.DefaultTransport); it carries the extra CA
-// trust when ca_cert_file is configured.
-func buildToolRegistry(ctx context.Context, gitToken string, mcpBase http.RoundTripper) (*tools.Registry, *mcpbridge.Bridge, error) {
+// from the Connect bridge. mcpBase is the outbound RoundTripper for the MCP
+// bridge (nil uses http.DefaultTransport); it carries the extra CA trust when
+// ca_cert_file is configured.
+//
+// gh wrapper selection: selfPath non-empty means CM provisioned git
+// credentials this session (protocol v0.5.2) — install the v2 wrapper, which
+// fetches a fresh per-repo credential from CM on every gh invocation via
+// selfPath's hidden "gh-wrapper" subcommand. Otherwise, gitToken non-empty
+// (today's shared-secrets fallback) installs the v1 wrapper, which reads
+// CM_GIT_TOKEN fresh from the secrets file per invocation. Neither leaves gh
+// unavailable — a footgun the model discovers itself if it tries to use it.
+func buildToolRegistry(ctx context.Context, gitToken, selfPath string, mcpBase http.RoundTripper) (*tools.Registry, *mcpbridge.Bridge, error) {
 	mcpURL := os.Getenv("CM_MCP_URL")
 	mcpAPIKey := os.Getenv("CM_MCP_API_KEY")
 
@@ -287,7 +331,22 @@ func buildToolRegistry(ctx context.Context, gitToken string, mcpBase http.RoundT
 
 	bashTool := tools.NewBashTool(workspaceRoot).WithMaxTimeout(bashTimeout)
 
-	if gitToken != "" {
+	switch {
+	case selfPath != "":
+		// gh reads GH_TOKEN from the env and has no hook into a rotating
+		// credential source; a baked token goes stale mid-session (App
+		// installation tokens expire ~60m, and a provisioned session's token is
+		// per-repo besides). Install a `gh` shim on PATH that fetches a fresh
+		// credential from CM per invocation via the hidden gh-wrapper
+		// subcommand instead — GH_HOST is resolved by that subcommand itself
+		// from the target repo, not forwarded here (provisioned mode is
+		// multi-host by construction).
+		if dir, err := installGHWrapperV2(selfPath); err != nil {
+			slog.Warn("gh wrapper v2 install failed; gh may be unavailable this session", "error", err)
+		} else {
+			bashTool = bashTool.WithExtraEnv([]string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")})
+		}
+	case gitToken != "":
 		var ghEnv []string
 
 		// gh reads GH_TOKEN from the env and has no hook into the rotating
@@ -402,6 +461,19 @@ func envOrSecret(key string, src *secrets.Source) string {
 	}
 
 	return src.Get(key)
+}
+
+// validateLLMKey is Run's worker-side backstop for handleChatStart's
+// fail-closed launch guard (see the comment at Run's llmKey resolution site):
+// an empty llmKey means neither a CM-provisioned llm_endpoint nor a local
+// llm_endpoint config was available, so this session has no way to
+// authenticate any inference call.
+func validateLLMKey(llmKey string) error {
+	if llmKey == "" {
+		return fmt.Errorf("no llm api key available: CM did not provision an llm endpoint and no local llm_endpoint config exists")
+	}
+
+	return nil
 }
 
 // envFloatDefault parses an optional float64 env var, returning def when the

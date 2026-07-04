@@ -26,10 +26,20 @@ type TokenGenerator interface {
 type Source struct{ vals map[string]string }
 
 // Open parses a KEY=value env file. Blank lines and lines beginning with '#'
-// are ignored. Values may contain '=' characters.
+// are ignored. Values may contain '=' characters. A missing file is not an
+// error: it returns an empty, usable Source (every Get returns "") rather than
+// failing, so a caller that legitimately has nothing to stage — e.g. a fully
+// CM-provisioned session with no local github/llm_endpoint config, which never
+// writes the shared secrets file at all (see cli.newTokenProvider's
+// nil-provider path) — is not forced to special-case "file absent" itself. Any
+// other read error (permission denied, path is a directory, ...) still fails.
 func Open(path string) (*Source, error) {
 	f, err := os.Open(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return &Source{vals: make(map[string]string)}, nil
+		}
+
 		return nil, fmt.Errorf("open env file: %w", err)
 	}
 
@@ -216,9 +226,11 @@ func (r *Refresher) Run(ctx context.Context) error {
 		if r.endpoint.APIKey != "" {
 			vals["LLM_API_KEY"] = r.endpoint.APIKey
 		}
+
 		if r.endpoint.BaseURL != "" {
 			vals["LLM_BASE_URL"] = r.endpoint.BaseURL
 		}
+
 		if r.endpoint.Type != "" {
 			vals["LLM_TYPE"] = r.endpoint.Type
 		}

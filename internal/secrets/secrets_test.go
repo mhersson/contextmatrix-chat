@@ -52,11 +52,32 @@ func TestOpen(t *testing.T) {
 	assert.Empty(t, s.Get("MISSING"))
 }
 
-// TestOpenMissingFile returns an error.
+// TestOpenMissingFile returns an empty, usable Source rather than an error: a
+// missing secrets file is now a legitimate state (a fully CM-provisioned
+// session with no local github/llm_endpoint config at all never writes the
+// shared secrets file — see cli.newTokenProvider's nil-provider path), not a
+// broken deployment. Every Get on the returned Source must behave exactly
+// like an absent key in a file that does exist.
 func TestOpenMissingFile(t *testing.T) {
 	t.Parallel()
 
-	_, err := Open("/nonexistent/path/env")
+	s, err := Open("/nonexistent/path/env")
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	assert.Empty(t, s.Get("CM_GIT_TOKEN"))
+	assert.Empty(t, s.Get("LLM_API_KEY"))
+}
+
+// TestOpenOtherReadErrorStillErrors verifies Open only tolerates a missing
+// file — a different filesystem error (e.g. the path is a directory, so the
+// open fails with EISDIR, not ENOENT) must still be reported, not silently
+// swallowed into an empty Source.
+func TestOpenOtherReadErrorStillErrors(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir() // a directory, not a file: os.Open + Read fails with EISDIR
+
+	_, err := Open(dir)
 	assert.Error(t, err)
 }
 
@@ -285,6 +306,7 @@ func TestRefresherInvokesOnRotateOnEveryWrite(t *testing.T) {
 
 	r.SetOnRotate(func(token string) {
 		mu.Lock()
+
 		rotated = append(rotated, token)
 		mu.Unlock()
 	})

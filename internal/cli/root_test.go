@@ -16,9 +16,11 @@ func TestNewRootCmd(t *testing.T) {
 	names := make(map[string]bool)
 
 	for _, sub := range cmd.Commands() {
-		names[sub.Use] = true
+		names[sub.Name()] = true
 	}
 
 	assert.True(t, names["serve"], "expected serve subcommand")
 	assert.True(t, names["work"], "expected work subcommand")
+	assert.True(t, names["git-credential"], "expected git-credential subcommand")
+	assert.True(t, names["gh-wrapper"], "expected gh-wrapper subcommand")
 }
