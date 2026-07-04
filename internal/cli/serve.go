@@ -205,6 +205,9 @@ func runServe(ctx context.Context, configPath string) error {
 			ReasoningEffort:           cfg.ReasoningEffort,
 			CACertFile:                cfg.CACertFile,
 			GitHubHost:                cfg.GitHub.BareHost(),
+			GitHubConfigured:          cfg.GitHub.AuthMode != "",
+			GitCredentialsURL:         composeGitCredentialsURL(base),
+			LLMConfigured:             cfg.LLMEndpoint.APIKey != "",
 		},
 		Replay:   replay,
 		Dedup:    dedup,
@@ -346,6 +349,15 @@ func chatExit(hub *logbridge.Hub, chatRunDirBase string, logger *slog.Logger) fu
 // double slash.
 func composeMCPURL(base string) string {
 	return strings.TrimRight(base, "/") + "/mcp"
+}
+
+// composeGitCredentialsURL builds CM's worker git-credentials endpoint URL:
+// <base>/api/worker/git-credentials, with any trailing slash on base trimmed.
+// Forwarded to the worker as CM_GIT_CREDENTIALS_URL alongside the chat-start
+// payload's GitCredentialsToken (protocol v0.5.2) so the worker can fetch
+// fresh, per-repo git credentials on demand.
+func composeGitCredentialsURL(base string) string {
+	return strings.TrimRight(base, "/") + "/api/worker/git-credentials"
 }
 
 // newTokenProvider selects the GitHub token provider per auth_mode, mirroring

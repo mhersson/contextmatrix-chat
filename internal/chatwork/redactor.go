@@ -1,6 +1,7 @@
 package chatwork
 
 import (
+	"bufio"
 	"context"
 	"log/slog"
 	"os"
@@ -11,22 +12,25 @@ import (
 	"github.com/mhersson/contextmatrix-harness/redact"
 )
 
-// redactorPollInterval bounds how quickly a rotated token is picked up by the
-// worker's redactor after the host rewrites the secrets env file. Cheap: a
-// single os.Stat per tick on a bind-mounted file.
+// redactorPollInterval bounds how quickly a rotated token — or a worker-
+// fetched git credential (see fetchedTokensPath) — is picked up by the
+// worker's redactor after the file it lives in changes. Cheap: a couple of
+// os.Stat calls per tick on small, local/bind-mounted files.
 const redactorPollInterval = 5 * time.Second
 
 // redactorWatcher holds the live *redact.Redactor behind an atomic pointer so
 // RedactToolOutput always masks the current secrets, even after the host-side
 // Refresher rotates the GitHub token and rewrites the secrets env file mid-
-// session. Mirrors the credential helper's and gh wrapper's per-call fresh
-// read of the same bind-mounted file.
+// session, or the credential-helper/gh-wrapper subcommands fetch a fresh
+// per-repo git token mid-session. Mirrors the credential helper's and gh
+// wrapper's per-call fresh read of the same bind-mounted file.
 type redactorWatcher struct {
-	ptr          atomic.Pointer[redact.Redactor]
-	path         string
-	mcpKey       string
-	llmKey       string
-	pollInterval time.Duration
+	ptr                 atomic.Pointer[redact.Redactor]
+	path                string
+	mcpKey              string
+	llmKey              string
+	gitCredentialsToken string
+	pollInterval        time.Duration
 	// lastMod is the mtime observed by the most recent successful reload. Set
 	// synchronously in newRedactorWatcher (before the watch goroutine starts)
 	// and thereafter only touched by the single watch goroutine — never read
@@ -35,6 +39,14 @@ type redactorWatcher struct {
 	// race against a file rewrite that lands between "go w.watch(ctx)" being
 	// called and the goroutine actually running its first os.Stat.
 	lastMod time.Time
+
+	// fetchedPath is the writable scratch file (see fetchedTokensPath) the
+	// credential-helper/gh-wrapper subcommands append each freshly-fetched git
+	// token to. Empty disables this source entirely (no CM-provisioned git
+	// credentials this session). fetchedLastMod tracks it the same way lastMod
+	// tracks path, independently — either file changing triggers a reload.
+	fetchedPath    string
+	fetchedLastMod time.Time
 }
 
 // newRedactorWatcher builds the initial redactor from path. mcpKey and llmKey
@@ -44,8 +56,20 @@ type redactorWatcher struct {
 // llm_endpoint (protocol v0.5.0) delivers the key only via container env,
 // never writing it to path — without this, that key would never enter the
 // redaction set and could leak into tool output, events, or logs.
-func newRedactorWatcher(path, mcpKey, llmKey string) (*redactorWatcher, error) {
-	w := &redactorWatcher{path: path, mcpKey: mcpKey, llmKey: llmKey, pollInterval: redactorPollInterval}
+// gitCredentialsToken is the equally-static CM_GIT_CREDENTIALS_TOKEN bearer
+// (protocol v0.5.2); empty when CM did not provision git credentials this
+// session. fetchedPath, when non-empty, is additionally polled for
+// worker-fetched git tokens (see fetchedTokensPath) — a missing or unreadable
+// fetchedPath is not an error, just "nothing fetched yet".
+func newRedactorWatcher(path, mcpKey, llmKey, gitCredentialsToken, fetchedPath string) (*redactorWatcher, error) {
+	w := &redactorWatcher{
+		path:                path,
+		mcpKey:              mcpKey,
+		llmKey:              llmKey,
+		gitCredentialsToken: gitCredentialsToken,
+		fetchedPath:         fetchedPath,
+		pollInterval:        redactorPollInterval,
+	}
 	if err := w.reload(); err != nil {
 		return nil, err
 	}
@@ -64,6 +88,10 @@ func newRedactorWatcher(path, mcpKey, llmKey string) (*redactorWatcher, error) {
 // the OLD content, silently missing a rotation until the next one (~1h
 // later). On a transient read error (e.g. the host is mid-rewrite) the
 // previous redactor and baseline are both kept so the next tick retries.
+// fetchedPath (when set) is read the same stat-first way, independently of
+// path; a missing fetchedPath contributes nothing (not an error) — the
+// common case when no credential has been fetched yet, or CM never
+// provisioned git credentials this session.
 func (w *redactorWatcher) reload() error {
 	var preReadMod time.Time
 	if fi, err := os.Stat(w.path); err == nil { //nolint:gosec // G703: w.path is the code-fixed secretsEnvPath constant, not user input
@@ -75,10 +103,48 @@ func (w *redactorWatcher) reload() error {
 		return err
 	}
 
-	w.ptr.Store(redact.New([]string{src.Get("LLM_API_KEY"), w.llmKey, src.Get("CM_GIT_TOKEN"), w.mcpKey}))
+	all := []string{src.Get("LLM_API_KEY"), w.llmKey, src.Get("CM_GIT_TOKEN"), w.mcpKey, w.gitCredentialsToken}
+
+	var fetchedPreReadMod time.Time
+
+	if w.fetchedPath != "" {
+		if fi, err := os.Stat(w.fetchedPath); err == nil { //nolint:gosec // G703: w.fetchedPath is the code-fixed fetchedTokensPath constant, not user input
+			fetchedPreReadMod = fi.ModTime()
+		}
+
+		if tokens, err := readLines(w.fetchedPath); err == nil {
+			all = append(all, tokens...)
+		}
+		// A missing or unreadable fetchedPath contributes nothing; see doc above.
+	}
+
+	w.ptr.Store(redact.New(all))
 	w.lastMod = preReadMod
+	w.fetchedLastMod = fetchedPreReadMod
 
 	return nil
+}
+
+// readLines returns every non-empty line of path. Used for fetchedPath, which
+// is a plain list of tokens (one per line), not a KEY=value file.
+func readLines(path string) ([]string, error) {
+	f, err := os.Open(path) //nolint:gosec // G703: path is the code-fixed fetchedTokensPath constant, not user input
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() { _ = f.Close() }()
+
+	var lines []string
+
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if line := sc.Text(); line != "" {
+			lines = append(lines, line)
+		}
+	}
+
+	return lines, sc.Err()
 }
 
 // Apply masks all currently-known secrets. Safe for concurrent use; matches
@@ -87,11 +153,11 @@ func (w *redactorWatcher) Apply(s string) string {
 	return w.ptr.Load().Apply(s)
 }
 
-// watch polls path's mtime every pollInterval and reloads on change, starting
-// from the baseline established by the constructor's initial reload. Returns
-// when ctx is done. It is launched with Run's top-level context (process
-// lifetime), not the per-epoch context, so it intentionally survives /clear
-// and only stops on session shutdown.
+// watch polls path's and fetchedPath's mtimes every pollInterval and reloads
+// on either changing, starting from the baseline established by the
+// constructor's initial reload. Returns when ctx is done. It is launched with
+// Run's top-level context (process lifetime), not the per-epoch context, so
+// it intentionally survives /clear and only stops on session shutdown.
 func (w *redactorWatcher) watch(ctx context.Context) {
 	ticker := time.NewTicker(w.pollInterval)
 	defer ticker.Stop()
@@ -101,8 +167,7 @@ func (w *redactorWatcher) watch(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			fi, err := os.Stat(w.path) //nolint:gosec // G703: w.path is the code-fixed secretsEnvPath constant, not user input
-			if err != nil || fi.ModTime().Equal(w.lastMod) {
+			if !w.changed() {
 				continue
 			}
 
@@ -111,4 +176,25 @@ func (w *redactorWatcher) watch(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// changed reports whether path or fetchedPath's mtime has moved since the
+// last successful reload. A stat failure on either path is not itself a
+// change — reload's own secrets.Open / readLines calls handle a genuinely
+// missing file gracefully.
+func (w *redactorWatcher) changed() bool {
+	if fi, err := os.Stat(w.path); err == nil && !fi.ModTime().Equal(w.lastMod) { //nolint:gosec // G703: code-fixed constant
+		return true
+	}
+
+	if w.fetchedPath == "" {
+		return false
+	}
+
+	fi, err := os.Stat(w.fetchedPath) //nolint:gosec // G703: code-fixed constant
+	if err != nil {
+		return false
+	}
+
+	return !fi.ModTime().Equal(w.fetchedLastMod)
 }

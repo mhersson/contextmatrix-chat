@@ -13,8 +13,12 @@ import (
 //
 //   - static: process-lifetime secrets (the local-config LLM key).
 //   - token: the rotating GitHub installation token, replaced on each rotation.
-//   - session: per-session CM-provisioned LLM keys (protocol v0.5.0), added at
-//     chat-start and removed on container exit.
+//   - session: every per-session CM-provisioned secret (the LLM key, protocol
+//     v0.5.0; the git-credentials bearer, protocol v0.5.2), added at
+//     chat-start and removed on container exit. A session can register more
+//     than one secret — both features are independent and commonly coexist —
+//     so each session ID maps to a SET of keys, not a single value; a second
+//     AddSessionKey call for the same session must not displace the first.
 //
 // Worker stderr and unparsable stdout (e.g. a panic stack trace) reach the
 // /logs stream with only this redactor applied — the in-worker redactor covers
@@ -31,7 +35,7 @@ type RedactorRegistry struct {
 	mu      sync.Mutex
 	static  []string
 	token   string
-	session map[string]string
+	session map[string][]string
 }
 
 // NewRedactorRegistry builds a registry over the given static secrets and
@@ -42,7 +46,7 @@ func NewRedactorRegistry(bridge *Bridge, static []string) *RedactorRegistry {
 	r := &RedactorRegistry{
 		bridge:  bridge,
 		static:  slices.Clone(static),
-		session: make(map[string]string),
+		session: make(map[string][]string),
 	}
 	r.rebuild()
 
@@ -60,8 +64,11 @@ func (r *RedactorRegistry) SetToken(token string) {
 	r.rebuild()
 }
 
-// AddSessionKey records sessionID's per-session secret and rebuilds the
-// redactor. An empty key is ignored, so callers may register unconditionally.
+// AddSessionKey appends key to sessionID's set of per-session secrets and
+// rebuilds the redactor. An empty key is ignored, so callers may register
+// unconditionally. Appending (not overwriting) is what lets a session register
+// both an LLM key and a git-credentials bearer without the second call
+// displacing the first from the redaction set.
 func (r *RedactorRegistry) AddSessionKey(sessionID, key string) {
 	if key == "" {
 		return
@@ -70,13 +77,14 @@ func (r *RedactorRegistry) AddSessionKey(sessionID, key string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.session[sessionID] = key
+	r.session[sessionID] = append(r.session[sessionID], key)
 	r.rebuild()
 }
 
-// RemoveSessionKey forgets sessionID's per-session secret and rebuilds the
-// redactor. Idempotent: removing an unregistered session is a no-op. Wire it to
-// the container-exit cleanup so the session set does not grow without bound.
+// RemoveSessionKey forgets every secret registered for sessionID and rebuilds
+// the redactor. Idempotent: removing an unregistered session is a no-op. Wire
+// it to the container-exit cleanup so the session set does not grow without
+// bound.
 func (r *RedactorRegistry) RemoveSessionKey(sessionID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -101,8 +109,8 @@ func (r *RedactorRegistry) rebuild() {
 		all = append(all, r.token)
 	}
 
-	for _, key := range r.session {
-		all = append(all, key)
+	for _, keys := range r.session {
+		all = append(all, keys...)
 	}
 
 	r.bridge.SetRedactor(redact.New(all))

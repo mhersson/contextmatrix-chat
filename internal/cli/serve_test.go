@@ -93,6 +93,28 @@ func TestComposeMCPURL(t *testing.T) {
 	}
 }
 
+func TestComposeGitCredentialsURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		base string
+		want string
+	}{
+		{"no trailing slash", "http://host:8080", "http://host:8080/api/worker/git-credentials"},
+		{"trailing slash", "http://host:8080/", "http://host:8080/api/worker/git-credentials"},
+		{"double trailing slash", "http://host:8080//", "http://host:8080/api/worker/git-credentials"},
+		{"with subpath", "http://host:8080/contextmatrix", "http://host:8080/contextmatrix/api/worker/git-credentials"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, composeGitCredentialsURL(tt.base))
+		})
+	}
+}
+
 // TestHealthEndpoint is a smoke test: build a Server with a minimal config and
 // verify that GET /health (unauthenticated) returns 200.
 func TestHealthEndpoint(t *testing.T) {

@@ -252,6 +252,19 @@ func TestEnvOrSecret(t *testing.T) {
 	})
 }
 
+// TestValidateLLMKey verifies Run's worker-side backstop for handleChatStart's
+// fail-closed launch guard: a non-empty key passes, an empty key (the guard
+// having been bypassed) fails with a legible, self-explanatory error.
+func TestValidateLLMKey(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, validateLLMKey("sk-something"))
+
+	err := validateLLMKey("")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CM did not provision an llm endpoint and no local llm_endpoint config exists")
+}
+
 // unsetEnv removes key for the duration of the test, restoring any prior value
 // on cleanup. Used instead of t.Setenv when a test needs the var genuinely
 // ABSENT (os.LookupEnv → ok=false), which t.Setenv cannot express. t.Setenv is
