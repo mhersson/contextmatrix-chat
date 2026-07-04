@@ -101,6 +101,10 @@ func (r *Resolver) Resolve(ctx context.Context) (string, error) {
 	// deprecation warning (compat-window rule).
 	token := p.Token
 	if token == "" {
+		if r.gen == nil {
+			return "", fmt.Errorf("CM did not provision a task-skills clone token and no local github config exists")
+		}
+
 		var terr error
 
 		token, _, terr = r.gen.GenerateToken(ctx)

@@ -216,12 +216,42 @@ func TestServiceValidate(t *testing.T) {
 		assert.Contains(t, err.Error(), "base_image")
 	})
 
-	t.Run("missing llm_endpoint.api_key errors", func(t *testing.T) {
+	t.Run("missing llm_endpoint.api_key passes (CM-provisioned fallback)", func(t *testing.T) {
 		cfg := validServiceConfig()
 		cfg.LLMEndpoint.APIKey = ""
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "llm_endpoint.api_key")
+		require.NoError(t, cfg.Validate())
+	})
+
+	t.Run("empty github and llm_endpoint blocks pass (CM-provisioned fallback)", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.GitHub = GitHubConfig{}
+		cfg.LLMEndpoint = LLMEndpoint{}
+		require.NoError(t, cfg.Validate())
+	})
+
+	t.Run("partial github config errors naming auth_mode", func(t *testing.T) {
+		// auth_mode left empty while some OTHER github field is set must still
+		// error: only a github block with every field zero is treated as
+		// "fully absent" (CM-provisioned fallback).
+		tests := []struct {
+			name string
+			gh   GitHubConfig
+		}{
+			{"pat.token set", GitHubConfig{PAT: GitHubPATConfig{Token: "ghp_orphaned"}}},
+			{"host set", GitHubConfig{Host: "ghe.example.com"}},
+			{"api_base_url set", GitHubConfig{APIBaseURL: "https://api.acme.ghe.com"}},
+			{"app.app_id set", GitHubConfig{App: GitHubAppConfig{AppID: 123}}},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				cfg := validServiceConfig()
+				cfg.GitHub = tc.gh
+				err := cfg.Validate()
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "auth_mode")
+			})
+		}
 	})
 
 	t.Run("unknown llm_endpoint.type errors", func(t *testing.T) {
@@ -230,6 +260,14 @@ func TestServiceValidate(t *testing.T) {
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "openrouter")
+	})
+
+	t.Run("openai type without base_url errors even with empty api_key", func(t *testing.T) {
+		cfg := validServiceConfig()
+		cfg.LLMEndpoint = LLMEndpoint{Type: "openai"}
+		err := cfg.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "base_url")
 	})
 
 	t.Run("bad image_pull_policy errors", func(t *testing.T) {
@@ -446,6 +484,12 @@ func TestGitHubHostValidation(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "github.host")
 	})
+}
+
+func TestGitHubConfigConfigured(t *testing.T) {
+	assert.False(t, GitHubConfig{}.Configured(), "empty auth_mode is not configured")
+	assert.True(t, GitHubConfig{AuthMode: "pat"}.Configured())
+	assert.True(t, GitHubConfig{AuthMode: "app"}.Configured())
 }
 
 func TestGitHubBareHost(t *testing.T) {

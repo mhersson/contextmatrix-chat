@@ -221,6 +221,58 @@ func TestResolveSelfMintsWhenTokenAbsent(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&gen.calls), "the local token generator must be called exactly once")
 }
 
+// TestResolveNilGenAndNoTokenReturnsClearError pins the fail-closed guard: when
+// CM's task-skills-source response carries no clone token AND the chat service
+// has no local github config (gen is nil, github block unconfigured), Resolve
+// must return a clear error rather than panic on a nil-interface method call,
+// and must never reach the cloner.
+func TestResolveNilGenAndNoTokenReturnsClearError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"git_remote_url": "https://example.test/skills.git",
+			"ref":            "abc123",
+		})
+	}))
+	defer srv.Close()
+
+	r := NewResolver(srv.URL, "key", t.TempDir(), nil, discardLogger())
+	r.cloner = func(context.Context, string, string, string, string) error {
+		t.Fatal("cloner must not be called when there is no token source at all")
+
+		return nil
+	}
+
+	_, err := r.Resolve(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no local github config")
+}
+
+// TestResolveNilGenWithCMTokenSucceeds proves a nil gen only matters when local
+// minting would actually be needed: a CM-provisioned token must still work.
+func TestResolveNilGenWithCMTokenSucceeds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"git_remote_url": "https://example.test/skills.git",
+			"ref":            "abc123",
+			"token":          "cm-provisioned-token",
+		})
+	}))
+	defer srv.Close()
+
+	var gotTok string
+
+	r := NewResolver(srv.URL, "key", t.TempDir(), nil, discardLogger())
+	r.cloner = func(_ context.Context, _, _, _, token string) error {
+		gotTok = token
+
+		return nil
+	}
+
+	_, err := r.Resolve(context.Background())
+	require.NoError(t, err, "a nil gen must not block a CM-provisioned token")
+	assert.Equal(t, "cm-provisioned-token", gotTok)
+}
+
 // TestResolveSelfMintDeprecationWarnsOncePerProcess verifies that the
 // self-mint fallback warning logs once per Resolver (a serve process
 // constructs exactly one, per NewResolver's call site), not once per
