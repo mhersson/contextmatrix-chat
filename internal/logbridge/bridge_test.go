@@ -492,18 +492,21 @@ func TestSetRedactorAppliesToSubsequentLines(t *testing.T) {
 	bridge := logbridge.New(hub, redact.New([]string{"initial-secret-val"}))
 
 	bridge.BridgeLine(testSession, []byte("leaked initial-secret-val here"), true)
+
 	got := <-ch
 	assert.Equal(t, "leaked [REDACTED] here", got.Content)
 
 	bridge.SetRedactor(redact.New([]string{"rotated-secret-val"}))
 
 	bridge.BridgeLine(testSession, []byte("leaked rotated-secret-val here"), true)
+
 	got = <-ch
 	assert.Equal(t, "leaked [REDACTED] here", got.Content)
 
 	// Old secret no longer masked once the redactor is swapped: proves a full
 	// replace, not a merge.
 	bridge.BridgeLine(testSession, []byte("leaked initial-secret-val here"), true)
+
 	got = <-ch
 	assert.Equal(t, "leaked initial-secret-val here", got.Content)
 }
