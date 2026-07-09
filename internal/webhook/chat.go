@@ -312,9 +312,24 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		binds = append(binds, s.caCertFile+":"+caCertMountPath+":ro")
 	}
 
+	// Per-project worker image override (protocol v0.7.0,
+	// ChatStartPayload.RunnerImage — CM derives it from the board's
+	// remote_execution.runner_image). When present, it replaces the service-wide
+	// base image so a project can run a toolchain-specific worker; empty falls
+	// back to the configured base image exactly as before. A per-project image
+	// bypasses the startup digest-pin warning, so log the override at launch to
+	// keep image drift visible in the operational log.
+	image := s.image
+	if p.RunnerImage != "" {
+		image = p.RunnerImage
+
+		s.logger.Info("chat/start: per-project runner image override",
+			"session_id", p.SessionID, "project", p.Project, "image", image)
+	}
+
 	spec := executor.LaunchSpec{
 		SessionID:   p.SessionID,
-		Image:       s.image,
+		Image:       image,
 		Env:         env,
 		Binds:       binds,
 		MemoryBytes: s.memBytes,
