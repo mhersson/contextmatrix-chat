@@ -1871,7 +1871,6 @@ func TestMessageDedupConcurrent(t *testing.T) {
 	wg.Add(n)
 
 	for _, req := range requests {
-		req := req
 
 		go func() {
 			defer wg.Done()
@@ -1936,14 +1935,14 @@ func envToMap(env []string) map[string]string {
 	m := make(map[string]string, len(env))
 
 	for _, kv := range env {
-		idx := strings.IndexByte(kv, '=')
-		if idx < 0 {
+		before, after, ok := strings.Cut(kv, "=")
+		if !ok {
 			m[kv] = ""
 
 			continue
 		}
 
-		m[kv[:idx]] = kv[idx+1:]
+		m[before] = after
 	}
 
 	return m

@@ -173,11 +173,11 @@ func hostPathFromGitURL(raw string) (host, path string) {
 	}
 
 	if !strings.Contains(raw, "://") {
-		if at := strings.IndexByte(raw, '@'); at >= 0 {
-			rest := raw[at+1:]
-			if colon := strings.IndexByte(rest, ':'); colon >= 0 {
-				h := rest[:colon]
-				p := strings.Trim(strings.TrimSuffix(rest[colon+1:], ".git"), "/")
+		if _, after, ok := strings.Cut(raw, "@"); ok {
+			rest := after
+			if before, after, ok := strings.Cut(rest, ":"); ok {
+				h := before
+				p := strings.Trim(strings.TrimSuffix(after, ".git"), "/")
 
 				if h == "" || p == "" {
 					return "", ""

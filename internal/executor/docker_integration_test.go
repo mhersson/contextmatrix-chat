@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -189,13 +190,7 @@ func TestIntegration_LaunchEchoAndExit(t *testing.T) {
 
 	// Pump captured the echoed line.
 	assert.Eventually(t, func() bool {
-		for _, l := range logs.snapshot() {
-			if l == "got:hello" {
-				return true
-			}
-		}
-
-		return false
+		return slices.Contains(logs.snapshot(), "got:hello")
 	}, 5*time.Second, 50*time.Millisecond, "expected pump to capture got:hello")
 
 	// Container removed, tracker empty.

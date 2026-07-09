@@ -2,6 +2,7 @@ package mcpbridge
 
 import (
 	"encoding/json"
+	"slices"
 	"strconv"
 )
 
@@ -102,11 +103,5 @@ func coerceArgs(args map[string]any, types propTypes) map[string]any {
 }
 
 func contains(ss []string, target string) bool {
-	for _, s := range ss {
-		if s == target {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(ss, target)
 }

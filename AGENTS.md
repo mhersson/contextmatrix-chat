@@ -4,8 +4,8 @@
 
 `contextmatrix-chat` is the **chat backend** for ContextMatrix. It runs
 interactive AI chat sessions — one Docker worker container per session — and
-bridges the board's MCP tools into each session, so the model can read and
-write cards while it talks to a human. One binary, two runtime roles:
+bridges the board's MCP tools into each session, so the model can read and write
+cards while it talks to a human. One binary, two runtime roles:
 
 - **`serve`** — the host-side service. Hosts ContextMatrix's chat lifecycle
   webhooks, launches one worker container per session, stages secrets, streams
@@ -32,12 +32,12 @@ whichever task backend is active.
 
 ## Channels to ContextMatrix
 
-| Channel          | Direction         | Transport                                                                          |
-| ---------------- | ----------------- | ---------------------------------------------------------------------------------- |
-| Chat lifecycle   | CM → serve        | HTTP webhooks, HMAC-signed: `POST /chat/start`, `POST /chat/end`, `POST /message`  |
-| Log stream       | serve → CM        | Server-Sent Events: `GET /logs?session_id=…`                                       |
-| Board operations | worker → CM       | **MCP** at `<container_contextmatrix_url>/mcp`, never raw HTTP                      |
-| Session control  | serve → container | JSON-Lines frames on container stdin: user-message / clear                         |
+| Channel          | Direction         | Transport                                                                         |
+| ---------------- | ----------------- | --------------------------------------------------------------------------------- |
+| Chat lifecycle   | CM → serve        | HTTP webhooks, HMAC-signed: `POST /chat/start`, `POST /chat/end`, `POST /message` |
+| Log stream       | serve → CM        | Server-Sent Events: `GET /logs?session_id=…`                                      |
+| Board operations | worker → CM       | **MCP** at `<container_contextmatrix_url>/mcp`, never raw HTTP                    |
+| Session control  | serve → container | JSON-Lines frames on container stdin: user-message / clear                        |
 
 The HMAC `api_key` is real auth (a shared secret, replay-protected); the same
 scheme guards the admin `/metrics` endpoint. Board progress runs over **MCP** —
@@ -79,12 +79,14 @@ here.
 
 - Go 1.26+
 - cobra (commands) + koanf (layered config) — not viper
-- Docker SDK (`github.com/docker/docker`) — client only, against the local daemon
+- Docker SDK (`github.com/docker/docker`) — client only, against the local
+  daemon
 - `contextmatrix-harness` — the shared interactive work loop
 - `contextmatrix-protocol` — webhook/payload + log-entry types
 - `contextmatrix-githubauth` — GitHub App / PAT token generation
 - Go MCP SDK (`github.com/modelcontextprotocol/go-sdk`) — MCP client
-- An OpenAI-compatible LLM endpoint (OpenRouter by default) via the harness `llm` client (raw HTTP, no SDK)
+- An OpenAI-compatible LLM endpoint (OpenRouter by default) via the harness
+  `llm` client (raw HTTP, no SDK)
 - testify
 
 ## Coding conventions
@@ -93,7 +95,8 @@ here.
 
 - Everything lives under `internal/` — nothing exported outside the module.
 - Interfaces belong in the package that uses them; the webhook server consumes
-  the `executor.Executor` interface that `DockerExecutor` satisfies, for example.
+  the `executor.Executor` interface that `DockerExecutor` satisfies, for
+  example.
 - Wrap errors with `fmt.Errorf("operation: %w", err)`. Never swallow errors.
 - `context.Context` is the first parameter of any function that does I/O.
 - No global state, no `init()` functions. Dependencies injected via struct
@@ -144,41 +147,40 @@ we got here.
    (`CM_MODEL`, `CM_MCP_API_KEY`). Chat does not select models or stage the MCP
    key.
 6. **Board operations go over MCP**, never raw HTTP. The worker dials
-   `<container_contextmatrix_url>/mcp`, lists board tools, and offers them to the
-   model alongside the filesystem/shell tools rooted at `/workspace`.
-7. **Git credentials are fetched per-repo from CM, in provisioned mode
-   (default, `CM_GIT_CREDENTIALS_TOKEN` set).** At boot, `Run` stages
+   `<container_contextmatrix_url>/mcp`, lists board tools, and offers them to
+   the model alongside the filesystem/shell tools rooted at `/workspace`.
+7. **Git credentials are fetched per-repo from CM, in provisioned mode (default,
+   `CM_GIT_CREDENTIALS_TOKEN` set).** At boot, `Run` stages
    `CM_GIT_CREDENTIALS_URL`/`CM_GIT_CREDENTIALS_TOKEN` into a 0600 scratch
    config file and registers the global v2 git credential helper and `gh`
    wrapper; both read only that file, never `os.Getenv`, because the model's
-   git/`gh` calls run through the harness bash tool's scrubbed environment.
-   On every git or `gh` call, the helper/wrapper GETs CM's
-   `/api/worker/git-credentials?host=&path=` with the session's bearer and
-   the target repo's `(host, path)` (from its `origin` remote; empty for a
-   no-origin call, which CM resolves to the instance-wide credential), and
-   mints a fresh token — so rotation is transparent and one session can span
-   multiple projects/hosts. A fetch failure logs one stderr note (never a
-   credential) and continues rather than failing the call: git
-   surfaces its own auth error; `gh` still execs, unauthenticated.
-   Worker-minted tokens are recorded to a scratch file the redactor polls, so
-   they're masked from tool output/events too.
+   git/`gh` calls run through the harness bash tool's scrubbed environment. On
+   every git or `gh` call, the helper/wrapper GETs CM's
+   `/api/worker/git-credentials?host=&path=` with the session's bearer and the
+   target repo's `(host, path)` (from its `origin` remote; empty for a no-origin
+   call, which CM resolves to the instance-wide credential), and mints a fresh
+   token — so rotation is transparent and one session can span multiple
+   projects/hosts. A fetch failure logs one stderr note (never a credential) and
+   continues rather than failing the call: git surfaces its own auth error; `gh`
+   still execs, unauthenticated. Worker-minted tokens are recorded to a scratch
+   file the redactor polls, so they're masked from tool output/events too.
 
-   **Fallback mode (deprecated):** when the operator configures a local
-   `github` block instead of relying on CM-provisioned credentials, serve
-   writes `<secrets_dir>/shared/env` (LLM endpoint API key + one rotating
-   GitHub token) and bind-mounts it read-only at `/run/cm-secrets`; the v1
-   helper and `gh` wrapper read that token on every call. The helper and
-   `GH_HOST` are scoped to `github.host` (forwarded as `CM_GIT_HOST`; falls
-   back to the seeded repo URL's host, then `github.com`) — one host for the
-   whole session, not per-repo. Secrets are redacted from all tool output and
-   events in both modes.
+   **Fallback mode (deprecated):** when the operator configures a local `github`
+   block instead of relying on CM-provisioned credentials, serve writes
+   `<secrets_dir>/shared/env` (LLM endpoint API key + one rotating GitHub token)
+   and bind-mounts it read-only at `/run/cm-secrets`; the v1 helper and `gh`
+   wrapper read that token on every call. The helper and `GH_HOST` are scoped to
+   `github.host` (forwarded as `CM_GIT_HOST`; falls back to the seeded repo
+   URL's host, then `github.com`) — one host for the whole session, not
+   per-repo. Secrets are redacted from all tool output and events in both modes.
+
 8. **task-skills come from ContextMatrix** (the single source of truth): serve
    fetches a `{git_remote_url, ref}` pointer from CM, clones it on the host, and
    bind-mounts the clone read-only at `/run/cm-skills`. The model engages them
    via the `Skill` tool. Chat carries no task-skills config.
 9. **Webhooks are HMAC-authenticated, replay-protected, and deduplicated.**
-   `/message` is idempotent by `message_id`: a retry returns a cached ack without
-   re-writing the frame to stdin.
+   `/message` is idempotent by `message_id`: a retry returns a cached ack
+   without re-writing the frame to stdin.
 10. **Session IDs are path-validated** before they touch the filesystem (no
     empty, no separators, no `..`) so per-session run-dir cleanup cannot escape
     its base.
@@ -230,10 +232,11 @@ Gitignored, never committed: `/contextmatrix-chat` (the binary), `*.test`,
 ## Commit discipline
 
 ```bash
-make fmt    # gofumpt -w . — CI flags any gofmt-vs-gofumpt difference
-make test   # must be clean before every commit
-make lint   # must be clean before every commit
-make build  # must build
+go fix ./...   # must be run before every commit
+make fmt       # gofumpt -w . — CI flags any gofmt-vs-gofumpt difference
+make test      # must be clean before every commit
+make lint      # must be clean before every commit
+make build     # must build
 ```
 
 NEVER commit code without manual approval from the user. No exceptions.

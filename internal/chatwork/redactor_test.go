@@ -30,8 +30,7 @@ func TestRedactorWatcherPicksUpRotatedToken(t *testing.T) {
 	assert.Equal(t, "token=[REDACTED]", w.Apply("token=ghs_boottime123"))
 	assert.Equal(t, "token=ghs_rotated654321", w.Apply("token=ghs_rotated654321"), "rotated token not yet known")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	go w.watch(ctx)
 
@@ -137,8 +136,7 @@ func TestRedactorWatcherMasksWorkerFetchedTokens(t *testing.T) {
 	assert.Equal(t, "tok=ghs_workerfetched999999", w.Apply("tok=ghs_workerfetched999999"),
 		"not yet fetched: must not be masked")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	go w.watch(ctx)
 
