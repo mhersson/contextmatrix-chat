@@ -556,6 +556,81 @@ func TestChatStart_NoResumeNoResumeFile(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "resume.jsonl should not exist when Resume is nil")
 }
 
+// TestChatStart_PerProjectRunnerImage verifies that a per-project worker image
+// on the chat-start payload (protocol v0.7.0, ChatStartPayload.RunnerImage)
+// replaces the service-wide base image in the LaunchSpec, and that an empty
+// RunnerImage falls back to the configured base image exactly as before. The
+// override path also emits a launch-time log line, since a per-project image
+// bypasses the startup digest-pin warning and drift must stay visible.
+func TestChatStart_PerProjectRunnerImage(t *testing.T) {
+	const (
+		overrideImage = "ghcr.io/org/python-worker:v3"
+		logMsg        = "per-project runner image override"
+	)
+
+	cases := []struct {
+		name        string
+		runnerImage string
+		wantImage   string
+		wantLog     bool
+	}{
+		{"override honored", overrideImage, overrideImage, true},
+		{"empty falls back to base image", "", testImage, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tracker := executor.NewTracker(10)
+			fe := &fakeExecutor{tracker: tracker}
+
+			var logBuf bytes.Buffer
+
+			logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+			srv := NewServer(Config{
+				APIKey:   testAPIKey,
+				Executor: fe,
+				Tracker:  tracker,
+				Chat: ChatConfig{
+					Image:            testImage,
+					MCPURL:           testMCPURL,
+					SecretsHostDir:   "/host/secrets",
+					ChatRunDirBase:   t.TempDir(),
+					MaxConcurrent:    10,
+					GitHubConfigured: true,
+					LLMConfigured:    true,
+				},
+				Logger: logger,
+			})
+
+			payload := protocol.ChatStartPayload{
+				SessionID:   testSession,
+				Project:     "alpha",
+				Primer:      "hi",
+				RunnerImage: tc.runnerImage,
+			}
+			body := mustJSON(t, payload)
+			w := httptest.NewRecorder()
+			srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+			require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+			launched := fe.Launched()
+			require.Len(t, launched, 1)
+			assert.Equal(t, tc.wantImage, launched[0].Image)
+
+			if tc.wantLog {
+				assert.Contains(t, logBuf.String(), logMsg,
+					"an image override must be logged at launch")
+			} else {
+				assert.NotContains(t, logBuf.String(), logMsg,
+					"no override log line when RunnerImage is empty")
+			}
+		})
+	}
+}
+
 func TestChatStart_ConfigEnvForwarded(t *testing.T) {
 	tracker := executor.NewTracker(10)
 	fe := &fakeExecutor{tracker: tracker}
@@ -1871,7 +1946,6 @@ func TestMessageDedupConcurrent(t *testing.T) {
 	wg.Add(n)
 
 	for _, req := range requests {
-
 		go func() {
 			defer wg.Done()
 
