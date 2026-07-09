@@ -55,8 +55,13 @@ log_level: info
 
 # --- Worker containers --------------------------------------------------------
 
-# Docker image launched for each chat session. Pin to a digest for
-# reproducibility (a non-digest tag is allowed but warns). Required.
+# Docker image launched for each chat session. Required. Beyond pinning a digest
+# for reproducibility (a non-digest tag is allowed but warns), this is the
+# language-toolchain seam: the shipped default (the `full` variant) carries Go,
+# Node, Python, and Rust. A project in any other ecosystem (a JVM, Ruby, .NET, a
+# system library) needs an image that carries that toolchain — build one FROM a
+# published variant (see the agent repo's docs/custom-images.md pattern). A
+# per-project image override lands separately; today this is instance-wide.
 # CMX_BASE_IMAGE
 # base_image: ghcr.io/mhersson/contextmatrix-chat@sha256:<digest>
 
