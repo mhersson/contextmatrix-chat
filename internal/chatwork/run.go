@@ -165,7 +165,7 @@ func Run(ctx context.Context) error {
 	go in.Pump(os.Stdin, clearCh)
 
 	// 11. Emitter: board tool_call lines are filtered from the transcript
-	// (noise reduction, matching the runner's mcp__* skip). All other events
+	// (noise reduction — the MCP bridge tools, named mcp__*). All other events
 	// reach stdout for the serve-side log bridge.
 	filteredWriter := newBoardFilterWriter(os.Stdout, bridge.BoardToolNames())
 	emit := events.NewEmitter(io.Discard, filteredWriter)

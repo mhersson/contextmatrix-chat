@@ -16,7 +16,7 @@ type boardFilterWriter struct {
 }
 
 // newBoardFilterWriter returns a writer that silently drops board tool_call
-// event lines from the transcript, matching the runner's mcp__* skip.
+// event lines from the transcript — the MCP bridge tools, named mcp__*.
 func newBoardFilterWriter(dst io.Writer, boardToolNames []string) io.Writer {
 	m := make(map[string]bool, len(boardToolNames))
 	for _, n := range boardToolNames {
