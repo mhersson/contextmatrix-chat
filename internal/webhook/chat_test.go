@@ -262,7 +262,6 @@ func newChatServer(t *testing.T) (*Server, *executor.Tracker, *fakeExecutor) {
 		Chat: ChatConfig{
 			Image:          testImage,
 			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
 			ChatRunDirBase: t.TempDir(),
 			MemoryBytes:    512 * 1024 * 1024,
 			PidsLimit:      128,
@@ -465,7 +464,6 @@ func TestChatStart_HappyPath(t *testing.T) {
 	assert.Equal(t, "1", envMap["CM_CHAT_RESUME"])
 
 	// Check binds contain expected mounts.
-	assert.Contains(t, spec.Binds, "/host/secrets:/run/cm-secrets:ro")
 	assert.Contains(t, spec.Binds, "/host/skills:/run/cm-skills:ro")
 
 	// The run-dir bind contains the session sub-path.
@@ -587,7 +585,6 @@ func TestChatStart_PerProjectRunnerImage(t *testing.T) {
 				Chat: ChatConfig{
 					Image:          testImage,
 					MCPURL:         testMCPURL,
-					SecretsHostDir: "/host/secrets",
 					ChatRunDirBase: t.TempDir(),
 					MaxConcurrent:  10,
 				},
@@ -631,7 +628,6 @@ func TestChatStart_ConfigEnvForwarded(t *testing.T) {
 		Chat: ChatConfig{
 			Image:                     testImage,
 			MCPURL:                    testMCPURL,
-			SecretsHostDir:            "/host/secrets",
 			ChatRunDirBase:            t.TempDir(),
 			MaxConcurrent:             10,
 			ToolOutputMaxBytes:        65536,
@@ -676,7 +672,6 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 			Chat: ChatConfig{
 				Image:           testImage,
 				MCPURL:          testMCPURL,
-				SecretsHostDir:  "/host/secrets",
 				ChatRunDirBase:  t.TempDir(),
 				MaxConcurrent:   10,
 				ReasoningEffort: "medium",
@@ -709,7 +704,6 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 			Chat: ChatConfig{
 				Image:          testImage,
 				MCPURL:         testMCPURL,
-				SecretsHostDir: "/host/secrets",
 				ChatRunDirBase: t.TempDir(),
 				MaxConcurrent:  10,
 			},
@@ -741,7 +735,6 @@ func TestChatStart_CACertMountAndEnv(t *testing.T) {
 			Chat: ChatConfig{
 				Image:          testImage,
 				MCPURL:         testMCPURL,
-				SecretsHostDir: "/host/secrets",
 				ChatRunDirBase: t.TempDir(),
 				MaxConcurrent:  10,
 				CACertFile:     "/host/ca.pem",
@@ -802,7 +795,6 @@ func TestChatStart_NoSkillsWhenResolverEmpty(t *testing.T) {
 		Chat: ChatConfig{
 			Image:          testImage,
 			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
 			ChatRunDirBase: t.TempDir(),
 			MaxConcurrent:  10,
 		},
@@ -903,7 +895,6 @@ func TestChatStart_RegistersLLMKeyForRedaction(t *testing.T) {
 		Chat: ChatConfig{
 			Image:          testImage,
 			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
 			ChatRunDirBase: t.TempDir(),
 			MaxConcurrent:  10,
 		},
@@ -945,7 +936,6 @@ func TestChatStart_LaunchFailureUnregistersLLMKey(t *testing.T) {
 		Chat: ChatConfig{
 			Image:          testImage,
 			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
 			ChatRunDirBase: t.TempDir(),
 			MaxConcurrent:  10,
 		},
@@ -1010,7 +1000,6 @@ func TestChatStart_WorkerExtraEnvLLMOverrideWarns(t *testing.T) {
 		Chat: ChatConfig{
 			Image:          testImage,
 			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
 			ChatRunDirBase: t.TempDir(),
 			MaxConcurrent:  10,
 			WorkerExtraEnv: map[string]string{"LLM_API_KEY": "operator-shared-secret-value"},
@@ -1114,7 +1103,6 @@ func TestChatStart_GitCredentialsTokenFromPayload(t *testing.T) {
 		Chat: ChatConfig{
 			Image:             testImage,
 			MCPURL:            testMCPURL,
-			SecretsHostDir:    "/host/secrets",
 			ChatRunDirBase:    t.TempDir(),
 			MaxConcurrent:     10,
 			GitCredentialsURL: "http://cm:8080/api/worker/git-credentials",
@@ -1155,7 +1143,6 @@ func TestChatStart_GitCredentialsTokenRegisteredForRedaction(t *testing.T) {
 		Chat: ChatConfig{
 			Image:          testImage,
 			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
 			ChatRunDirBase: t.TempDir(),
 			MaxConcurrent:  10,
 		},
@@ -1194,7 +1181,6 @@ func TestChatStart_GitCredentialsAndLLMKeyBothRegistered(t *testing.T) {
 		Chat: ChatConfig{
 			Image:          testImage,
 			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
 			ChatRunDirBase: t.TempDir(),
 			MaxConcurrent:  10,
 		},
@@ -1235,7 +1221,6 @@ func TestChatStart_LaunchFailureUnregistersGitCredentialsKey(t *testing.T) {
 		Chat: ChatConfig{
 			Image:          testImage,
 			MCPURL:         testMCPURL,
-			SecretsHostDir: "/host/secrets",
 			ChatRunDirBase: t.TempDir(),
 			MaxConcurrent:  10,
 		},

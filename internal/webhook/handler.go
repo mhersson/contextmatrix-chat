@@ -48,9 +48,6 @@ type ChatConfig struct {
 	Image string
 	// MCPURL is the CM MCP endpoint forwarded to each container as CM_MCP_URL.
 	MCPURL string
-	// SecretsHostDir is the host-side secrets directory bind-mounted at
-	// /run/cm-secrets inside each container.
-	SecretsHostDir string
 	// ChatRunDirBase is the host root under which per-session run directories
 	// (resume.jsonl, primer.txt) are created and mounted at /run/cm-chat.
 	ChatRunDirBase string
@@ -148,7 +145,6 @@ type Server struct {
 	image                     string
 	mcpURL                    string
 	skillsResolver            SkillsResolver
-	secretsHostDir            string
 	chatRunDirBase            string
 	memBytes                  int64
 	pidsLimit                 int64
@@ -236,7 +232,6 @@ func NewServer(cfg Config) *Server {
 		image:                     cfg.Chat.Image,
 		mcpURL:                    cfg.Chat.MCPURL,
 		skillsResolver:            cfg.SkillsResolver,
-		secretsHostDir:            cfg.Chat.SecretsHostDir,
 		chatRunDirBase:            cfg.Chat.ChatRunDirBase,
 		memBytes:                  cfg.Chat.MemoryBytes,
 		pidsLimit:                 cfg.Chat.PidsLimit,

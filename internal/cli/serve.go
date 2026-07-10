@@ -96,12 +96,8 @@ func runServe(ctx context.Context, configPath string) error {
 	}
 
 	// Secrets refresher: writes <secrets_dir>/shared/env, rewritten ahead of each
-	// token expiry. The worker reads /run/cm-secrets/env, which is <shared> bound
-	// read-only into the container. Skipped entirely when github is unconfigured
-	// (provider == nil): the refresher's GenerateToken call would panic on a nil
-	// provider, and every session then either carries a CM-provisioned
-	// git-credentials bearer or is fail-closed rejected by the webhook launch
-	// guard.
+	// token expiry. Skipped entirely when github is unconfigured (provider ==
+	// nil): the refresher's GenerateToken call would panic on a nil provider.
 	sharedDir := filepath.Join(cfg.SecretsDir, "shared")
 
 	var refresher *secrets.Refresher
@@ -217,7 +213,6 @@ func runServe(ctx context.Context, configPath string) error {
 		Chat: webhook.ChatConfig{
 			Image:                     cfg.BaseImage,
 			MCPURL:                    composeMCPURL(base),
-			SecretsHostDir:            sharedDir,
 			ChatRunDirBase:            cfg.ChatRunDir,
 			MemoryBytes:               cfg.ContainerMemoryBytes,
 			PidsLimit:                 cfg.ContainerPidsLimit,
