@@ -91,11 +91,24 @@ dependency.
 1. **Build the worker image.**
 
    ```bash
-   make docker-worker          # tags contextmatrix-chat-worker:dev
+   make docker-worker           # tags contextmatrix-chat-worker:dev (full)
+   make docker-worker-variants  # go-node / python / rust variants
    ```
 
-   The toolchain versions are pinned and SHA256-verified. For a real deployment,
-   publish a digest-pinned image and reference it from `base_image`.
+   The default (`full`) image carries the baseline CLIs (`git`, `gh`, `rg`,
+   `fd`, `node`) plus the **Go, Python, and Rust** toolchains — Go with
+   `golangci-lint`/`gofumpt`, Python via `uv`/`uvx` (a managed CPython) with
+   `ty`/`ruff`, and Rust via `rustup`/`cargo` with `clippy`/`rustfmt`. Slimmer
+   single-language variants (`go-node`, `python`, `rust`) are also published.
+   Toolchain versions are pinned and SHA256-verified.
+
+   The default (`full`) image covers Go, Node, Python, and Rust; **any other
+   ecosystem needs an image carrying that toolchain** — build one `FROM` a
+   published variant (see the agent repo's `docs/custom-images.md` pattern). A
+   per-project image override lands separately.
+
+   For a real deployment, publish a digest-pinned image and reference it from
+   `base_image`.
 
 2. **Write the service config.**
 
