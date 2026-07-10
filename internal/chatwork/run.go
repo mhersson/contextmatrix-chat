@@ -24,7 +24,6 @@ import (
 )
 
 const (
-	primerPath    = "/run/cm-chat/primer.txt"
 	resumePath    = "/run/cm-chat/resume.jsonl"
 	workspaceRoot = "/workspace"
 
@@ -144,9 +143,6 @@ func Run(ctx context.Context) error {
 		}
 	}
 
-	// 7. Primer: the task string passed as the first user turn.
-	primer := readPrimer(primerPath)
-
 	// 8. Redactor: mask the secrets from all tool output and event data. Backed
 	// by a watcher so a fresh per-repo git token the credential-helper/
 	// gh-wrapper subcommands fetch mid-session (see fetchedTokensPath) is
@@ -175,7 +171,9 @@ func Run(ctx context.Context) error {
 	emit := events.NewEmitter(io.Discard, filteredWriter)
 
 	// 12. Epoch loop: one harness.Run per epoch; /clear resets history and
-	// restarts with the re-sent primer as the new task.
+	// restarts with the embedded primer as the new task. Every epoch's first
+	// user turn is the primer (chatPrimer, embedded next to the environment it
+	// describes) — the host sends only /clear, never orientation text.
 	cfg := harness.Config{
 		Model:              model,
 		ContextWindow:      ctxWindow,
@@ -222,15 +220,15 @@ func Run(ctx context.Context) error {
 		return wasCleared, nil
 	}
 
-	return epochLoop(ctx, clearCh, in, &cfg, primer, run)
+	return epochLoop(ctx, clearCh, in, &cfg, chatPrimer, run)
 }
 
 // epochLoop drives the per-epoch harness.Run lifecycle. run is called once per
 // epoch; if it returns cleared=true the epoch was cut short by a /clear frame,
-// History is reset to nil, and the loop blocks for the re-sent primer before
-// starting the next epoch. The loop exits when run returns cleared=false (done
-// or error) or when inbox.Wait returns an error between epochs (inbox closed or
-// parent ctx canceled).
+// History is reset to nil, and the next epoch re-orients itself with the
+// embedded primer as its task. The loop exits when run returns cleared=false
+// (done or error) or when the inbox is closed with nothing queued at the epoch
+// boundary (stdin gone: nobody would drive a fresh epoch).
 func epochLoop(
 	ctx context.Context,
 	clearCh <-chan struct{},
@@ -248,15 +246,14 @@ func epochLoop(
 		cfg.History = nil
 
 		// The clear boundary (drop of pre-clear messages) was set in Pump when
-		// the clear frame was read, in-order with the frame stream. NextAfterClear
-		// releases that hold and blocks for the re-sent primer, which cannot have
-		// been swallowed by the dying epoch.
-		msg, werr := inbox.NextAfterClear(ctx)
-		if werr != nil {
+		// the clear frame was read, in-order with the frame stream. Release the
+		// hold so any message that arrived after the clear reaches the next
+		// epoch's Wait/Drain in order; the epoch's task is the primer itself.
+		if closed := inbox.releaseClear(); closed {
 			return nil
 		}
 
-		task = msg.Content
+		task = chatPrimer
 
 		// drain any stale clear signal that arrived between epochs
 		select {

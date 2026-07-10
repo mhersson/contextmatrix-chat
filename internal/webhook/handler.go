@@ -49,7 +49,7 @@ type ChatConfig struct {
 	// MCPURL is the CM MCP endpoint forwarded to each container as CM_MCP_URL.
 	MCPURL string
 	// ChatRunDirBase is the host root under which per-session run directories
-	// (resume.jsonl, primer.txt) are created and mounted at /run/cm-chat.
+	// (resume.jsonl) are created and mounted at /run/cm-chat.
 	ChatRunDirBase string
 	// MemoryBytes and PidsLimit are the per-container resource caps.
 	MemoryBytes int64

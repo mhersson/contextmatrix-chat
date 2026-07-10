@@ -299,7 +299,7 @@ func TestIntegration_StopAllAndCleanupOrphans(t *testing.T) {
 // onExit (chatExit's run-dir teardown) before it releases the tracker slot.
 // If the tracker slot were released first, a concurrent same-session
 // /chat/start could pass the conflict check, recreate the run dir, and write
-// a fresh primer.txt/resume.jsonl that this cleanup would then delete out
+// a fresh resume.jsonl that this cleanup would then delete out
 // from under the restarted session.
 func TestIntegration_OnExitRunsWhileTracked(t *testing.T) {
 	integrationGuard(t)

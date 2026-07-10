@@ -23,26 +23,27 @@ func TestDialectFromType(t *testing.T) {
 	assert.Equal(t, llm.DialectOpenRouter, dialectFromType(""))
 }
 
-// TestClearBoundaryDeliversPostClearPrimer verifies that a /clear during
-// active work establishes an epoch boundary: a stale in-flight message queued
-// before the clear is dropped, and the re-sent primer that follows the clear
-// survives to become the next epoch's task.
-func TestClearBoundaryDeliversPostClearPrimer(t *testing.T) {
+// TestClearSelfSeedsNextEpochPrimer verifies that a /clear during active work
+// establishes an epoch boundary: a stale in-flight message queued before the
+// clear is dropped, the next epoch's task is the embedded primer (the worker
+// re-orients itself — nothing is re-sent from the host), and a user message
+// that arrives after the clear survives for the new epoch's inbox.
+func TestClearSelfSeedsNextEpochPrimer(t *testing.T) {
 	t.Parallel()
 
 	// Frame stream a real session produces on /clear during active work: a
-	// stale in-flight user message, the clear, then the re-sent primer.
+	// stale in-flight user message, the clear, then the user's next message.
 	var buf bytes.Buffer
 	require.NoError(t, frames.Write(&buf, frames.Frame{Type: frames.TypeUserMessage, MessageID: "stale", Content: "stale"}))
 	require.NoError(t, frames.Write(&buf, frames.Frame{Type: frames.TypeClear}))
-	require.NoError(t, frames.Write(&buf, frames.Frame{Type: frames.TypeUserMessage, MessageID: "m1", Content: "re-sent primer"}))
+	require.NoError(t, frames.Write(&buf, frames.Frame{Type: frames.TypeUserMessage, MessageID: "m1", Content: "follow-up"}))
 
 	inbox := newChatInbox()
 	clearCh := make(chan struct{}, 1)
 
-	// Pump processes every frame in order, then closes the inbox on EOF: the
-	// clear boundary is set (stale dropped) and the primer is queued after it
-	// before epochLoop runs — deterministic, no sleep.
+	// Pump processes every frame in order: the clear boundary is set (stale
+	// dropped) and the follow-up is queued behind the hold before epochLoop
+	// runs — deterministic, no sleep.
 	inbox.Pump(&buf, clearCh)
 
 	cfg := &harness.Config{History: []llm.Message{{Role: "user", Content: "old"}}}
@@ -68,8 +69,14 @@ func TestClearBoundaryDeliversPostClearPrimer(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tasks, 2)
 	assert.Equal(t, "initial task", tasks[0])
-	assert.Equal(t, "re-sent primer", tasks[1], "post-clear primer must survive; stale dropped")
+	assert.Equal(t, chatPrimer, tasks[1], "the next epoch re-orients from the embedded primer")
 	assert.Nil(t, secondHistory)
+
+	// The post-clear user message was not consumed as the task: it is released
+	// to the new epoch's inbox, in order, with the stale pre-clear one dropped.
+	msgs := inbox.Drain()
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "follow-up", msgs[0].Content)
 }
 
 // TestEpochLoop_NaturalDone verifies that a run returning done (not cleared)
@@ -94,13 +101,14 @@ func TestEpochLoop_NaturalDone(t *testing.T) {
 	assert.Equal(t, 1, epoch)
 }
 
-// TestEpochLoop_InboxClosedAfterClear verifies that if the inbox is closed
-// while waiting for the re-sent primer between epochs, the loop exits cleanly.
+// TestEpochLoop_InboxClosedAfterClear verifies that if the inbox is already
+// closed at the epoch boundary (host closed stdin), the loop exits cleanly
+// instead of starting a fresh primer-seeded epoch on a dead session.
 func TestEpochLoop_InboxClosedAfterClear(t *testing.T) {
 	t.Parallel()
 
 	inbox := newChatInbox()
-	inbox.closeInbox() // no next message: session ends between epochs
+	inbox.closeInbox() // session ends between epochs
 
 	clearCh := make(chan struct{}, 1)
 	cfg := &harness.Config{}
@@ -157,11 +165,10 @@ func TestClearDrainsPendingMessage(t *testing.T) {
 	err := epochLoop(context.Background(), clearCh, inbox, cfg, "initial", run)
 	require.NoError(t, err)
 
-	// Before fix: the stale message survived the clear and was returned by
-	// Wait → epoch 2 ran → epoch == 2. After fix: onClear() drops the stale
-	// message and NextAfterClear sees the closed, empty inbox → loop exits
-	// after epoch 1.
-	assert.Equal(t, 1, epoch, "stale pre-clear message must be dropped at the clear boundary; no second epoch without a fresh primer")
+	// onClear() drops the stale message and releaseClear reports the closed,
+	// empty inbox → the loop exits after epoch 1 instead of seeding a second
+	// epoch nobody drives.
+	assert.Equal(t, 1, epoch, "stale pre-clear message must be dropped at the clear boundary; no second epoch on a closed inbox")
 }
 
 // TestConfigureGitAuth verifies Run's git-auth setup: a CM-provisioned token

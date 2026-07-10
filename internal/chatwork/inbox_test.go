@@ -96,45 +96,56 @@ func TestChatInbox_Wait_ContextCanceled(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-// TestNextAfterClearSurvivesRacingSecondClear reproduces the double-clear
-// release-window hang: onClear() re-arms held, and if that race lands between
-// NextAfterClear's release step and its first delivery, the held-gated Wait
-// path never unblocks again (nothing else ever clears held). NextAfterClear
-// must deliver regardless of a racing held, since it is the sole consumer once
-// the cleared epoch's harness.Run has returned. The race is timing-dependent,
-// so this loops with a bounded per-iteration timeout: ctx is context.Background
-// (no escape hatch), so a genuine hang never returns and any single timeout is
-// a failure. A short sleep after spawning the goroutine biases the scheduler so
-// it clears its own release step and parks in the blocking wait before the
-// second onClear()+push land — without it, the racing goroutine usually hasn't
-// even started before the main goroutine finishes both steps, so the window is
-// missed almost every time.
-func TestNextAfterClearSurvivesRacingSecondClear(t *testing.T) {
+// TestReleaseClearOpensHoldForNextEpoch verifies the epoch-boundary release:
+// a message that arrived after the clear stays behind the hold, and once
+// releaseClear opens it the next epoch's Wait delivers that message in order.
+func TestReleaseClearOpensHoldForNextEpoch(t *testing.T) {
 	t.Parallel()
 
-	for i := range 300 {
+	in := newChatInbox()
+	in.push(harness.UserMessage{Content: "stale"})
+	in.onClear() // drops the stale message, holds the inbox
+	in.push(harness.UserMessage{Content: "post-clear"})
+
+	closed := in.releaseClear()
+	assert.False(t, closed, "an open inbox must start the next epoch")
+
+	msg, err := in.Wait(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "post-clear", msg.Content)
+}
+
+// TestReleaseClearReportsClosedInbox verifies the epoch loop's exit signal:
+// a closed inbox with nothing queued means stdin is gone and no fresh epoch
+// should start; a closed inbox that still holds a post-clear message must
+// still run the next epoch so the message is delivered before ErrInboxClosed.
+func TestReleaseClearReportsClosedInbox(t *testing.T) {
+	t.Parallel()
+
+	t.Run("closed and empty exits", func(t *testing.T) {
+		t.Parallel()
+
 		in := newChatInbox()
-		in.onClear() // first clear boundary
+		in.onClear()
+		in.closeInbox()
 
-		done := make(chan struct{})
+		assert.True(t, in.releaseClear())
+	})
 
-		go func() {
-			_, _ = in.NextAfterClear(context.Background()) // no ctx escape: a real hang never returns
+	t.Run("closed with a queued message still delivers", func(t *testing.T) {
+		t.Parallel()
 
-			close(done)
-		}()
+		in := newChatInbox()
+		in.onClear()
+		in.push(harness.UserMessage{Content: "last words"})
+		in.closeInbox()
 
-		time.Sleep(time.Millisecond) // let the goroutine clear its release step and park
+		assert.False(t, in.releaseClear(), "the queued message must reach the next epoch")
 
-		in.onClear()                                    // second clear races the release window
-		in.push(harness.UserMessage{Content: "primer"}) // the post-second-clear primer
-
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			t.Fatalf("NextAfterClear hung after a racing second clear (iter %d)", i)
-		}
-	}
+		msg, err := in.Wait(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, "last words", msg.Content)
+	})
 }
 
 func TestChatInbox_Pump_ClearSignal(t *testing.T) {

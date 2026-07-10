@@ -1,9 +1,7 @@
 package chatwork
 
 import (
-	"log/slog"
-	"os"
-	"strings"
+	_ "embed"
 )
 
 // chatSystemPrompt is injected as the system turn for every chat session. It
@@ -14,16 +12,10 @@ and board tools for interacting with the ContextMatrix task board.
 Work collaboratively: answer questions, explore code, implement changes, and update
 board state when the human asks. Be concise and precise.`
 
-// readPrimer reads the primer file at path and returns its trimmed content.
-// A missing or unreadable file is logged and treated as an empty task — it
-// must not kill the session.
-func readPrimer(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		slog.Warn("read primer failed; using empty task", "path", path, "error", err)
-
-		return ""
-	}
-
-	return strings.TrimSpace(string(data))
-}
+// chatPrimer is the ContextMatrix orientation injected as the first user turn
+// of every epoch — on cold open, on resume, and again after each /clear. It
+// lives here, next to the environment it describes (tool set, /workspace
+// paths), so the two cannot drift apart; the host sends nothing.
+//
+//go:embed primer.md
+var chatPrimer string

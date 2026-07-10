@@ -1,12 +1,9 @@
 package chatwork
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestChatSystemPrompt_NonEmpty(t *testing.T) {
@@ -15,25 +12,14 @@ func TestChatSystemPrompt_NonEmpty(t *testing.T) {
 	assert.NotEmpty(t, chatSystemPrompt)
 }
 
-func TestReadPrimer(t *testing.T) {
+// TestChatPrimer_OrientsToWorkspace pins the environment-coupled facts the
+// embedded primer exists to keep in sync with the code: the tool root and the
+// clone-target convention (see cloneTarget). A primer that drifts from these
+// sends the model to the wrong directory on its first tool call.
+func TestChatPrimer_OrientsToWorkspace(t *testing.T) {
 	t.Parallel()
 
-	t.Run("reads and trims content", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		path := filepath.Join(dir, "primer.txt")
-
-		require.NoError(t, os.WriteFile(path, []byte("  implement the feature\n\n"), 0o644))
-
-		got := readPrimer(path)
-		assert.Equal(t, "implement the feature", got)
-	})
-
-	t.Run("missing file returns empty string", func(t *testing.T) {
-		t.Parallel()
-
-		got := readPrimer("/no/such/primer.txt")
-		assert.Empty(t, got)
-	})
+	assert.NotEmpty(t, chatPrimer)
+	assert.Contains(t, chatPrimer, "`/workspace`", "the primer must name the real tool root")
+	assert.Contains(t, chatPrimer, "`/workspace/<project>`", "clone guidance must match cloneTarget's convention")
 }
