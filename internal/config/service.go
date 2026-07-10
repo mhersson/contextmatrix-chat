@@ -5,7 +5,6 @@ package config
 import (
 	"fmt"
 	"log/slog"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -23,55 +22,12 @@ const envPrefix = "CMX_"
 // avoid the gosec G101 false-positive that fires on path literals.
 const defaultSecretsDir = "/var/run/cm-chat/secrets" //nolint:gosec // path, not a credential
 
-// GitHubAppConfig holds GitHub App credentials for minting installation tokens.
-// Mirrors the runner/agent field shape so operators carry one mental model.
-type GitHubAppConfig struct {
-	AppID          int64  `koanf:"app_id"`
-	InstallationID int64  `koanf:"installation_id"`
-	PrivateKeyPath string `koanf:"private_key_path"`
-}
-
-// GitHubPATConfig holds a fine-grained personal access token used instead of a
-// GitHub App where App creation is restricted.
-type GitHubPATConfig struct {
-	Token string `koanf:"token"`
-}
-
-// GitHubConfig is the unified GitHub auth block. Set AuthMode to "app" or "pat".
-// Host is a convenience for GitHub Enterprise: when set (and APIBaseURL is
-// empty), APIBaseURL is derived as https://<host>/api/v3 at load time.
-type GitHubConfig struct {
-	AuthMode   string          `koanf:"auth_mode"`
-	Host       string          `koanf:"host"`
-	APIBaseURL string          `koanf:"api_base_url"`
-	App        GitHubAppConfig `koanf:"app"`
-	PAT        GitHubPATConfig `koanf:"pat"`
-}
-
-// Configured reports whether a GitHub auth mode is set locally. False means
-// ContextMatrix provisions git credentials per session instead (via the
-// chat-start payload's git_credentials_token, protocol v0.5.2): the github
-// block may be entirely absent (validate() then permits it), or — if some
-// other field is set while auth_mode is left empty — an invalid partial
-// config that validate() still rejects.
-func (g GitHubConfig) Configured() bool {
-	return g.AuthMode != ""
-}
-
 // CompactionConfig controls in-context compaction. When the conversation
 // reaches Threshold of the model's context window, older turns are dropped and
 // only the most recent KeepRecentTurns turns are retained verbatim.
 type CompactionConfig struct {
 	Threshold       float64 `koanf:"threshold"`
 	KeepRecentTurns int     `koanf:"keep_recent_turns"`
-}
-
-// LLMEndpoint is the inference endpoint workers call. Type selects the harness
-// wire dialect ("openrouter" default | "openai"); BaseURL/APIKey address it.
-type LLMEndpoint struct {
-	Type    string `koanf:"type"`
-	BaseURL string `koanf:"base_url"`
-	APIKey  string `koanf:"api_key"`
 }
 
 // ServiceConfig is the host-side chat service configuration. ContextMatrix
@@ -90,8 +46,6 @@ type ServiceConfig struct {
 	ContainerPidsLimit        int64
 	SecretsDir                string
 	CACertFile                string
-	LLMEndpoint               LLMEndpoint
-	GitHub                    GitHubConfig
 	WorkerExtraEnv            map[string]string
 	ReasoningEffort           string
 	ReplaySkew                time.Duration
@@ -122,8 +76,6 @@ type serviceRaw struct {
 	ContainerPidsLimit        int64             `koanf:"container_pids_limit"`
 	SecretsDir                string            `koanf:"secrets_dir"`
 	CACertFile                string            `koanf:"ca_cert_file"`
-	LLMEndpoint               LLMEndpoint       `koanf:"llm_endpoint"`
-	GitHub                    GitHubConfig      `koanf:"github"`
 	WorkerExtraEnv            map[string]string `koanf:"worker_extra_env"`
 	ReasoningEffort           string            `koanf:"reasoning_effort"`
 	ReplaySkewSeconds         int               `koanf:"webhook_replay_skew_seconds"`
@@ -177,7 +129,6 @@ func LoadService(path string) (*ServiceConfig, error) {
 	}
 
 	// CMX_FOO_BAR -> "foo_bar"; nested keys use "__":
-	// CMX_GITHUB__AUTH_MODE -> "github.auth_mode"
 	// CMX_COMPACTION__THRESHOLD -> "compaction.threshold"
 	envCb := func(s string) string {
 		s = strings.ToLower(strings.TrimPrefix(s, envPrefix))
@@ -198,9 +149,6 @@ func LoadService(path string) (*ServiceConfig, error) {
 
 // toConfig assembles the typed config from the wire form.
 func (r serviceRaw) toConfig() (*ServiceConfig, error) {
-	gh := r.GitHub
-	gh.deriveAPIBaseURL()
-
 	return &ServiceConfig{
 		ContextMatrixURL:          r.ContextMatrixURL,
 		ContainerContextMatrixURL: r.ContainerContextMatrixURL,
@@ -214,8 +162,6 @@ func (r serviceRaw) toConfig() (*ServiceConfig, error) {
 		ContainerPidsLimit:        r.ContainerPidsLimit,
 		SecretsDir:                r.SecretsDir,
 		CACertFile:                r.CACertFile,
-		LLMEndpoint:               r.LLMEndpoint,
-		GitHub:                    gh,
 		WorkerExtraEnv:            r.WorkerExtraEnv,
 		ReasoningEffort:           r.ReasoningEffort,
 		ReplaySkew:                time.Duration(r.ReplaySkewSeconds) * time.Second,
@@ -228,32 +174,6 @@ func (r serviceRaw) toConfig() (*ServiceConfig, error) {
 		Compaction:                r.Compaction,
 		ChatRunDir:                r.ChatRunDir,
 	}, nil
-}
-
-// deriveAPIBaseURL fills APIBaseURL from Host when only Host is set: any
-// user-supplied scheme is stripped and the standard GitHub Enterprise Server
-// "/api/v3" path is appended over https. An explicit api_base_url always wins so
-// operators can target non-standard layouts (e.g. GHEC-DR api.acme.ghe.com). The
-// derived URL flows to githubauth.WithAPIBaseURL in serve.go.
-func (g *GitHubConfig) deriveAPIBaseURL() {
-	if g.Host == "" || g.APIBaseURL != "" {
-		return
-	}
-
-	g.APIBaseURL = "https://" + g.BareHost() + "/api/v3"
-}
-
-// BareHost returns Host as a bare host[:port], stripping any user-supplied
-// scheme (Host accepts "ghe.example.com" and "https://ghe.example.com" alike).
-// This is the form the worker needs for git credential-helper scoping and
-// GH_HOST. Empty when Host is unset.
-func (g *GitHubConfig) BareHost() string {
-	host := g.Host
-	if i := strings.Index(host, "://"); i >= 0 {
-		host = host[i+len("://"):]
-	}
-
-	return host
 }
 
 // isNotExist reports whether err is a missing-file error from the file
@@ -275,21 +195,6 @@ func (c *ServiceConfig) Validate() error {
 
 	if len(c.APIKey) < 32 {
 		return fmt.Errorf("api_key must be at least 32 characters, got %d", len(c.APIKey))
-	}
-
-	// llm_endpoint.api_key is intentionally not required here: ContextMatrix
-	// provisions the inference endpoint per session in multi-user deployments
-	// (ChatStartPayload.llm_endpoint), and this block is only a fallback for a
-	// pre-multi-user CM (see GitHubConfig.validate below for the analogous
-	// github fallback).
-	switch c.LLMEndpoint.Type {
-	case "", "openrouter":
-	case "openai":
-		if c.LLMEndpoint.BaseURL == "" {
-			return fmt.Errorf("llm_endpoint.base_url is required when llm_endpoint.type is \"openai\"")
-		}
-	default:
-		return fmt.Errorf("llm_endpoint.type must be \"openrouter\" or \"openai\", got %q", c.LLMEndpoint.Type)
 	}
 
 	if c.BaseImage == "" {
@@ -350,97 +255,6 @@ func (c *ServiceConfig) Validate() error {
 
 	if c.ChatRunDir == "" {
 		return fmt.Errorf("chat_run_dir is required")
-	}
-
-	return c.GitHub.validate()
-}
-
-// validate checks the GitHub auth block, mirroring the runner/agent contract:
-// exactly one auth path is populated per auth_mode. An entirely empty block
-// (Configured() false and every other field zero) is valid: ContextMatrix
-// provisions a per-session git-credentials bearer instead (see
-// cli.newTokenProvider), and the worker never falls back to a local token
-// provider for anything. A PARTIAL block — some other field set while
-// auth_mode is left empty, e.g. a stray pat.token — is still rejected below
-// via the same "auth_mode is required" error a fully unknown auth_mode
-// produces; silently ignoring it would strand credentials the operator meant
-// to use.
-func (g *GitHubConfig) validate() error {
-	if !g.Configured() &&
-		g.Host == "" && g.APIBaseURL == "" &&
-		g.App == (GitHubAppConfig{}) && g.PAT == (GitHubPATConfig{}) {
-		return nil
-	}
-
-	// Host accepts either a bare hostname or a full URL; a missing scheme is
-	// synthesised so the same host check applies either way.
-	if g.Host != "" {
-		if err := validateGitHubHost(g.Host); err != nil {
-			return err
-		}
-	}
-
-	switch g.AuthMode {
-	case "app":
-		if g.App.AppID == 0 {
-			return fmt.Errorf("github.app.app_id is required when github.auth_mode is \"app\"")
-		}
-
-		if g.App.InstallationID == 0 {
-			return fmt.Errorf("github.app.installation_id is required when github.auth_mode is \"app\"")
-		}
-
-		if g.App.PrivateKeyPath == "" {
-			return fmt.Errorf("github.app.private_key_path is required when github.auth_mode is \"app\"")
-		}
-
-		if g.PAT.Token != "" {
-			return fmt.Errorf("github.pat.token must be empty when github.auth_mode is \"app\"")
-		}
-	case "pat":
-		if g.PAT.Token == "" {
-			return fmt.Errorf("github.pat.token is required when github.auth_mode is \"pat\"")
-		}
-
-		if g.App.AppID != 0 || g.App.InstallationID != 0 || g.App.PrivateKeyPath != "" {
-			return fmt.Errorf("github.app.* must be empty when github.auth_mode is \"pat\"")
-		}
-	default:
-		return fmt.Errorf("github.auth_mode is required: must be \"app\" or \"pat\" (got %q)", g.AuthMode)
-	}
-
-	return nil
-}
-
-// validateGitHubHost accepts either a bare hostname ("ghe.example.com") or a
-// full URL ("https://ghe.example.com") — both documented in serve.yaml.example
-// as valid github.host forms. A bare host has https:// synthesised so the same
-// scheme/host/userinfo checks apply either way, mirroring the agent's
-// validateGitHubHost. Rejecting a non-http(s) scheme and embedded userinfo
-// keeps credentials from surviving into the derived APIBaseURL: BareHost only
-// strips the scheme, not userinfo, so an unchecked host would carry
-// credentials straight into "https://<BareHost>/api/v3".
-func validateGitHubHost(host string) error {
-	forCheck := host
-	if !strings.Contains(forCheck, "://") {
-		forCheck = "https://" + forCheck
-	}
-
-	u, err := url.Parse(forCheck)
-	if err != nil {
-		return fmt.Errorf("github.host: invalid host %q: %w", host, err)
-	}
-
-	if s := strings.ToLower(u.Scheme); s != "http" && s != "https" {
-		return fmt.Errorf("github.host: scheme must be http or https, got %q", host)
-	}
-
-	if u.Hostname() == "" {
-		return fmt.Errorf("github.host: host is required in %q", host)
-	}
-
-	if u.User != nil {
-		return fmt.Errorf("github.host: must not embed userinfo credentials")
 	}
 
 	return nil

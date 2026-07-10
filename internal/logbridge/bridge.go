@@ -110,9 +110,9 @@ func New(hub *Hub, r *redact.Redactor) *Bridge {
 }
 
 // SetRedactor atomically swaps the redactor used for all lines bridged after
-// the call. Safe for concurrent use with BridgeLine — intended to be called
-// from the secrets Refresher's OnRotate hook so a rotated GitHub token is
-// masked in bridged logs the instant the host mints it, without a restart.
+// the call. Safe for concurrent use with BridgeLine — the RedactorRegistry
+// calls it on every session-secret add/remove so the masked set tracks the
+// live sessions without a restart.
 func (b *Bridge) SetRedactor(r *redact.Redactor) {
 	b.redactor.Store(r)
 }

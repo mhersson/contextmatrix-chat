@@ -24,11 +24,11 @@ internal/cli/             cobra commands: serve, work (hidden)
 internal/config/          layered service config (defaults < file < env, CMX_*) + Validate
 internal/webhook/         HTTP surface: /chat/start, /chat/end, /message, /logs (SSE), /health, /readyz; HMAC auth, replay + dedup caches, drain gate
 internal/executor/        Docker container lifecycle; Tracker gates concurrency; DockerExecutor implements Executor
-internal/chatwork/        container work loop: secrets, git credential helper, optional clone, tool registry, primer/resume, epoch loop
+internal/chatwork/        container work loop: provisioned credentials, git credential helper, optional clone, tool registry, primer/resume, epoch loop
 internal/mcpbridge/       dials CM's /mcp, adapts each board tool to a harness tools.Tool
 internal/logbridge/       Hub fanning container log frames to SSE subscribers
 internal/frames/          JSON-Lines control protocol on container stdin (user-message, clear)
-internal/secrets/         host-side secrets staging: shared env file (LLM key + rotating GitHub token), atomic write+rename
+internal/secrets/         KEY=value env-file read/write (atomic write+rename); stages the worker's provisioned git-credentials config
 internal/metrics/         Prometheus metric set on a dedicated registry
 docker/Dockerfile.worker  worker image; entrypoint `contextmatrix-chat work`
 ```
@@ -63,18 +63,21 @@ the other way instead: satisfy a harness interface from a consumer here.
 - Spell names out: "chat", "runner", "agent" — no abbreviations in config keys,
   code, comments, or commit messages.
 
-### GitHub auth
+### Credentials
 
-All GitHub tokens come from `githubauth` providers (App or PAT) via the secrets
-refresher. Do not read raw tokens from config or env in new code paths.
+All credentials (LLM endpoint, git, task-skills clone token) are CM-provisioned
+per session via the chat-start payload and the task-skills-source endpoint.
+Never add local credential config or serve-side fallbacks; the worker reads
+the provisioned values once at boot from its per-session container env
+(`chatwork.Run`) and the staged git-credentials config file.
 
 ### Config
 
 koanf, not viper. Precedence: defaults < file < env. `CMX_*` env prefix; nested
-keys use `__` (`CMX_GITHUB__AUTH_MODE`, `CMX_COMPACTION__THRESHOLD`). The koanf
-wire shape (`serviceRaw`) is kept separate from the typed `ServiceConfig` so the
-public struct never carries half-parsed values. Always `Validate()` after
-merging.
+keys use `__` (`CMX_COMPACTION__THRESHOLD`, `CMX_COMPACTION__KEEP_RECENT_TURNS`).
+The koanf wire shape (`serviceRaw`) is kept separate from the typed
+`ServiceConfig` so the public struct never carries half-parsed values. Always
+`Validate()` after merging.
 
 ### Documentation
 
@@ -84,9 +87,9 @@ Document the CURRENT STATE: what exists NOW and WHY, not how we got here.
 
 1. **One container per session.** serve refuses a second container for a live
    session (409) and enforces `max_concurrent` (429) before touching Docker.
-2. **serve owns the container lifecycle** — launch, resource caps, secret
-   refresh, orphan cleanup on startup, and graceful drain (flip draining → HTTP
-   shutdown → kill tracked containers). It makes no status callback to CM.
+2. **serve owns the container lifecycle** — launch, resource caps, orphan
+   cleanup on startup, and graceful drain (flip draining → HTTP shutdown →
+   kill tracked containers). It makes no status callback to CM.
 3. **work runs the interactive epoch loop.** Each epoch is one `harness.Run`. A
    `/clear` frame ends the epoch, resets history to nil, and blocks for the next
    primer. Resume seeds history from `resume.jsonl` when `CM_CHAT_RESUME=1`.
@@ -99,18 +102,17 @@ Document the CURRENT STATE: what exists NOW and WHY, not how we got here.
 6. **Board operations go over MCP, never raw HTTP.** The worker dials
    `<container_contextmatrix_url>/mcp`, lists board tools, and offers them to
    the model alongside the filesystem/shell tools rooted at `/workspace`.
-7. **Git credentials are fetched per-repo, per-operation from CM** in
-   provisioned mode (default, `CM_GIT_CREDENTIALS_TOKEN` set). At boot, `Run`
-   stages the credentials URL/token into a 0600 scratch file and registers the
-   global v2 git credential helper and `gh` wrapper; both read only that file,
-   never `os.Getenv` (the model's git/`gh` calls run through the harness bash
-   tool's scrubbed environment). Each call GETs CM's
-   `/api/worker/git-credentials` with the target repo's `(host, path)` and mints
-   a fresh token, so one session can span multiple projects/hosts. A fetch
-   failure logs one stderr note (never a credential) and continues. Minted
-   tokens are recorded to a scratch file the redactor polls, so they stay
-   masked. Deprecated fallback: a local `github` block writes one rotating token
-   scoped to a single host for the whole session.
+7. **Git credentials are fetched per-repo, per-operation from CM**
+   (`CM_GIT_CREDENTIALS_TOKEN`, always provisioned — chat/start fails closed
+   without it). At boot, `Run` stages the credentials URL/token into a 0600
+   scratch file and registers the global v2 git credential helper and `gh`
+   wrapper; both read only that file, never `os.Getenv` (the model's git/`gh`
+   calls run through the harness bash tool's scrubbed environment). Each call
+   GETs CM's `/api/worker/git-credentials` with the target repo's
+   `(host, path)` and mints a fresh token, so one session can span multiple
+   projects/hosts. A fetch failure logs one stderr note (never a credential)
+   and continues. Minted tokens are recorded to a scratch file the redactor
+   polls, so they stay masked.
 8. **task-skills come from ContextMatrix** (single source of truth): serve
    fetches a `{git_remote_url, ref}` pointer, clones it on the host, and
    bind-mounts the clone read-only at `/run/cm-skills`. Chat carries no

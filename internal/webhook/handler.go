@@ -48,9 +48,6 @@ type ChatConfig struct {
 	Image string
 	// MCPURL is the CM MCP endpoint forwarded to each container as CM_MCP_URL.
 	MCPURL string
-	// SecretsHostDir is the host-side secrets directory bind-mounted at
-	// /run/cm-secrets inside each container.
-	SecretsHostDir string
 	// ChatRunDirBase is the host root under which per-session run directories
 	// (resume.jsonl, primer.txt) are created and mounted at /run/cm-chat.
 	ChatRunDirBase string
@@ -80,37 +77,12 @@ type ChatConfig struct {
 	// caCertMountPath and points the worker's TLS (harness LLM client, MCP
 	// bridge) and git at it. Empty disables it.
 	CACertFile string
-	// GitHubHost is the GitHub Enterprise host (serve config github.host) the
-	// git token is minted for, forwarded to each worker as CM_GIT_HOST so the
-	// git credential helper and gh are scoped to it even when the session has
-	// no seeded repo URL (cross-project chats). Empty means github.com.
-	// Only meaningful (and only ever forwarded) in the local-github-config
-	// fallback branch — see GitHubConfigured.
-	GitHubHost string
-	// GitHubConfigured mirrors config.GitHubConfig.Configured(): true when the
-	// service has a local github auth_mode configured. It gates two things: (1)
-	// the fail-closed launch guard — a session with no CM-provisioned
-	// git-credentials bearer AND no local github config has no way to
-	// authenticate any git operation, so chat/start refuses it outright; (2)
-	// whether CM_GIT_HOST is meaningful at all — it is only sent when this is
-	// true AND there is no payload token, since a provisioned session is
-	// multi-host by construction (CM resolves the credential per (host, path)
-	// on every worker fetch) and a single static host would be actively wrong.
-	GitHubConfigured bool
 	// GitCredentialsURL is CM's worker git-credentials endpoint
 	// (<container_contextmatrix_url>/api/worker/git-credentials), forwarded to
 	// the worker as CM_GIT_CREDENTIALS_URL alongside the payload's
 	// GitCredentialsToken so the worker can fetch fresh, per-repo credentials
-	// on demand. Only sent when the payload carries a token.
+	// on demand.
 	GitCredentialsURL string
-	// LLMConfigured mirrors GitHubConfigured for the LLM channel: true when the
-	// service has a local llm_endpoint.api_key configured
-	// (cfg.LLMEndpoint.APIKey != "" at serve.go wiring). It gates the
-	// fail-closed launch guard — a session with no CM-provisioned llm_endpoint
-	// AND no local llm_endpoint config has no way to authenticate any
-	// inference call for its whole lifetime, so chat/start refuses it outright
-	// rather than launching a container that fails opaquely on the first turn.
-	LLMConfigured bool
 }
 
 // Config carries the dependencies NewServer needs. Pointers may be shared with
@@ -173,7 +145,6 @@ type Server struct {
 	image                     string
 	mcpURL                    string
 	skillsResolver            SkillsResolver
-	secretsHostDir            string
 	chatRunDirBase            string
 	memBytes                  int64
 	pidsLimit                 int64
@@ -185,10 +156,7 @@ type Server struct {
 	workerExtraEnv            map[string]string
 	reasoningEffort           string
 	caCertFile                string
-	githubHost                string
-	githubConfigured          bool
 	gitCredentialsURL         string
-	llmConfigured             bool
 
 	hub *logbridge.Hub
 
@@ -219,22 +187,11 @@ type Server struct {
 	sseShutdown     chan struct{}
 	sseShutdownOnce sync.Once
 
-	// llmDeprecationWarnOnce guards the "CM did not provision an llm endpoint"
-	// fallback warning so it logs once per server process, not once per
-	// chat/start request — a live server may serve many sessions from a CM
-	// version that predates the multi-user llm_endpoint payload field.
-	llmDeprecationWarnOnce sync.Once
-
 	// llmOverrideWarnOnce guards the "worker_extra_env overrides CM-provisioned
 	// llm credentials" warning so it logs once per server process — a static
-	// worker_extra_env produces the same override on every provisioned session,
-	// and repeating it per request would spam a long-lived server's log.
+	// worker_extra_env produces the same override on every session, and
+	// repeating it per request would spam a long-lived server's log.
 	llmOverrideWarnOnce sync.Once
-
-	// gitDeprecationWarnOnce guards the "CM did not provision git credentials"
-	// fallback warning so it logs once per server process, not once per
-	// chat/start request — mirrors llmDeprecationWarnOnce.
-	gitDeprecationWarnOnce sync.Once
 }
 
 // NewServer wires a Server from its dependencies. The replay cache, dedup
@@ -275,7 +232,6 @@ func NewServer(cfg Config) *Server {
 		image:                     cfg.Chat.Image,
 		mcpURL:                    cfg.Chat.MCPURL,
 		skillsResolver:            cfg.SkillsResolver,
-		secretsHostDir:            cfg.Chat.SecretsHostDir,
 		chatRunDirBase:            cfg.Chat.ChatRunDirBase,
 		memBytes:                  cfg.Chat.MemoryBytes,
 		pidsLimit:                 cfg.Chat.PidsLimit,
@@ -287,10 +243,7 @@ func NewServer(cfg Config) *Server {
 		workerExtraEnv:            cfg.Chat.WorkerExtraEnv,
 		reasoningEffort:           cfg.Chat.ReasoningEffort,
 		caCertFile:                cfg.Chat.CACertFile,
-		githubHost:                cfg.Chat.GitHubHost,
-		githubConfigured:          cfg.Chat.GitHubConfigured,
 		gitCredentialsURL:         cfg.Chat.GitCredentialsURL,
-		llmConfigured:             cfg.Chat.LLMConfigured,
 		hub:                       cfg.Hub,
 		replay:                    replay,
 		dedup:                     dedup,

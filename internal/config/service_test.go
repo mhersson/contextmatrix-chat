@@ -17,17 +17,12 @@ func validServiceConfig() ServiceConfig {
 		ContextMatrixURL: "http://contextmatrix:8080",
 		APIKey:           "0123456789abcdef0123456789abcdef", // 32 chars
 		BaseImage:        "ghcr.io/example/chat@sha256:" + repeatHex(64),
-		LLMEndpoint:      LLMEndpoint{Type: "openrouter", APIKey: "sk-or-test"},
 		ImagePullPolicy:  "if-not-present",
 		MaxConcurrent:    5,
 		Port:             9093,
 		SecretsDir:       "/var/run/cm-chat/secrets",
 		Compaction:       CompactionConfig{Threshold: 0.85, KeepRecentTurns: 6},
 		ChatRunDir:       "/var/run/cm-chat/sessions",
-		GitHub: GitHubConfig{
-			AuthMode: "pat",
-			PAT:      GitHubPATConfig{Token: "ghp_test"},
-		},
 	}
 }
 
@@ -79,9 +74,6 @@ max_concurrent: 12
 container_memory_limit: 4294967296
 container_pids_limit: 256
 secrets_dir: /opt/secrets
-llm_endpoint:
-  type: openrouter
-  api_key: sk-or-fromfile
 webhook_replay_skew_seconds: 120
 webhook_replay_cache_size: 4096
 message_dedup_ttl_seconds: 300
@@ -93,12 +85,6 @@ compaction:
   threshold: 0.75
   keep_recent_turns: 4
 chat_run_dir: /var/run/cm-chat/sessions
-github:
-  auth_mode: app
-  app:
-    app_id: 12345
-    installation_id: 67890
-    private_key_path: /etc/key.pem
 worker_extra_env:
   FOO: bar
   BAZ: qux
@@ -120,8 +106,6 @@ worker_extra_env:
 	assert.Equal(t, int64(4294967296), cfg.ContainerMemoryBytes)
 	assert.Equal(t, int64(256), cfg.ContainerPidsLimit)
 	assert.Equal(t, "/opt/secrets", cfg.SecretsDir)
-	assert.Equal(t, "openrouter", cfg.LLMEndpoint.Type)
-	assert.Equal(t, "sk-or-fromfile", cfg.LLMEndpoint.APIKey)
 	assert.Equal(t, 120*time.Second, cfg.ReplaySkew)
 	assert.Equal(t, 4096, cfg.ReplayCacheSize)
 	assert.Equal(t, 300*time.Second, cfg.MessageDedupTTL)
@@ -132,10 +116,6 @@ worker_extra_env:
 	assert.InDelta(t, 0.75, cfg.Compaction.Threshold, 1e-9)
 	assert.Equal(t, 4, cfg.Compaction.KeepRecentTurns)
 	assert.Equal(t, "/var/run/cm-chat/sessions", cfg.ChatRunDir)
-	assert.Equal(t, "app", cfg.GitHub.AuthMode)
-	assert.Equal(t, int64(12345), cfg.GitHub.App.AppID)
-	assert.Equal(t, int64(67890), cfg.GitHub.App.InstallationID)
-	assert.Equal(t, "/etc/key.pem", cfg.GitHub.App.PrivateKeyPath)
 	assert.Equal(t, map[string]string{"FOO": "bar", "BAZ": "qux"}, cfg.WorkerExtraEnv)
 }
 
@@ -146,22 +126,13 @@ func TestServiceEnvOverridesFile(t *testing.T) {
 contextmatrix_url: http://from-file:8080
 api_key: filekeyfilekeyfilekeyfilekeyfile
 base_image: ghcr.io/example/chat:v1
-llm_endpoint:
-  api_key: sk-or-file
 chat_run_dir: /var/run/file
-github:
-  auth_mode: pat
-  pat:
-    token: ghp_file
 `
 	path := filepath.Join(t.TempDir(), "serve.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
 	t.Setenv("CMX_CONTEXTMATRIX_URL", "http://from-env:8080")
 	t.Setenv("CMX_PORT", "7777")
-	t.Setenv("CMX_LLM_ENDPOINT__API_KEY", "sk-or-env")
-	t.Setenv("CMX_GITHUB__AUTH_MODE", "pat")
-	t.Setenv("CMX_GITHUB__PAT__TOKEN", "ghp_env")
 	t.Setenv("CMX_COMPACTION__THRESHOLD", "0.90")
 	t.Setenv("CMX_CHAT_RUN_DIR", "/var/run/env")
 
@@ -170,8 +141,6 @@ github:
 
 	assert.Equal(t, "http://from-env:8080", cfg.ContextMatrixURL)
 	assert.Equal(t, 7777, cfg.Port)
-	assert.Equal(t, "sk-or-env", cfg.LLMEndpoint.APIKey)
-	assert.Equal(t, "ghp_env", cfg.GitHub.PAT.Token)
 	assert.InDelta(t, 0.90, cfg.Compaction.Threshold, 1e-9)
 	assert.Equal(t, "/var/run/env", cfg.ChatRunDir)
 	// Untouched file value survives.
@@ -214,60 +183,6 @@ func TestServiceValidate(t *testing.T) {
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "base_image")
-	})
-
-	t.Run("missing llm_endpoint.api_key passes (CM-provisioned fallback)", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.LLMEndpoint.APIKey = ""
-		require.NoError(t, cfg.Validate())
-	})
-
-	t.Run("empty github and llm_endpoint blocks pass (CM-provisioned fallback)", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.GitHub = GitHubConfig{}
-		cfg.LLMEndpoint = LLMEndpoint{}
-		require.NoError(t, cfg.Validate())
-	})
-
-	t.Run("partial github config errors naming auth_mode", func(t *testing.T) {
-		// auth_mode left empty while some OTHER github field is set must still
-		// error: only a github block with every field zero is treated as
-		// "fully absent" (CM-provisioned fallback).
-		tests := []struct {
-			name string
-			gh   GitHubConfig
-		}{
-			{"pat.token set", GitHubConfig{PAT: GitHubPATConfig{Token: "ghp_orphaned"}}},
-			{"host set", GitHubConfig{Host: "ghe.example.com"}},
-			{"api_base_url set", GitHubConfig{APIBaseURL: "https://api.acme.ghe.com"}},
-			{"app.app_id set", GitHubConfig{App: GitHubAppConfig{AppID: 123}}},
-		}
-
-		for _, tc := range tests {
-			t.Run(tc.name, func(t *testing.T) {
-				cfg := validServiceConfig()
-				cfg.GitHub = tc.gh
-				err := cfg.Validate()
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "auth_mode")
-			})
-		}
-	})
-
-	t.Run("unknown llm_endpoint.type errors", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.LLMEndpoint = LLMEndpoint{Type: "anthropic", APIKey: "k"}
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "openrouter")
-	})
-
-	t.Run("openai type without base_url errors even with empty api_key", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.LLMEndpoint = LLMEndpoint{Type: "openai"}
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "base_url")
 	})
 
 	t.Run("bad image_pull_policy errors", func(t *testing.T) {
@@ -363,30 +278,6 @@ func TestServiceValidate(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "chat_run_dir")
 	})
-
-	t.Run("app auth_mode requires app fields", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.GitHub = GitHubConfig{AuthMode: "app"}
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "app")
-	})
-
-	t.Run("pat auth_mode requires token", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.GitHub = GitHubConfig{AuthMode: "pat"}
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "token")
-	})
-
-	t.Run("unknown auth_mode errors", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.GitHub = GitHubConfig{AuthMode: "oauth"}
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "auth_mode")
-	})
 }
 
 func TestServiceValidate_ReasoningEffort(t *testing.T) {
@@ -401,115 +292,6 @@ func TestServiceValidate_ReasoningEffort(t *testing.T) {
 	err := bad.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reasoning_effort")
-}
-
-func TestGitHubHostDerivesAPIBaseURL(t *testing.T) {
-	cases := []struct {
-		name       string
-		host       string
-		apiBaseURL string
-		want       string
-	}{
-		{"bare host derives api/v3", "ghe.example.com", "", "https://ghe.example.com/api/v3"},
-		{"explicit api_base_url wins", "ghe.example.com", "https://api.acme.ghe.com", "https://api.acme.ghe.com"},
-		{"full-url host accepted", "https://ghe.example.com", "", "https://ghe.example.com/api/v3"},
-		{"no host leaves api_base_url empty", "", "", ""},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			raw := serviceRaw{GitHub: GitHubConfig{Host: tc.host, APIBaseURL: tc.apiBaseURL}}
-
-			cfg, err := raw.toConfig()
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, cfg.GitHub.APIBaseURL)
-		})
-	}
-}
-
-func TestGitHubHostEnvBinding(t *testing.T) {
-	clearServiceEnv(t)
-	t.Setenv("CMX_GITHUB__HOST", "ghe.example.com")
-
-	cfg, err := LoadService(filepath.Join(t.TempDir(), "nope.yaml"))
-	require.NoError(t, err)
-	assert.Equal(t, "ghe.example.com", cfg.GitHub.Host)
-	assert.Equal(t, "https://ghe.example.com/api/v3", cfg.GitHub.APIBaseURL,
-		"CMX_GITHUB__HOST must bind and derive the api base url")
-}
-
-func TestGitHubHostValidation(t *testing.T) {
-	t.Run("bare host passes", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.GitHub.Host = "ghe.example.com"
-		require.NoError(t, cfg.Validate())
-	})
-
-	t.Run("full url host passes", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.GitHub.Host = "https://ghe.example.com"
-		require.NoError(t, cfg.Validate())
-	})
-
-	t.Run("garbage host errors", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.GitHub.Host = "https://"
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "github.host")
-	})
-
-	t.Run("non-http scheme is rejected", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.GitHub.Host = "ftp://ghe.example.com"
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "github.host")
-	})
-
-	t.Run("embedded userinfo is rejected", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.GitHub.Host = "https://user:pw@ghe.example.com"
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "github.host")
-	})
-
-	t.Run("bare host with userinfo-shaped garbage still rejected", func(t *testing.T) {
-		// A bare host has https:// synthesised before parsing, so userinfo
-		// smuggled in without an explicit scheme must be caught the same way.
-		cfg := validServiceConfig()
-		cfg.GitHub.Host = "user:pw@ghe.example.com"
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "github.host")
-	})
-}
-
-func TestGitHubConfigConfigured(t *testing.T) {
-	assert.False(t, GitHubConfig{}.Configured(), "empty auth_mode is not configured")
-	assert.True(t, GitHubConfig{AuthMode: "pat"}.Configured())
-	assert.True(t, GitHubConfig{AuthMode: "app"}.Configured())
-}
-
-func TestGitHubBareHost(t *testing.T) {
-	cases := []struct {
-		name string
-		host string
-		want string
-	}{
-		{"bare host unchanged", "ghe.example.com", "ghe.example.com"},
-		{"scheme stripped", "https://ghe.example.com", "ghe.example.com"},
-		{"port kept", "https://ghe.example.com:8443", "ghe.example.com:8443"},
-		{"empty stays empty", "", ""},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			g := GitHubConfig{Host: tc.host}
-			assert.Equal(t, tc.want, g.BareHost())
-		})
-	}
 }
 
 func TestCACertFileValidation(t *testing.T) {
@@ -594,63 +376,14 @@ func TestServiceAdminPort_Validate(t *testing.T) {
 	})
 }
 
-func TestServiceLLMEndpointLoadsAndValidates(t *testing.T) {
-	clearServiceEnv(t)
-
-	content := `
-contextmatrix_url: http://contextmatrix:8080
-api_key: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-base_image: ghcr.io/example/chat@sha256:` + repeatHex(64) + `
-image_pull_policy: if-not-present
-max_concurrent: 5
-port: 9093
-secrets_dir: /var/run/cm-chat/secrets
-chat_run_dir: /var/run/cm-chat/sessions
-llm_endpoint:
-  type: openai
-  base_url: https://your-llm-endpoint.example/v1
-  api_key: k
-compaction:
-  threshold: 0.85
-  keep_recent_turns: 6
-github:
-  auth_mode: pat
-  pat:
-    token: ghp_test
-`
-	path := filepath.Join(t.TempDir(), "serve.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-
-	cfg, err := LoadService(path)
-	require.NoError(t, err)
-
-	assert.Equal(t, "openai", cfg.LLMEndpoint.Type)
-	assert.Equal(t, "https://your-llm-endpoint.example/v1", cfg.LLMEndpoint.BaseURL)
-	assert.Equal(t, "k", cfg.LLMEndpoint.APIKey)
-	require.NoError(t, cfg.Validate())
-}
-
-func TestServiceLLMEndpointOpenAIRequiresBaseURL(t *testing.T) {
-	cfg := &ServiceConfig{
-		ContextMatrixURL: "http://contextmatrix:8080",
-		APIKey:           "0123456789abcdef0123456789abcdef",
-		LLMEndpoint:      LLMEndpoint{Type: "openai", APIKey: "k"},
-	}
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "base_url")
-}
-
 // clearServiceEnv unsets any CMX_* vars that could leak into a default/file
 // test from the developer's shell. t.Setenv restores them after the test.
 func clearServiceEnv(t *testing.T) {
 	t.Helper()
 
 	for _, e := range []string{
-		"CMX_CONTEXTMATRIX_URL", "CMX_PORT", "CMX_LLM_ENDPOINT__API_KEY",
-		"CMX_LLM_ENDPOINT__TYPE", "CMX_LLM_ENDPOINT__BASE_URL",
+		"CMX_CONTEXTMATRIX_URL", "CMX_PORT",
 		"CMX_API_KEY", "CMX_BASE_IMAGE", "CMX_MAX_CONCURRENT",
-		"CMX_GITHUB__AUTH_MODE", "CMX_GITHUB__PAT__TOKEN", "CMX_GITHUB__HOST",
 		"CMX_ADMIN_PORT",
 		"CMX_COMPACTION__THRESHOLD", "CMX_COMPACTION__KEEP_RECENT_TURNS",
 		"CMX_CHAT_RUN_DIR", "CMX_CA_CERT_FILE",

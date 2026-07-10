@@ -67,28 +67,27 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fail-closed: a session with no CM-provisioned git-credentials bearer
-	// (protocol v0.5.2, ChatStartPayload.GitCredentialsToken) and no local
-	// github config has no way to authenticate any git operation for its whole
-	// lifetime. Reject before any side effects (run dir, container) rather than
-	// launching a session that can never clone or push.
-	if p.GitCredentialsToken == "" && !s.githubConfigured {
+	// (protocol v0.5.2, ChatStartPayload.GitCredentialsToken) has no way to
+	// authenticate any git operation for its whole lifetime. Reject before any
+	// side effects (run dir, container) rather than launching a session that
+	// can never clone or push.
+	if p.GitCredentialsToken == "" {
 		s.logger.Warn("chat/start: no git credential source", "session_id", p.SessionID)
 		writeError(w, http.StatusInternalServerError, protocol.CodeInternal,
-			"CM did not provision git credentials and no local github config exists")
+			"CM did not provision git credentials")
 
 		return
 	}
 
 	// Fail-closed: a session with no CM-provisioned llm_endpoint (protocol
-	// v0.5.0, ChatStartPayload.LLMEndpoint) and no local llm_endpoint config has
-	// no way to authenticate any inference call for its whole lifetime. Reject
-	// before any side effects (run dir, container) rather than launching a
-	// session that starts but fails opaquely on the first turn. Mirrors the git
-	// credentials guard above.
-	if p.LLMEndpoint == nil && !s.llmConfigured {
+	// v0.5.0, ChatStartPayload.LLMEndpoint) has no way to authenticate any
+	// inference call for its whole lifetime. Reject before any side effects
+	// (run dir, container) rather than launching a session that starts but
+	// fails opaquely on the first turn. Mirrors the git credentials guard above.
+	if p.LLMEndpoint == nil {
 		s.logger.Warn("chat/start: no llm credential source", "session_id", p.SessionID)
 		writeError(w, http.StatusInternalServerError, protocol.CodeInternal,
-			"CM did not provision an llm endpoint and no local llm_endpoint config exists")
+			"CM did not provision an llm endpoint")
 
 		return
 	}
@@ -127,10 +126,12 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	env := []string{
 		"CM_CHAT_SESSION=" + p.SessionID,
 		"CM_MCP_URL=" + s.mcpURL,
-		// CM_MCP_API_KEY is per-session and cannot use the process-shared /run/cm-secrets/env
-		// file (unlike the shared LLM key and git token). It is delivered via container env
-		// as a documented tradeoff: the value is visible to docker inspect and /proc/<pid>/environ.
-		// Moving it off env would require a per-session read-only secrets file the worker reads from disk.
+		// CM_MCP_API_KEY is per-session and delivered via container env as a
+		// documented tradeoff: the value is visible to docker inspect and
+		// /proc/<pid>/environ. Moving it off env would require a per-session
+		// read-only secrets file the worker reads from disk. Registered with
+		// the host-side log-bridge redactor below like the other per-session
+		// secrets.
 		"CM_MCP_API_KEY=" + p.MCPAPIKey,
 		"CM_MODEL=" + p.Model,
 		"CMX_TOOL_OUTPUT_MAX_BYTES=" + strconv.Itoa(s.toolOutputMaxBytes),
@@ -151,48 +152,32 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CM_CHAT_REPO_URL="+p.RepoURL)
 	}
 
-	// Git credentials: CM-provisioned per-session bearer (protocol v0.5.2,
+	// Git credentials: the CM-provisioned per-session bearer (protocol v0.5.2,
 	// ChatStartPayload.GitCredentialsToken) lets the worker fetch fresh,
 	// per-repo git credentials on demand from CM's
 	// GET /api/worker/git-credentials?host=&path= endpoint — the only design
 	// that works for a cross-project, long-lived chat session, since a single
-	// upfront token cannot cover a repo not yet known at chat-start. Both
-	// CM_GIT_CREDENTIALS_URL and CM_GIT_CREDENTIALS_TOKEN are set only when the
-	// payload carries a token.
-	//
-	// Absent means a CM version that predates worker-fetched credentials: the
-	// worker falls back to the shared-secrets/local-config helper (deprecated),
-	// which is only reachable when local github config exists at all — the
-	// guard above already rejected this request otherwise. CM_GIT_HOST (the
-	// GHE host the LOCAL provider mints for) is meaningful ONLY in this
-	// fallback branch: a provisioned session is multi-host by construction (CM
-	// resolves the credential per (host, path) on every worker fetch), so
-	// sending a single static host there would be actively wrong.
-	if p.GitCredentialsToken != "" {
-		env = append(env,
-			"CM_GIT_CREDENTIALS_URL="+s.gitCredentialsURL,
-			"CM_GIT_CREDENTIALS_TOKEN="+p.GitCredentialsToken,
-		)
+	// upfront token cannot cover a repo not yet known at chat-start. A
+	// provisioned session is multi-host by construction: CM resolves the
+	// credential per (host, path) on every worker fetch, so no static git host
+	// is ever sent.
+	env = append(env,
+		"CM_GIT_CREDENTIALS_URL="+s.gitCredentialsURL,
+		"CM_GIT_CREDENTIALS_TOKEN="+p.GitCredentialsToken,
+	)
 
-		// Same documented tradeoff as CM_MCP_API_KEY/LLM_API_KEY above: the
-		// bearer rides plain container env. Register it with the host-side
-		// log-bridge redactor the same way as the provisioned LLM key — but
-		// note this covers ONLY the bearer. The actual git tokens the worker
-		// mints per operation from CM never transit the chat service (worker
-		// -> CM directly), so this registry cannot know them at all; in-worker
-		// redaction (chatwork/redactor.go's fetched-token tracking) is the only
-		// coverage for those. Accepted limitation, not a gap to close here.
-		if s.sessionSecrets != nil {
-			s.sessionSecrets.AddSessionKey(p.SessionID, p.GitCredentialsToken)
-		}
-	} else {
-		if s.githubHost != "" {
-			env = append(env, "CM_GIT_HOST="+s.githubHost)
-		}
-
-		s.gitDeprecationWarnOnce.Do(func() {
-			s.logger.Warn("CM did not provision git credentials; using local github config — this fallback is deprecated")
-		})
+	// Same documented tradeoff as CM_MCP_API_KEY/LLM_API_KEY above: the
+	// bearer rides plain container env. Register it with the host-side
+	// log-bridge redactor the same way as the provisioned LLM key — but
+	// note this covers ONLY the bearer. The actual git tokens the worker
+	// mints per operation from CM never transit the chat service (worker
+	// -> CM directly), so this registry cannot know them at all; in-worker
+	// redaction (chatwork/redactor.go's fetched-token tracking) is the only
+	// coverage for those. Accepted limitation, not a gap to close here.
+	// The MCP bearer rides the same surface, so it is registered here too.
+	if s.sessionSecrets != nil {
+		s.sessionSecrets.AddSessionKey(p.SessionID, p.GitCredentialsToken)
+		s.sessionSecrets.AddSessionKey(p.SessionID, p.MCPAPIKey)
 	}
 
 	if p.Resume != nil {
@@ -200,48 +185,31 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// CM-provisioned LLM endpoint (protocol v0.5.0, ChatStartPayload.LLMEndpoint):
-	// when present, these three values REPLACE the shared-secrets/local-config
-	// LLM values for this session, delivered via the same per-session env
-	// mechanism as CM_CHAT_REPO_URL and CM_MCP_API_KEY above so chatwork/run.go's
-	// env-first-then-file read prefers them over /run/cm-secrets/env. All three
-	// are written even when a field is its zero value (e.g. an empty base_url
-	// meaning "the type's canonical default") — that is a real provisioned
-	// answer, and skipping it would let the stale local-config value leak
-	// through for just that one field.
+	// the three values are delivered via the same per-session env mechanism as
+	// CM_CHAT_REPO_URL and CM_MCP_API_KEY above. All three are written even when
+	// a field is its zero value (e.g. an empty base_url meaning "the type's
+	// canonical default") — that is a real provisioned answer, not an omission.
 	//
 	// Same documented tradeoff as CM_MCP_API_KEY: LLM_API_KEY rides plain
-	// container env (visible to docker inspect and /proc/<pid>/environ) rather
-	// than the read-only bind-mounted secrets file, because it is per-session —
-	// the shared file is one process-wide artifact all live sessions read.
-	// Moving it off env would require a per-session read-only secrets file.
-	// The worker's redactor watcher (newRedactorWatcher's llmKey param) still
-	// masks it from tool output, events, and logs.
-	//
-	// Absent means a CM version that predates multi-user credential
-	// provisioning: today's local llm_endpoint config path applies, plus a
-	// once-per-process (not once-per-session) deprecation warning so a long-
-	// lived server doesn't spam its log across many sessions.
-	if p.LLMEndpoint != nil {
-		env = append(env,
-			"LLM_API_KEY="+p.LLMEndpoint.APIKey,
-			"LLM_BASE_URL="+p.LLMEndpoint.BaseURL,
-			"LLM_TYPE="+p.LLMEndpoint.Type,
-		)
+	// container env (visible to docker inspect and /proc/<pid>/environ) because
+	// it is per-session. Moving it off env would require a per-session read-only
+	// secrets file. The worker's redactor watcher (newRedactorWatcher's llmKey
+	// param) still masks it from tool output, events, and logs.
+	env = append(env,
+		"LLM_API_KEY="+p.LLMEndpoint.APIKey,
+		"LLM_BASE_URL="+p.LLMEndpoint.BaseURL,
+		"LLM_TYPE="+p.LLMEndpoint.Type,
+	)
 
-		// Arm the host-side log-bridge redactor with this session's provisioned
-		// key BEFORE the container starts, so a key that surfaces on worker stderr
-		// or an unparsable stdout line (e.g. a panic stack trace) is masked before
-		// it reaches the /logs stream. The in-worker redactor covers tool output
-		// and events but never sees worker stderr — that surface is bridged
-		// host-side and this is its only masking. Unregistered on container exit
-		// (DropSession) so the set stays bounded; an empty key is ignored.
-		if s.sessionSecrets != nil {
-			s.sessionSecrets.AddSessionKey(p.SessionID, p.LLMEndpoint.APIKey)
-		}
-	} else {
-		s.llmDeprecationWarnOnce.Do(func() {
-			s.logger.Warn("CM did not provision an llm endpoint; using local llm_endpoint config — this fallback is deprecated")
-		})
+	// Arm the host-side log-bridge redactor with this session's provisioned
+	// key BEFORE the container starts, so a key that surfaces on worker stderr
+	// or an unparsable stdout line (e.g. a panic stack trace) is masked before
+	// it reaches the /logs stream. The in-worker redactor covers tool output
+	// and events but never sees worker stderr — that surface is bridged
+	// host-side and this is its only masking. Unregistered on container exit
+	// (DropSession) so the set stays bounded; an empty key is ignored.
+	if s.sessionSecrets != nil {
+		s.sessionSecrets.AddSessionKey(p.SessionID, p.LLMEndpoint.APIKey)
 	}
 
 	// Resolve task-skills from CM (the single source of truth): fetch the git
@@ -286,22 +254,26 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, k+"="+v)
 	}
 
-	// Warn when this session carried a CM-provisioned endpoint AND worker_extra_env
-	// sets an LLM_* key, since that operator value silently overrides the
-	// per-session credential. Log the env NAME(s) only — never the value — and
-	// once per process, matching the sibling deprecation warning, so a long-lived
+	// Warn when worker_extra_env sets an LLM_* key, since that operator value
+	// silently overrides the session's CM-provisioned credential. Log the env
+	// NAME(s) only — never the value — and once per process, so a long-lived
 	// server with a static worker_extra_env does not spam its log every session.
-	if p.LLMEndpoint != nil {
-		if names := llmExtraEnvKeys(s.workerExtraEnv); len(names) > 0 {
-			s.llmOverrideWarnOnce.Do(func() {
-				s.logger.Warn("worker_extra_env overrides CM-provisioned llm credentials for this session",
-					"env_names", names)
-			})
-		}
+	if names := llmExtraEnvKeys(s.workerExtraEnv); len(names) > 0 {
+		s.llmOverrideWarnOnce.Do(func() {
+			s.logger.Warn("worker_extra_env overrides CM-provisioned llm credentials for this session",
+				"env_names", names)
+		})
+	}
+
+	// The overriding operator key — not the provisioned one — is what the
+	// worker actually sends on every inference call, so it is what can surface
+	// on worker stderr. Register it host-side like the provisioned secrets;
+	// AddSessionKey ignores the empty (no-override) case.
+	if s.sessionSecrets != nil {
+		s.sessionSecrets.AddSessionKey(p.SessionID, s.workerExtraEnv["LLM_API_KEY"])
 	}
 
 	binds := []string{
-		s.secretsHostDir + ":/run/cm-secrets:ro",
 		runDir + ":/run/cm-chat:ro",
 	}
 	if skillsHostDir != "" {

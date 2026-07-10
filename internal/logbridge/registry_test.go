@@ -23,34 +23,28 @@ func recvEntry(t *testing.T, ch <-chan protocol.LogEntry) protocol.LogEntry {
 	}
 }
 
-// TestRedactorRegistry_SessionKeyMaskedThroughRotation is the regression guard
-// for the CM-provisioned-key masking hole. Worker stderr and unparsable stdout
-// are bridged host-side with ONLY the log-bridge redactor applied (the in-worker
-// redactor never sees them), so a per-session LLM key must be masked there — and
-// it must SURVIVE a GitHub-token rotation. The pre-fix OnRotate rebuilt the
-// bridge redactor from config/token only and clobbered any registered session
-// key; step (2) is that clobber regression.
-func TestRedactorRegistry_SessionKeyMaskedThroughRotation(t *testing.T) {
+// TestRedactorRegistry_SessionKeyLifecycle covers the CM-provisioned-key
+// masking hole. Worker stderr and unparsable stdout are bridged host-side with
+// ONLY the log-bridge redactor applied (the in-worker redactor never sees
+// them), so a per-session LLM key must be masked there from registration at
+// chat-start until removal on container exit.
+func TestRedactorRegistry_SessionKeyLifecycle(t *testing.T) {
 	t.Parallel()
 
-	const (
-		configKey  = "config-llm-key-000000"
-		sessionKey = "sk-session-provisioned-111111"
-		gitToken   = "ghs-rotated-token-222222"
-	)
+	const sessionKey = "sk-session-provisioned-111111"
 
 	hub := logbridge.NewHub()
 	_, ch := hub.Subscribe("")
 	bridge := logbridge.New(hub, nil)
 
-	registry := logbridge.NewRedactorRegistry(bridge, []string{configKey})
+	registry := logbridge.NewRedactorRegistry(bridge)
 
 	// Before any session key is registered, the payload key is NOT masked.
 	bridge.BridgeLine(testSession, []byte("boot "+sessionKey), true)
 	assert.Contains(t, recvEntry(t, ch).Content, sessionKey,
 		"an unregistered session key must not be masked yet")
 
-	// (1) After chat-start registers the key, a stderr-path line is masked.
+	// After chat-start registers the key, a stderr-path line is masked.
 	registry.AddSessionKey(testSession, sessionKey)
 	bridge.BridgeLine(testSession, []byte("panic: leaked "+sessionKey), true)
 
@@ -59,29 +53,11 @@ func TestRedactorRegistry_SessionKeyMaskedThroughRotation(t *testing.T) {
 		"a registered session key must be masked on the stderr path")
 	assert.Contains(t, got.Content, "[REDACTED]")
 
-	// (2) After a token rotation the session key is STILL masked (clobber regression).
-	registry.SetToken(gitToken)
-	bridge.BridgeLine(testSession, []byte("after rotate "+sessionKey+" and "+gitToken), true)
-
-	got = recvEntry(t, ch)
-	assert.NotContains(t, got.Content, sessionKey,
-		"a session key must survive a token rotation, not be clobbered by OnRotate")
-	assert.NotContains(t, got.Content, gitToken,
-		"the rotated token must also be masked")
-
-	// The static config key is masked throughout.
-	bridge.BridgeLine(testSession, []byte("cfg "+configKey), true)
-	assert.NotContains(t, recvEntry(t, ch).Content, configKey)
-
-	// (3) After session end the key is forgotten: a later line is NOT masked.
+	// After session end the key is forgotten: a later line is NOT masked.
 	registry.RemoveSessionKey(testSession)
 	bridge.BridgeLine(testSession, []byte("ended "+sessionKey), true)
 	assert.Contains(t, recvEntry(t, ch).Content, sessionKey,
 		"a session key must no longer be masked after removal (registry no longer holds it)")
-
-	// The rotating token remains masked after the session ends.
-	bridge.BridgeLine(testSession, []byte("still "+gitToken), true)
-	assert.NotContains(t, recvEntry(t, ch).Content, gitToken)
 }
 
 // TestRedactorRegistry_EmptyKeyIgnored verifies AddSessionKey ignores an empty
@@ -93,7 +69,7 @@ func TestRedactorRegistry_EmptyKeyIgnored(t *testing.T) {
 	hub := logbridge.NewHub()
 	_, ch := hub.Subscribe("")
 	bridge := logbridge.New(hub, nil)
-	registry := logbridge.NewRedactorRegistry(bridge, nil)
+	registry := logbridge.NewRedactorRegistry(bridge)
 
 	registry.AddSessionKey(testSession, "")
 	registry.RemoveSessionKey(testSession) // unregistered → no-op, must not panic
@@ -120,7 +96,7 @@ func TestRedactorRegistry_MultipleSessionKeysBothMasked(t *testing.T) {
 	hub := logbridge.NewHub()
 	_, ch := hub.Subscribe("")
 	bridge := logbridge.New(hub, nil)
-	registry := logbridge.NewRedactorRegistry(bridge, nil)
+	registry := logbridge.NewRedactorRegistry(bridge)
 
 	registry.AddSessionKey(testSession, llmKey)
 	registry.AddSessionKey(testSession, gitBearer)

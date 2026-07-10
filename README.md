@@ -74,17 +74,13 @@ dependency.
 
 - Go 1.26+ to build.
 - Docker on the host running `serve` (it launches worker containers).
-- A reachable ContextMatrix instance (REST API + MCP endpoint). A multi-user
-  ContextMatrix (the default) provisions the per-session model, MCP API key,
-  LLM endpoint, and git credentials in the chat-start payload — git
-  credentials are then fetched fresh per repo, per operation, from CM's worker
-  git-credentials endpoint, not staged upfront.
+- A reachable ContextMatrix instance (REST API + MCP endpoint). ContextMatrix
+  provisions the per-session model, MCP API key, LLM endpoint, and git
+  credentials in the chat-start payload — git credentials are then fetched
+  fresh per repo, per operation, from CM's worker git-credentials endpoint,
+  not staged upfront. There is no local credential fallback.
 - A shared HMAC secret (at least 32 characters), configured on both this service
   and ContextMatrix.
-- Only against a pre-multi-user ContextMatrix: an LLM endpoint API key
-  (OpenRouter by default, or any OpenAI-compatible endpoint) and GitHub
-  authentication (a GitHub App or a fine-grained PAT) configured locally — see
-  "Local credential fallback" in `serve.yaml.example`.
 
 ## Running as a ContextMatrix backend
 
@@ -119,10 +115,8 @@ dependency.
    #      base_image, chat_run_dir
    ```
 
-   A multi-user ContextMatrix provisions git credentials and the LLM endpoint
-   per session, so the local `github.*` and `llm_endpoint.*` blocks are
-   optional — they are the deprecated fallback for pre-multi-user servers (see
-   the "Local credential fallback" section in `serve.yaml.example`).
+   ContextMatrix provisions git credentials and the LLM endpoint per session;
+   the chat service carries no local credential config.
 
    Every field also has a `CMX_*` override (see `serve.yaml.example`).
    `container_contextmatrix_url` is the ContextMatrix URL as seen from inside
@@ -185,17 +179,13 @@ image, pin the new image digest into `serve.yaml`, and restart the service:
 Configuration is layered: defaults < config file < environment. The file
 defaults to `~/.config/contextmatrix-chat/serve.yaml` (the XDG config path).
 Every field has a `CMX_*` environment override; nested keys use a double
-underscore (`CMX_GITHUB__AUTH_MODE`, `CMX_COMPACTION__THRESHOLD`).
+underscore (`CMX_COMPACTION__THRESHOLD`, `CMX_COMPACTION__KEEP_RECENT_TURNS`).
 `serve.yaml.example` documents every field, its default, and its env override.
 
 Required fields: `contextmatrix_url`, `api_key` (≥ 32 chars), `base_image`,
-`chat_run_dir`. The `llm_endpoint` and `github` blocks are optional — a
-multi-user ContextMatrix (the default) provisions the LLM endpoint and git
-credentials per session; set either block only as the deprecated fallback for
-a pre-multi-user CM (see "Local credential fallback" in
-`serve.yaml.example`). When `llm_endpoint.type` is `openai`,
-`llm_endpoint.base_url` is required; when `github.auth_mode` is set, the
-matching credentials for that mode (`app` or `pat`) are required.
+`chat_run_dir`. Credentials are not configured here: ContextMatrix provisions
+the LLM endpoint and git credentials per session; the service fails a
+chat-start closed when either is missing from the payload.
 
 Task-skills need no chat config: serve fetches a git pointer from ContextMatrix,
 clones it on the host, and mounts it read-only into each worker at

@@ -483,7 +483,7 @@ func TestHubSubscribers(t *testing.T) {
 // TestSetRedactorAppliesToSubsequentLines verifies that swapping the
 // redactor via SetRedactor takes effect for lines bridged after the swap and
 // fully replaces (not merges with) the prior redactor — matching the
-// Refresher's OnRotate hook rebuilding the redactor on every token rotation.
+// RedactorRegistry rebuilding the redactor on every session add/remove.
 func TestSetRedactorAppliesToSubsequentLines(t *testing.T) {
 	t.Parallel()
 

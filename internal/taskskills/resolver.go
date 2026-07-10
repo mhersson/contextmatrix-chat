@@ -24,40 +24,27 @@ import (
 
 const requestTimeout = 15 * time.Second
 
-// tokenGen mints a GitHub token for the clone. secrets.TokenGenerator satisfies it.
-type tokenGen interface {
-	GenerateToken(ctx context.Context) (token string, expiresAt time.Time, err error)
-}
-
 // Resolver fetches the task-skills pointer from CM and clones it once, caching
 // the resolved host dir for the process. Safe for concurrent use.
 type Resolver struct {
 	cmURL    string
 	apiKey   string
 	cacheDir string
-	gen      tokenGen
 	http     *http.Client
 	logger   *slog.Logger
 
 	// cloner is the clone implementation; overridable in tests. Production uses
-	// gitClone (a shallow git fetch+checkout with the minted token).
+	// gitClone (a shallow git fetch+checkout with the CM-provisioned token).
 	cloner func(ctx context.Context, gitURL, ref, dest, token string) error
 
 	mu       sync.Mutex
 	resolved string // cached host dir once a clone has succeeded
-
-	// selfMintWarnOnce guards the "CM did not provision a task-skills clone
-	// token" fallback warning so it logs once per Resolver (a serve process
-	// constructs exactly one), not once per self-mint attempt. A failed clone
-	// is not cached, so a long-lived process can genuinely re-enter the
-	// self-mint path across many chat/start requests.
-	selfMintWarnOnce sync.Once
 }
 
 // NewResolver builds a Resolver. cmURL is ContextMatrix's base URL, apiKey the
 // chat backend HMAC key, cacheDir a host directory the clone lands in (and the
-// executor binds), gen the GitHub token source.
-func NewResolver(cmURL, apiKey, cacheDir string, gen tokenGen, logger *slog.Logger) *Resolver {
+// executor binds).
+func NewResolver(cmURL, apiKey, cacheDir string, logger *slog.Logger) *Resolver {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -66,7 +53,6 @@ func NewResolver(cmURL, apiKey, cacheDir string, gen tokenGen, logger *slog.Logg
 		cmURL:    strings.TrimRight(cmURL, "/"),
 		apiKey:   apiKey,
 		cacheDir: cacheDir,
-		gen:      gen,
 		http:     &http.Client{Timeout: requestTimeout},
 		logger:   logger,
 	}
@@ -95,26 +81,12 @@ func (r *Resolver) Resolve(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("task-skills source has no git_remote_url")
 	}
 
-	// Prefer the CM-provisioned clone token when present. Absent means a CM
-	// version that predates provisioned task-skills clone tokens: fall back to
-	// self-minting via the local GitHub token source, plus a once-per-process
-	// deprecation warning (compat-window rule).
+	// The CM-provisioned clone token is the only clone credential. Absent
+	// means a CM version that predates provisioned task-skills clone tokens —
+	// no skills this run.
 	token := p.Token
 	if token == "" {
-		if r.gen == nil {
-			return "", fmt.Errorf("CM did not provision a task-skills clone token and no local github config exists")
-		}
-
-		var terr error
-
-		token, _, terr = r.gen.GenerateToken(ctx)
-		if terr != nil {
-			return "", fmt.Errorf("mint skills clone token: %w", terr)
-		}
-
-		r.selfMintWarnOnce.Do(func() {
-			r.logger.Warn("CM did not provision a task-skills clone token; self-minting via local github config is deprecated")
-		})
+		return "", fmt.Errorf("CM did not provision a task-skills clone token")
 	}
 
 	dest := filepath.Join(r.cacheDir, "task-skills")
@@ -138,10 +110,10 @@ func (r *Resolver) Resolve(ctx context.Context) (string, error) {
 type pointer struct {
 	GitRemoteURL string `json:"git_remote_url"`
 	Ref          string `json:"ref"`
-	// Token is a CM-provisioned short-lived token for cloning GitRemoteURL.
-	// When present, Resolve clones with it directly instead of self-minting
-	// via gen. Absent means a CM version that predates provisioned task-skills
-	// clone tokens (the compat-window fallback applies).
+	// Token is a CM-provisioned short-lived token for cloning GitRemoteURL —
+	// the only clone credential. Absent means a CM version that predates
+	// provisioned task-skills clone tokens; Resolve fails and the session
+	// runs without skills.
 	Token string `json:"token,omitempty"`
 	// TokenExpiresAt is the RFC3339 expiry of Token. Decoded for wire-contract
 	// fidelity; currently unused — Resolve caches the clone for the process
