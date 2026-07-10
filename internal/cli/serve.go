@@ -95,7 +95,7 @@ func runServe(ctx context.Context, configPath string) error {
 	// container exit). Worker stderr and unparsable stdout are bridged to
 	// /logs with only this redactor applied, so every live secret must be in
 	// the union.
-	redactorRegistry := logbridge.NewRedactorRegistry(bridge, nil)
+	redactorRegistry := logbridge.NewRedactorRegistry(bridge)
 
 	var srv *webhook.Server
 
