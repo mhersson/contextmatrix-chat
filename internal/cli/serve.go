@@ -286,7 +286,7 @@ func gracefulShutdown(
 
 // chatExit builds the executor OnExit hook. It publishes a terminal "system"
 // log entry so /logs SSE subscribers see the container exit, then removes the
-// per-session run directory (resume.jsonl, primer.txt) so they do not
+// per-session run directory (resume.jsonl) so it does not
 // accumulate unbounded on the host.
 func chatExit(hub *logbridge.Hub, chatRunDirBase string, logger *slog.Logger) func(sessionID string, exitCode int64) {
 	return func(sessionID string, exitCode int64) {

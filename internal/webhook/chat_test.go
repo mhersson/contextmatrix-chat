@@ -340,7 +340,7 @@ func TestChatStart_InvalidSessionID(t *testing.T) {
 
 			srv, _, fe := newChatServer(t)
 
-			body := mustJSON(t, protocol.ChatStartPayload{SessionID: tc.sessionID, Primer: "x"})
+			body := mustJSON(t, protocol.ChatStartPayload{SessionID: tc.sessionID})
 			w := httptest.NewRecorder()
 			srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
 
@@ -429,7 +429,6 @@ func TestChatStart_HappyPath(t *testing.T) {
 		Resume: &protocol.ChatResumeContext{
 			Turns: resumeTurns,
 		},
-		Primer: "You are a helpful assistant.",
 	}
 
 	body := mustJSON(t, provisioned(payload))
@@ -481,11 +480,6 @@ func TestChatStart_HappyPath(t *testing.T) {
 	// Extract the host run dir from the bind to verify files.
 	hostRunDir := strings.SplitN(runDirBind, ":", 2)[0]
 
-	// primer.txt must match the payload Primer field.
-	primerBytes, err := os.ReadFile(filepath.Join(hostRunDir, "primer.txt"))
-	require.NoError(t, err)
-	assert.Equal(t, payload.Primer, string(primerBytes))
-
 	// resume.jsonl must have one line per turn.
 	resumeBytes, err := os.ReadFile(filepath.Join(hostRunDir, "resume.jsonl"))
 	require.NoError(t, err)
@@ -505,7 +499,6 @@ func TestChatStart_NoResumeNoResumeFile(t *testing.T) {
 
 	payload := protocol.ChatStartPayload{
 		SessionID: testSession,
-		Primer:    "primer text",
 	}
 
 	body := mustJSON(t, provisioned(payload))
@@ -594,7 +587,6 @@ func TestChatStart_PerProjectRunnerImage(t *testing.T) {
 			payload := protocol.ChatStartPayload{
 				SessionID:   testSession,
 				Project:     "alpha",
-				Primer:      "hi",
 				RunnerImage: tc.runnerImage,
 			}
 			body := mustJSON(t, provisioned(payload))
@@ -641,7 +633,6 @@ func TestChatStart_ConfigEnvForwarded(t *testing.T) {
 
 	body := mustJSON(t, provisioned(protocol.ChatStartPayload{
 		SessionID: testSession,
-		Primer:    "hello",
 	}))
 	w := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
@@ -679,7 +670,7 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 			Logger: discardLogger(),
 		})
 
-		body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"}))
+		body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession}))
 		w := httptest.NewRecorder()
 		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
 		require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
@@ -710,7 +701,7 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 			Logger: discardLogger(),
 		})
 
-		body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"}))
+		body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession}))
 		w := httptest.NewRecorder()
 		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
 		require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
@@ -742,7 +733,7 @@ func TestChatStart_CACertMountAndEnv(t *testing.T) {
 			Logger: discardLogger(),
 		})
 
-		body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"}))
+		body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession}))
 		w := httptest.NewRecorder()
 		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
 		require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
@@ -761,7 +752,7 @@ func TestChatStart_CACertMountAndEnv(t *testing.T) {
 	t.Run("unset: no bind and no CA env", func(t *testing.T) {
 		srv, _, fe := newChatServer(t) // newChatServer leaves CACertFile empty
 
-		body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"}))
+		body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession}))
 		w := httptest.NewRecorder()
 		srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
 		require.Equal(t, http.StatusAccepted, w.Code)
@@ -801,7 +792,7 @@ func TestChatStart_NoSkillsWhenResolverEmpty(t *testing.T) {
 		Logger: discardLogger(),
 	})
 
-	body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"}))
+	body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession}))
 	w := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
 	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
@@ -839,7 +830,7 @@ func TestChatStart_NoSkillsWhenResolverFails(t *testing.T) {
 		Logger: discardLogger(),
 	})
 
-	body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"}))
+	body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession}))
 	w := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
 	require.Equal(t, http.StatusAccepted, w.Code, "a skills failure must not be fatal; body: %s", w.Body.String())
@@ -859,7 +850,6 @@ func TestChatStart_LLMEndpointFromPayload(t *testing.T) {
 
 	payload := protocol.ChatStartPayload{
 		SessionID: testSession,
-		Primer:    "hi",
 		LLMEndpoint: &protocol.LLMEndpoint{
 			Type:    "openai",
 			BaseURL: "https://llm.example/v1",
@@ -890,7 +880,6 @@ func TestChatStart_LLMEndpointEmptyBaseURLStillSet(t *testing.T) {
 
 	payload := protocol.ChatStartPayload{
 		SessionID: testSession,
-		Primer:    "hi",
 		LLMEndpoint: &protocol.LLMEndpoint{
 			Type:   "openrouter",
 			APIKey: "sk-payload-key-123456",
@@ -934,7 +923,6 @@ func TestChatStart_RegistersLLMKeyForRedaction(t *testing.T) {
 
 	payload := protocol.ChatStartPayload{
 		SessionID: testSession,
-		Primer:    "hi",
 		LLMEndpoint: &protocol.LLMEndpoint{
 			Type:   "openai",
 			APIKey: "sk-payload-key-123456",
@@ -975,7 +963,6 @@ func TestChatStart_RegistersMCPKeyForRedaction(t *testing.T) {
 
 	payload := provisioned(protocol.ChatStartPayload{
 		SessionID: testSession,
-		Primer:    "hi",
 		MCPAPIKey: "mcp-session-key-123456",
 	})
 	body := mustJSON(t, payload)
@@ -1013,7 +1000,7 @@ func TestChatStart_RegistersWorkerExtraEnvLLMKeyForRedaction(t *testing.T) {
 		Logger: discardLogger(),
 	})
 
-	body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"}))
+	body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession}))
 	w := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
 	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
@@ -1048,7 +1035,6 @@ func TestChatStart_LaunchFailureUnregistersLLMKey(t *testing.T) {
 
 	payload := protocol.ChatStartPayload{
 		SessionID:   testSession,
-		Primer:      "hi",
 		LLMEndpoint: &protocol.LLMEndpoint{Type: "openai", APIKey: "sk-payload-key-123456"},
 	}
 	body := mustJSON(t, provisioned(payload))
@@ -1113,7 +1099,6 @@ func TestChatStart_WorkerExtraEnvLLMOverrideWarns(t *testing.T) {
 
 	payload := protocol.ChatStartPayload{
 		SessionID:   testSession,
-		Primer:      "hi",
 		LLMEndpoint: &protocol.LLMEndpoint{Type: "openai", APIKey: "sk-cm-provisioned-000000"},
 	}
 	body := mustJSON(t, provisioned(payload))
@@ -1144,13 +1129,13 @@ func TestChatStart_FailClosedWithoutProvisionedCredentials(t *testing.T) {
 	}{
 		{
 			name:    "no git credentials token",
-			payload: protocol.ChatStartPayload{SessionID: testSession, Primer: "hi", LLMEndpoint: llm},
+			payload: protocol.ChatStartPayload{SessionID: testSession, LLMEndpoint: llm},
 			wantMsg: `CM did not provision git credentials"`,
 		},
 		{
 			name: "no llm endpoint",
 			payload: protocol.ChatStartPayload{
-				SessionID: testSession, Primer: "hi", GitCredentialsToken: "sess-abc123.deadbeef",
+				SessionID: testSession, GitCredentialsToken: "sess-abc123.deadbeef",
 			},
 			wantMsg: `CM did not provision an llm endpoint"`,
 		},
@@ -1179,7 +1164,6 @@ func TestChatStart_FailClosedWithoutProvisionedCredentials(t *testing.T) {
 
 		body := mustJSON(t, protocol.ChatStartPayload{
 			SessionID:           testSession,
-			Primer:              "hi",
 			GitCredentialsToken: "sess-abc123.deadbeef",
 			LLMEndpoint:         llm,
 		})
@@ -1216,7 +1200,6 @@ func TestChatStart_GitCredentialsTokenFromPayload(t *testing.T) {
 
 	payload := provisioned(protocol.ChatStartPayload{
 		SessionID:           testSession,
-		Primer:              "hi",
 		GitCredentialsToken: "sess-abc123.deadbeef",
 	})
 	body := mustJSON(t, payload)
@@ -1255,7 +1238,6 @@ func TestChatStart_GitCredentialsTokenRegisteredForRedaction(t *testing.T) {
 
 	payload := protocol.ChatStartPayload{
 		SessionID:           testSession,
-		Primer:              "hi",
 		GitCredentialsToken: "sess-abc123.deadbeef",
 	}
 	body := mustJSON(t, provisioned(payload))
@@ -1293,7 +1275,6 @@ func TestChatStart_GitCredentialsAndLLMKeyBothRegistered(t *testing.T) {
 
 	payload := protocol.ChatStartPayload{
 		SessionID:           testSession,
-		Primer:              "hi",
 		GitCredentialsToken: "sess-abc123.deadbeef",
 		LLMEndpoint:         &protocol.LLMEndpoint{Type: "openai", APIKey: "sk-payload-key-123456"},
 	}
@@ -1333,7 +1314,6 @@ func TestChatStart_LaunchFailureUnregistersGitCredentialsKey(t *testing.T) {
 
 	payload := protocol.ChatStartPayload{
 		SessionID:           testSession,
-		Primer:              "hi",
 		GitCredentialsToken: "sess-abc123.deadbeef",
 	}
 	body := mustJSON(t, provisioned(payload))

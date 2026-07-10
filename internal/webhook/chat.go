@@ -29,9 +29,11 @@ const skillsMountPath = "/run/cm-skills"
 const caCertMountPath = "/run/cm-ca/ca.crt"
 
 // handleChatStart starts a long-lived chat container for the given session. It
-// creates the per-session run directory, writes resume.jsonl and primer.txt,
-// builds the LaunchSpec, and delegates to the executor. The response body
-// includes the container ID so CM can correlate sessions.
+// creates the per-session run directory, writes resume.jsonl, builds the
+// LaunchSpec, and delegates to the executor. The response body includes the
+// container ID so CM can correlate sessions. The payload's legacy Primer field
+// is ignored: the worker carries its own orientation primer (chatwork's
+// embedded chatPrimer), so the host sends no orientation text.
 func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	var p protocol.ChatStartPayload
 	if !s.decode(w, r, &p) {
@@ -93,7 +95,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create the per-session run directory. The container mounts it at
-	// /run/cm-chat; the entrypoint reads resume.jsonl and primer.txt from there.
+	// /run/cm-chat; the entrypoint reads resume.jsonl from there.
 	runDir := filepath.Join(s.chatRunDirBase, p.SessionID)
 	if err := os.MkdirAll(runDir, 0o750); err != nil {
 		s.logger.Error("chat/start: mkdir failed", "session_id", p.SessionID, "error", err)
@@ -112,15 +114,6 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 			return
 		}
-	}
-
-	// Write primer.txt unconditionally; an empty primer is a zero-byte file.
-	if err := os.WriteFile(filepath.Join(runDir, "primer.txt"), []byte(p.Primer), 0o640); err != nil {
-		s.logger.Error("chat/start: write primer.txt failed",
-			"session_id", p.SessionID, "error", err)
-		writeError(w, http.StatusInternalServerError, protocol.CodeInternal, "internal error")
-
-		return
 	}
 
 	env := []string{

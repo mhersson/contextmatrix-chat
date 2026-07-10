@@ -24,7 +24,7 @@ internal/cli/             cobra commands: serve, work (hidden)
 internal/config/          layered service config (defaults < file < env, CMX_*) + Validate
 internal/webhook/         HTTP surface: /chat/start, /chat/end, /message, /logs (SSE), /health, /readyz; HMAC auth, replay + dedup caches, drain gate
 internal/executor/        Docker container lifecycle; Tracker gates concurrency; DockerExecutor implements Executor
-internal/chatwork/        container work loop: provisioned credentials, git credential helper, optional clone, tool registry, primer/resume, epoch loop
+internal/chatwork/        container work loop: provisioned credentials, git credential helper, optional clone, tool registry, embedded primer, resume, epoch loop
 internal/mcpbridge/       dials CM's /mcp, adapts each board tool to a harness tools.Tool
 internal/logbridge/       Hub fanning container log frames to SSE subscribers
 internal/frames/          JSON-Lines control protocol on container stdin (user-message, clear)
@@ -90,9 +90,11 @@ Document the CURRENT STATE: what exists NOW and WHY, not how we got here.
 2. **serve owns the container lifecycle** — launch, resource caps, orphan
    cleanup on startup, and graceful drain (flip draining → HTTP shutdown →
    kill tracked containers). It makes no status callback to CM.
-3. **work runs the interactive epoch loop.** Each epoch is one `harness.Run`. A
-   `/clear` frame ends the epoch, resets history to nil, and blocks for the next
-   primer. Resume seeds history from `resume.jsonl` when `CM_CHAT_RESUME=1`.
+3. **work runs the interactive epoch loop.** Each epoch is one `harness.Run`,
+   opened by the embedded orientation primer (`chatwork/primer.md`) as its
+   first user turn. A `/clear` frame ends the epoch, resets history to nil,
+   and re-orients the next epoch from the same primer — the host sends only
+   `/clear`. Resume seeds history from `resume.jsonl` when `CM_CHAT_RESUME=1`.
 4. **Compaction is on** (harness): older turns drop at `compaction.threshold`
    (default 0.85) of the model's context window; `keep_recent_turns` (default 6)
    are kept verbatim.
