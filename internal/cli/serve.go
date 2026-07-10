@@ -200,7 +200,7 @@ func runServe(ctx context.Context, configPath string) error {
 	// truth — chat carries no task-skills config. Uses cfg.ContextMatrixURL (the
 	// host-reachable CM URL), not the container URL.
 	skillsCache := filepath.Join(cfg.SecretsDir, "task-skills-cache")
-	skillsResolver := taskskills.NewResolver(cfg.ContextMatrixURL, cfg.APIKey, skillsCache, provider, logger)
+	skillsResolver := taskskills.NewResolver(cfg.ContextMatrixURL, cfg.APIKey, skillsCache, logger)
 
 	srv = webhook.NewServer(webhook.Config{
 		APIKey:         cfg.APIKey,
