@@ -61,37 +61,10 @@ func Run(ctx context.Context) error {
 	gitCredentialsToken := os.Getenv("CM_GIT_CREDENTIALS_TOKEN")
 
 	// 2. Configure git credential auth (CM_GIT_CREDENTIALS_TOKEN, protocol
-	// v0.5.2): stage a 0600 config file the git-credential/gh-wrapper
-	// subcommands read from (see gitCredentialsConfigPath's doc for why NOT
-	// env — they run through the harness bash tool's scrubbed environment) and
-	// register the v2 helper GLOBALLY, since a provisioned session is
-	// multi-host by construction. Setup failures are non-fatal: a degraded
-	// git-auth environment must not kill an otherwise-usable interactive
-	// session. An absent token mirrors the llmKey backstop above (the launch
-	// guard was bypassed), but degrades instead of failing — unlike inference,
-	// a git-less chat session is still usable.
-	var selfPath string
-
-	if gitCredentialsToken == "" {
-		slog.Warn("CM did not provision git credentials; git auth unavailable this session")
-	} else {
-		if err := secrets.WriteEnvFile(gitCredentialsConfigPath(), map[string]string{
-			"CM_GIT_CREDENTIALS_URL":   os.Getenv("CM_GIT_CREDENTIALS_URL"),
-			"CM_GIT_CREDENTIALS_TOKEN": gitCredentialsToken,
-		}); err != nil {
-			return fmt.Errorf("stage git-credentials config: %w", err)
-		}
-
-		var err error
-
-		selfPath, err = os.Executable()
-		if err != nil {
-			return fmt.Errorf("resolve self path for git credential helper: %w", err)
-		}
-
-		if err := ConfigureGitCredentialHelperV2(ctx, selfPath); err != nil {
-			slog.Warn("git credential helper v2 setup failed; continuing without git auth", "error", err)
-		}
+	// v0.5.2).
+	selfPath, err := configureGitAuth(ctx, gitCredentialsToken)
+	if err != nil {
+		return err
 	}
 
 	// 3. Clone the project repo into /workspace (best-effort: a clone failure
@@ -390,6 +363,43 @@ func validateLLMKey(llmKey string) error {
 	}
 
 	return nil
+}
+
+// configureGitAuth stages the CM-provisioned git-credentials config into a
+// 0600 scratch file the git-credential/gh-wrapper subcommands read from (see
+// gitCredentialsConfigPath's doc for why NOT env — they run through the
+// harness bash tool's scrubbed environment) and registers the v2 helper
+// GLOBALLY, since a provisioned session is multi-host by construction. It
+// returns the resolved self path for the gh-wrapper install, "" when git auth
+// is unavailable. Setup failures are non-fatal: a degraded git-auth
+// environment must not kill an otherwise-usable interactive session. An
+// absent token mirrors validateLLMKey's backstop (the launch guard was
+// bypassed), but degrades instead of failing — unlike inference, a git-less
+// chat session is still usable.
+func configureGitAuth(ctx context.Context, gitCredentialsToken string) (string, error) {
+	if gitCredentialsToken == "" {
+		slog.Warn("CM did not provision git credentials; git auth unavailable this session")
+
+		return "", nil
+	}
+
+	if err := secrets.WriteEnvFile(gitCredentialsConfigPath(), map[string]string{
+		"CM_GIT_CREDENTIALS_URL":   os.Getenv("CM_GIT_CREDENTIALS_URL"),
+		"CM_GIT_CREDENTIALS_TOKEN": gitCredentialsToken,
+	}); err != nil {
+		return "", fmt.Errorf("stage git-credentials config: %w", err)
+	}
+
+	selfPath, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve self path for git credential helper: %w", err)
+	}
+
+	if err := ConfigureGitCredentialHelperV2(ctx, selfPath); err != nil {
+		slog.Warn("git credential helper v2 setup failed; continuing without git auth", "error", err)
+	}
+
+	return selfPath, nil
 }
 
 // envFloatDefault parses an optional float64 env var, returning def when the

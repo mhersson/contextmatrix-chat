@@ -29,8 +29,9 @@ type redactorWatcher struct {
 
 	// fetchedPath is the writable scratch file (see fetchedTokensPath) the
 	// credential-helper/gh-wrapper subcommands append each freshly-fetched git
-	// token to. Empty disables this source entirely (no CM-provisioned git
-	// credentials this session). fetchedLastMod is the mtime observed by the
+	// token to. In a git-less session the file simply never exists, which
+	// reload treats as "nothing fetched yet"; only tests pass an empty path
+	// (disabling the source). fetchedLastMod is the mtime observed by the
 	// most recent successful reload. Set synchronously in newRedactorWatcher
 	// (before the watch goroutine starts) and thereafter only touched by the
 	// single watch goroutine — never read or written concurrently, so no lock

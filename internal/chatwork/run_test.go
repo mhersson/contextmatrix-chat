@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/mhersson/contextmatrix-chat/internal/frames"
+	"github.com/mhersson/contextmatrix-chat/internal/secrets"
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
 	"github.com/stretchr/testify/assert"
@@ -160,6 +162,37 @@ func TestClearDrainsPendingMessage(t *testing.T) {
 	// message and NextAfterClear sees the closed, empty inbox → loop exits
 	// after epoch 1.
 	assert.Equal(t, 1, epoch, "stale pre-clear message must be dropped at the clear boundary; no second epoch without a fresh primer")
+}
+
+// TestConfigureGitAuth verifies Run's git-auth setup: a CM-provisioned token
+// stages the credentials config the git-credential/gh-wrapper subcommands
+// read; an absent token degrades to a git-less session (warn, not fail —
+// unlike inference, a git-less chat is still usable).
+func TestConfigureGitAuth(t *testing.T) {
+	t.Run("degrades to git-less session without a token", func(t *testing.T) {
+		t.Setenv("TMPDIR", t.TempDir())
+
+		selfPath, err := configureGitAuth(context.Background(), "")
+		require.NoError(t, err)
+		assert.Empty(t, selfPath, "no gh wrapper without git credentials")
+	})
+
+	t.Run("stages the credentials config with a token", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("TMPDIR", dir)
+		t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(dir, "gitconfig"))
+		t.Setenv("HOME", dir)
+		t.Setenv("CM_GIT_CREDENTIALS_URL", "http://cm:8080/api/worker/git-credentials")
+
+		selfPath, err := configureGitAuth(context.Background(), "sess-abc.bearer")
+		require.NoError(t, err)
+		assert.NotEmpty(t, selfPath, "the gh wrapper needs the resolved self path")
+
+		src, err := secrets.Open(gitCredentialsConfigPath())
+		require.NoError(t, err)
+		assert.Equal(t, "sess-abc.bearer", src.Get("CM_GIT_CREDENTIALS_TOKEN"))
+		assert.Equal(t, "http://cm:8080/api/worker/git-credentials", src.Get("CM_GIT_CREDENTIALS_URL"))
+	})
 }
 
 // TestValidateLLMKey verifies Run's worker-side backstop for handleChatStart's

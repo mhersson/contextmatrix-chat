@@ -129,7 +129,6 @@ func LoadService(path string) (*ServiceConfig, error) {
 	}
 
 	// CMX_FOO_BAR -> "foo_bar"; nested keys use "__":
-	// CMX_GITHUB__AUTH_MODE -> "github.auth_mode"
 	// CMX_COMPACTION__THRESHOLD -> "compaction.threshold"
 	envCb := func(s string) string {
 		s = strings.ToLower(strings.TrimPrefix(s, envPrefix))

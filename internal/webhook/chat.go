@@ -129,7 +129,9 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		// CM_MCP_API_KEY is per-session and delivered via container env as a
 		// documented tradeoff: the value is visible to docker inspect and
 		// /proc/<pid>/environ. Moving it off env would require a per-session
-		// read-only secrets file the worker reads from disk.
+		// read-only secrets file the worker reads from disk. Registered with
+		// the host-side log-bridge redactor below like the other per-session
+		// secrets.
 		"CM_MCP_API_KEY=" + p.MCPAPIKey,
 		"CM_MODEL=" + p.Model,
 		"CMX_TOOL_OUTPUT_MAX_BYTES=" + strconv.Itoa(s.toolOutputMaxBytes),
@@ -172,8 +174,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	// -> CM directly), so this registry cannot know them at all; in-worker
 	// redaction (chatwork/redactor.go's fetched-token tracking) is the only
 	// coverage for those. Accepted limitation, not a gap to close here.
+	// The MCP bearer rides the same surface, so it is registered here too.
 	if s.sessionSecrets != nil {
 		s.sessionSecrets.AddSessionKey(p.SessionID, p.GitCredentialsToken)
+		s.sessionSecrets.AddSessionKey(p.SessionID, p.MCPAPIKey)
 	}
 
 	if p.Resume != nil {
@@ -259,6 +263,14 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 			s.logger.Warn("worker_extra_env overrides CM-provisioned llm credentials for this session",
 				"env_names", names)
 		})
+	}
+
+	// The overriding operator key — not the provisioned one — is what the
+	// worker actually sends on every inference call, so it is what can surface
+	// on worker stderr. Register it host-side like the provisioned secrets;
+	// AddSessionKey ignores the empty (no-override) case.
+	if s.sessionSecrets != nil {
+		s.sessionSecrets.AddSessionKey(p.SessionID, s.workerExtraEnv["LLM_API_KEY"])
 	}
 
 	binds := []string{

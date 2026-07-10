@@ -817,6 +817,37 @@ func TestChatStart_NoSkillsWhenResolverEmpty(t *testing.T) {
 	}
 }
 
+// TestChatStart_NoSkillsWhenResolverFails pins the skills degrade contract:
+// a resolver error (e.g. CM did not provision a task-skills clone token, so
+// Resolve hard-fails) must never be fatal to the chat start — the session
+// launches without the Skill tool.
+func TestChatStart_NoSkillsWhenResolverFails(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+
+	srv := NewServer(Config{
+		APIKey:         testAPIKey,
+		Executor:       fe,
+		Tracker:        tracker,
+		SkillsResolver: fakeSkillsResolver{err: errors.New("CM did not provision a task-skills clone token")},
+		Chat: ChatConfig{
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			ChatRunDirBase: t.TempDir(),
+			MaxConcurrent:  10,
+		},
+		Logger: discardLogger(),
+	})
+
+	body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"}))
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "a skills failure must not be fatal; body: %s", w.Body.String())
+
+	launched := fe.Launched()
+	require.Len(t, launched, 1, "the worker launches without the Skill tool")
+}
+
 // ---- LLM endpoint (protocol v0.5.0) ------------------------------------------
 
 // TestChatStart_LLMEndpointFromPayload verifies that the CM-provisioned
@@ -917,6 +948,79 @@ func TestChatStart_RegistersLLMKeyForRedaction(t *testing.T) {
 	keys := fss.addedKeys(testSession)
 	assert.Contains(t, keys, "sk-payload-key-123456",
 		"chat/start must register the payload LLM key for redaction")
+}
+
+// TestChatStart_RegistersMCPKeyForRedaction verifies the per-session MCP
+// bearer is registered with the host-side log-bridge redactor: it rides plain
+// container env like the other per-session secrets, so worker stderr is the
+// one surface where only this registry can mask it.
+func TestChatStart_RegistersMCPKeyForRedaction(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+	fss := newFakeSessionSecrets()
+
+	srv := NewServer(Config{
+		APIKey:         testAPIKey,
+		Executor:       fe,
+		Tracker:        tracker,
+		SessionSecrets: fss,
+		Chat: ChatConfig{
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			ChatRunDirBase: t.TempDir(),
+			MaxConcurrent:  10,
+		},
+		Logger: discardLogger(),
+	})
+
+	payload := provisioned(protocol.ChatStartPayload{
+		SessionID: testSession,
+		Primer:    "hi",
+		MCPAPIKey: "mcp-session-key-123456",
+	})
+	body := mustJSON(t, payload)
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	keys := fss.addedKeys(testSession)
+	assert.Contains(t, keys, "mcp-session-key-123456",
+		"chat/start must register the per-session MCP bearer for redaction")
+}
+
+// TestChatStart_RegistersWorkerExtraEnvLLMKeyForRedaction covers the operator
+// escape hatch: a worker_extra_env LLM_API_KEY overrides the CM-provisioned
+// key inside the container (Docker keeps the last duplicate), so it — not the
+// provisioned key — is what can surface on worker stderr and must be in the
+// host-side redaction set.
+func TestChatStart_RegistersWorkerExtraEnvLLMKeyForRedaction(t *testing.T) {
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+	fss := newFakeSessionSecrets()
+
+	srv := NewServer(Config{
+		APIKey:         testAPIKey,
+		Executor:       fe,
+		Tracker:        tracker,
+		SessionSecrets: fss,
+		Chat: ChatConfig{
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			ChatRunDirBase: t.TempDir(),
+			MaxConcurrent:  10,
+			WorkerExtraEnv: map[string]string{"LLM_API_KEY": "operator-override-key-123456"},
+		},
+		Logger: discardLogger(),
+	})
+
+	body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, Primer: "hi"}))
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	keys := fss.addedKeys(testSession)
+	assert.Contains(t, keys, "operator-override-key-123456",
+		"chat/start must register the overriding operator LLM key for redaction")
 }
 
 // TestChatStart_LaunchFailureUnregistersLLMKey verifies that when Launch fails

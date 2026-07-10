@@ -67,8 +67,9 @@ the other way instead: satisfy a harness interface from a consumer here.
 
 All credentials (LLM endpoint, git, task-skills clone token) are CM-provisioned
 per session via the chat-start payload and the task-skills-source endpoint.
-Never add local credential config or read raw tokens from config or env in new
-code paths.
+Never add local credential config or serve-side fallbacks; the worker reads
+the provisioned values once at boot from its per-session container env
+(`chatwork.Run`) and the staged git-credentials config file.
 
 ### Config
 

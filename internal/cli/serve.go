@@ -133,6 +133,12 @@ func runServe(ctx context.Context, configPath string) error {
 		base = cfg.ContextMatrixURL
 	}
 
+	// Pre-retirement deployments staged local credentials at
+	// <secrets_dir>/shared/env — in PAT mode a long-lived token. The refresher
+	// that owned that file is gone; remove the residue best-effort so it does
+	// not linger on a persistent secrets_dir.
+	_ = os.RemoveAll(filepath.Join(cfg.SecretsDir, "shared"))
+
 	// Task-skills resolver: fetches the {git_remote_url, ref} pointer from CM and
 	// shallow-clones it once into a host cache dir that handleChatStart binds
 	// read-only into each worker at /run/cm-skills. CM is the single source of
