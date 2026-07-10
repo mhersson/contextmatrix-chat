@@ -153,8 +153,9 @@ The generated unit is sandboxed (read-only home, restricted syscalls, resource
 caps) and runs `serve --config ${XDG_CONFIG_HOME:-~/.config}/contextmatrix-chat/serve.yaml`.
 `svc.sh` reads `chat_run_dir` from that config and whitelists it for writing.
 
-`redeploy.sh` updates a running install in place — rebuild the binary and worker
-image, pin the new image digest into `serve.yaml`, and restart the service:
+`redeploy.sh` updates a running install in place — rebuild the binary and all
+worker images (full + variants), pin the new full-image digest into
+`serve.yaml`, and restart the service:
 
 ```bash
 ./redeploy.sh
