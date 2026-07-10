@@ -5,9 +5,11 @@
 # overridden with a CMX_* environment variable (see each field below).
 # Precedence is defaults < file < env. Nested keys use a double-underscore
 # separator:
-#   CMX_GITHUB__AUTH_MODE=pat
 #   CMX_COMPACTION__THRESHOLD=0.85
-#   CMX_GITHUB__APP__APP_ID=12345
+#   CMX_COMPACTION__KEEP_RECENT_TURNS=6
+#
+# Credentials are NOT configured here: ContextMatrix provisions the git
+# credentials, the LLM endpoint, and the task-skills clone token per session.
 
 # --- ContextMatrix connectivity -----------------------------------------------
 
@@ -81,14 +83,10 @@ container_memory_limit: 8589934592
 # CMX_CONTAINER_PIDS_LIMIT
 container_pids_limit: 512
 
-# Host directory under which the service stages secrets. In a multi-user
-# ContextMatrix deployment (the default), CM provisions git credentials and the
-# LLM endpoint per session, and this directory goes largely unused. When the
-# "Local credential fallback" blocks below are set (a pre-multi-user CM), the
-# service writes <secrets_dir>/shared/env (rewritten ahead of each token
-# expiry) and bind-mounts that directory read-only at /run/cm-secrets inside
-# each container; workers read the GitHub token and LLM endpoint API key from
-# /run/cm-secrets/env. Default: /var/run/cm-chat/secrets.
+# Host directory the service uses for its working state — today only the
+# task-skills clone cache (<secrets_dir>/task-skills-cache). Credentials are
+# CM-provisioned per session and never staged here.
+# Default: /var/run/cm-chat/secrets.
 # CMX_SECRETS_DIR
 secrets_dir: /var/run/cm-chat/secrets
 
@@ -181,68 +179,3 @@ tool_output_max_bytes: 131072
 # or leave empty.
 # CMX_REASONING_EFFORT
 # reasoning_effort: ""
-
-# --- Local credential fallback (deprecated) -----------------------------------
-#
-# Both blocks below are optional. In a multi-user ContextMatrix deployment (the
-# default), CM provisions the GitHub credentials and the LLM endpoint per
-# session — via the chat-start payload's git_credentials_token/llm_endpoint
-# fields and the task-skills-source clone token — so leave both absent
-# entirely; the service then runs in "CM-provisioned credential mode" (logged
-# at startup). Git credentials specifically are fetched fresh per repo, per
-# git/gh operation, from CM's worker git-credentials endpoint — not staged
-# upfront like the shared-secrets file below.
-#
-# Set either block only to talk to a pre-multi-user ContextMatrix that does not
-# yet provision that credential. This fallback exists for that compat window
-# only and will be removed once CM-provisioned credentials are universal — do
-# not build new deployments around it.
-
-# The inference endpoint workers call, used when CM does not provision one.
-#   type:     openrouter (default) | openai
-#   base_url: required for the openai type (operator-supplied)
-#   api_key:  bearer key for the endpoint
-# CMX_LLM_ENDPOINT__TYPE / CMX_LLM_ENDPOINT__BASE_URL / CMX_LLM_ENDPOINT__API_KEY
-# llm_endpoint:
-#   type: openrouter
-#   base_url: https://your-llm-endpoint.example/v1
-#   api_key: ""
-
-# GitHub credentials, used when CM does not provision a per-session
-# git-credentials bearer.
-# github:
-#   # Authentication mode: app | pat.
-#   # CMX_GITHUB__AUTH_MODE
-#   auth_mode: pat
-#
-#   # Optional GitHub Enterprise host (bare hostname or full URL). When set and
-#   # api_base_url is empty, api_base_url is derived as https://<host>/api/v3.
-#   # Convenience for the common GHE Server layout; set api_base_url directly
-#   # for non-standard layouts (e.g. GHEC-DR https://api.acme.ghe.com). Also
-#   # forwarded (as a bare host) to each worker as CM_GIT_HOST, scoping the git
-#   # credential helper and gh to this host — meaningful only in this fallback
-#   # branch, since a CM-provisioned session resolves the credential per (host,
-#   # path) on every fetch and is multi-host by construction.
-#   # CMX_GITHUB__HOST
-#   # host: ghe.example.com
-#
-#   # Optional GitHub API base URL. Defaults to https://api.github.com.
-#   # Overrides any value derived from host.
-#   # CMX_GITHUB__API_BASE_URL
-#   # api_base_url: https://api.github.com
-#
-#   # GitHub App credentials (required when auth_mode is "app"; must be empty
-#   # when auth_mode is "pat").
-#   app:
-#     # CMX_GITHUB__APP__APP_ID
-#     # app_id: 0
-#     # CMX_GITHUB__APP__INSTALLATION_ID
-#     # installation_id: 0
-#     # CMX_GITHUB__APP__PRIVATE_KEY_PATH
-#     # private_key_path: /etc/contextmatrix-chat/github-app.pem
-#
-#   # Fine-grained PAT (required when auth_mode is "pat"; must be empty when
-#   # auth_mode is "app").
-#   pat:
-#     # CMX_GITHUB__PAT__TOKEN
-#     # token: ""
