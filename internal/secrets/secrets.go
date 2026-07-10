@@ -1,26 +1,19 @@
-// Package secrets stages worker secrets on the host and reads them in the
-// container. The host side mirrors the runner: a shared env file, rewritten
-// before the GitHub token expires, bind-mounted read-only into workers.
+// Package secrets reads and writes KEY=value env files. The worker uses it to
+// stage the CM-provisioned git-credentials config at boot (see
+// chatwork.gitCredentialsConfigPath) and to read it back from the
+// git-credential/gh-wrapper subcommands, which run with a scrubbed
+// environment and can only learn secrets from a fixed file path.
 package secrets
 
 import (
 	"bufio"
-	"context"
 	"fmt"
-	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 )
-
-// TokenGenerator matches the githubauth generator surface so *githubauth.AppProvider
-// and *githubauth.PATProvider satisfy it without an adapter.
-type TokenGenerator interface {
-	GenerateToken(ctx context.Context) (token string, expiresAt time.Time, err error)
-}
 
 // Source holds key-value pairs parsed from an env file.
 type Source struct{ vals map[string]string }
@@ -28,11 +21,10 @@ type Source struct{ vals map[string]string }
 // Open parses a KEY=value env file. Blank lines and lines beginning with '#'
 // are ignored. Values may contain '=' characters. A missing file is not an
 // error: it returns an empty, usable Source (every Get returns "") rather than
-// failing, so a caller that legitimately has nothing to stage — e.g. a fully
-// CM-provisioned session with no local github/llm_endpoint config, which never
-// writes the shared secrets file at all (see cli.newTokenProvider's
-// nil-provider path) — is not forced to special-case "file absent" itself. Any
-// other read error (permission denied, path is a directory, ...) still fails.
+// failing, so a caller that legitimately has nothing staged yet — e.g. the
+// gh-wrapper subcommand before any git-credentials config exists — is not
+// forced to special-case "file absent" itself. Any other read error
+// (permission denied, path is a directory, ...) still fails.
 func Open(path string) (*Source, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -76,37 +68,21 @@ func (s *Source) Get(key string) string {
 
 // WriteEnvFile writes vals to path atomically (write-tmp + rename).
 // The directory is created with mode 0700; the file is written with mode 0600.
-// Lines are written in deterministic order: LLM_API_KEY, LLM_BASE_URL,
-// LLM_TYPE, CM_GIT_TOKEN first, then any remaining keys sorted, to make
-// content predictable for tests and operators.
+// Keys are written in sorted order — map iteration is randomized, and the
+// output must be byte-identical across rewrites.
 func WriteEnvFile(path string, vals map[string]string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create secrets dir: %w", err)
 	}
 
-	// Build content in fixed order.
 	var sb strings.Builder
 
-	for _, k := range []string{"LLM_API_KEY", "LLM_BASE_URL", "LLM_TYPE", "CM_GIT_TOKEN"} {
-		if v, ok := vals[k]; ok {
-			sb.WriteString(k)
-			sb.WriteByte('=')
-			sb.WriteString(v)
-			sb.WriteByte('\n')
-		}
-	}
-
-	// Any other keys in sorted order — map iteration is randomized, and the
-	// output must be byte-identical across rewrites.
-	known := map[string]bool{"LLM_API_KEY": true, "LLM_BASE_URL": true, "LLM_TYPE": true, "CM_GIT_TOKEN": true}
 	for _, k := range slices.Sorted(maps.Keys(vals)) {
-		if !known[k] {
-			sb.WriteString(k)
-			sb.WriteByte('=')
-			sb.WriteString(vals[k])
-			sb.WriteByte('\n')
-		}
+		sb.WriteString(k)
+		sb.WriteByte('=')
+		sb.WriteString(vals[k])
+		sb.WriteByte('\n')
 	}
 
 	// Write to a temp file in the same dir so rename is atomic on Linux.
@@ -143,126 +119,4 @@ func WriteEnvFile(path string, vals map[string]string) error {
 	}
 
 	return nil
-}
-
-// EndpointSecrets holds the provider-neutral LLM endpoint credentials staged
-// into the worker env file. Fields are optional; empty values are omitted from
-// the file so the container inherits no stale key.
-type EndpointSecrets struct {
-	APIKey  string
-	BaseURL string
-	Type    string
-}
-
-// Refresher writes the env file immediately on Run, then rewrites it
-// refreshBefore ahead of each token expiry. LLM endpoint fields are static and
-// persist across every rewrite.
-type Refresher struct {
-	path          string
-	endpoint      EndpointSecrets
-	gen           TokenGenerator
-	logger        *slog.Logger
-	refreshBefore time.Duration      // default 10m; override in tests
-	minSleep      time.Duration      // floor on sleep; default 30s; override in tests
-	retryBackoff  time.Duration      // fast retry after a transient failure; default 5s; override in tests
-	onRotate      func(token string) // optional; invoked with the freshly minted token after every successful write, including the first; nil is a no-op.
-}
-
-const (
-	defaultRefreshBefore = 10 * time.Minute
-	defaultMinSleep      = 30 * time.Second
-	defaultRetryBackoff  = 5 * time.Second
-)
-
-// NewRefresher constructs a Refresher. Pass nil for logger to use the default.
-func NewRefresher(path string, endpoint EndpointSecrets, gen TokenGenerator, logger *slog.Logger) *Refresher {
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	return &Refresher{
-		path:          path,
-		endpoint:      endpoint,
-		gen:           gen,
-		logger:        logger,
-		refreshBefore: defaultRefreshBefore,
-		minSleep:      defaultMinSleep,
-		retryBackoff:  defaultRetryBackoff,
-	}
-}
-
-// SetOnRotate registers fn to be invoked with the freshly minted token
-// immediately after each successful env-file write, including the very
-// first — this is how a caller (the serve-side log-bridge redactor) learns a
-// live GitHub token without watching the file. Not safe to call concurrently
-// with Run; call it before starting Run in a goroutine.
-func (r *Refresher) SetOnRotate(fn func(token string)) {
-	r.onRotate = fn
-}
-
-// Run writes the env file immediately, then rewrites it ahead of each expiry.
-// Blocks until ctx is done; returns nil on clean shutdown.
-func (r *Refresher) Run(ctx context.Context) error {
-	for {
-		token, expiresAt, err := r.gen.GenerateToken(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-
-			r.logger.Error("generate token failed, retrying", "error", err, "backoff", r.retryBackoff)
-
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(r.retryBackoff):
-				continue
-			}
-		}
-
-		vals := map[string]string{
-			"CM_GIT_TOKEN": token,
-		}
-		if r.endpoint.APIKey != "" {
-			vals["LLM_API_KEY"] = r.endpoint.APIKey
-		}
-
-		if r.endpoint.BaseURL != "" {
-			vals["LLM_BASE_URL"] = r.endpoint.BaseURL
-		}
-
-		if r.endpoint.Type != "" {
-			vals["LLM_TYPE"] = r.endpoint.Type
-		}
-
-		if err := WriteEnvFile(r.path, vals); err != nil {
-			// A failed write staged no fresh secrets (on the first pass there is no
-			// prior file at all). Retry on the short backoff — NOT the expiry-derived
-			// sleep below: in PAT mode the token expiry is a year-9999 sentinel, so
-			// that sleep would wedge staging for ~8000 years. Bounds the outage to
-			// retryBackoff in every auth mode.
-			r.logger.Error("write env file failed; retrying on backoff", "error", err, "backoff", r.retryBackoff)
-
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(r.retryBackoff):
-				continue
-			}
-		}
-
-		if r.onRotate != nil {
-			r.onRotate(token)
-		}
-
-		r.logger.Info("env file written", "expires_at", expiresAt)
-
-		sleep := max(time.Until(expiresAt)-r.refreshBefore, r.minSleep)
-
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(sleep):
-		}
-	}
 }
