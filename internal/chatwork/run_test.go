@@ -4,12 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/mhersson/contextmatrix-chat/internal/frames"
-	"github.com/mhersson/contextmatrix-chat/internal/secrets"
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
 	"github.com/stretchr/testify/assert"
@@ -22,52 +19,6 @@ func TestDialectFromType(t *testing.T) {
 	assert.Equal(t, llm.DialectOpenAI, dialectFromType("openai"))
 	assert.Equal(t, llm.DialectOpenRouter, dialectFromType("openrouter"))
 	assert.Equal(t, llm.DialectOpenRouter, dialectFromType(""))
-}
-
-func TestHostFromRepoURL(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		url  string
-		want string
-	}{
-		{"enterprise host", "https://acme.ghe.com/org/repo.git", "acme.ghe.com"},
-		{"github.com", "https://github.com/org/repo.git", "github.com"},
-		{"empty", "", ""},
-		{"scp-style yields no host", "git@github.com:org/repo.git", ""},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			assert.Equal(t, tc.want, hostFromRepoURL(tc.url))
-		})
-	}
-}
-
-func TestGitHost(t *testing.T) {
-	tests := []struct {
-		name    string
-		gitHost string
-		repoURL string
-		want    string
-	}{
-		{"configured host wins over repo URL", "acme.ghe.com", "https://github.com/org/repo.git", "acme.ghe.com"},
-		{"configured host without repo URL (cross-project)", "acme.ghe.com", "", "acme.ghe.com"},
-		{"falls back to repo URL host", "", "https://acme.ghe.com/org/repo.git", "acme.ghe.com"},
-		{"neither set", "", "", ""},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("CM_GIT_HOST", tc.gitHost)
-			t.Setenv("CM_CHAT_REPO_URL", tc.repoURL)
-
-			assert.Equal(t, tc.want, gitHost())
-		})
-	}
 }
 
 // TestClearBoundaryDeliversPostClearPrimer verifies that a /clear during
@@ -211,45 +162,6 @@ func TestClearDrainsPendingMessage(t *testing.T) {
 	assert.Equal(t, 1, epoch, "stale pre-clear message must be dropped at the clear boundary; no second epoch without a fresh primer")
 }
 
-// TestEnvOrSecret verifies the env-first-then-file resolution used for the
-// CM-provisioned LLM endpoint values: a per-session container env override
-// (set by the launcher when ChatStartPayload.LLMEndpoint is present) wins
-// over the value staged in the shared /run/cm-secrets/env file, including
-// when the override is explicitly empty (the type's canonical default is a
-// real provisioned value, not "absent"). Absent env falls back to the file —
-// today's path for a CM that did not provision an llm endpoint.
-func TestEnvOrSecret(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "env")
-	require.NoError(t, os.WriteFile(path,
-		[]byte("LLM_API_KEY=file-key-123456\nLLM_BASE_URL=https://file.example/v1\n"), 0o600))
-
-	src, err := secrets.Open(path)
-	require.NoError(t, err)
-
-	t.Run("env override wins over file value", func(t *testing.T) {
-		t.Setenv("LLM_API_KEY", "payload-key-123456")
-		assert.Equal(t, "payload-key-123456", envOrSecret("LLM_API_KEY", src))
-	})
-
-	t.Run("env override wins even when explicitly empty", func(t *testing.T) {
-		t.Setenv("LLM_BASE_URL", "")
-		assert.Empty(t, envOrSecret("LLM_BASE_URL", src))
-	})
-
-	t.Run("falls back to file value when env unset", func(t *testing.T) {
-		// Hermetic: a host or CI that exports LLM_API_KEY/LLM_BASE_URL would
-		// otherwise make envOrSecret return the exported value and fail this
-		// subtest. Explicitly unset (restoring any prior value on cleanup) so the
-		// fallback-to-file path is what is actually exercised.
-		unsetEnv(t, "LLM_API_KEY")
-		unsetEnv(t, "LLM_BASE_URL")
-
-		assert.Equal(t, "file-key-123456", envOrSecret("LLM_API_KEY", src))
-		assert.Equal(t, "https://file.example/v1", envOrSecret("LLM_BASE_URL", src))
-	})
-}
-
 // TestValidateLLMKey verifies Run's worker-side backstop for handleChatStart's
 // fail-closed launch guard: a non-empty key passes, an empty key (the guard
 // having been bypassed) fails with a legible, self-explanatory error.
@@ -260,25 +172,7 @@ func TestValidateLLMKey(t *testing.T) {
 
 	err := validateLLMKey("")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "CM did not provision an llm endpoint and no local llm_endpoint config exists")
-}
-
-// unsetEnv removes key for the duration of the test, restoring any prior value
-// on cleanup. Used instead of t.Setenv when a test needs the var genuinely
-// ABSENT (os.LookupEnv → ok=false), which t.Setenv cannot express. t.Setenv is
-// incompatible with t.Parallel; unsetEnv shares that constraint, so callers
-// must not mark the test parallel.
-func unsetEnv(t *testing.T, key string) {
-	t.Helper()
-
-	prev, had := os.LookupEnv(key)
-	require.NoError(t, os.Unsetenv(key))
-
-	t.Cleanup(func() {
-		if had {
-			require.NoError(t, os.Setenv(key, prev))
-		}
-	})
+	assert.Equal(t, "no llm api key available: CM did not provision an llm endpoint", err.Error())
 }
 
 // TestEpochLoop_RunError verifies that a non-clear error from run propagates.

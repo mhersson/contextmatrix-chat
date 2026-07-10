@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,69 +24,65 @@ import (
 )
 
 const (
-	secretsEnvPath = "/run/cm-secrets/env" //nolint:gosec // path, not a credential
-	primerPath     = "/run/cm-chat/primer.txt"
-	resumePath     = "/run/cm-chat/resume.jsonl"
-	workspaceRoot  = "/workspace"
+	primerPath    = "/run/cm-chat/primer.txt"
+	resumePath    = "/run/cm-chat/resume.jsonl"
+	workspaceRoot = "/workspace"
 
 	defaultContextWindow       = 128000
 	defaultCompactionThreshold = 0.85
 	defaultKeepRecentTurns     = 6
 )
 
-// Run is the container entrypoint for one interactive chat session. It opens
-// secrets, configures git auth, optionally clones the project repo, assembles
-// the tool registry and harness config, and drives the epoch loop to completion.
-// Each epoch is one harness.Run; a /clear frame ends the current epoch and
-// starts a fresh one with no history.
+// Run is the container entrypoint for one interactive chat session. It reads
+// the CM-provisioned credentials from its env, configures git auth, optionally
+// clones the project repo, assembles the tool registry and harness config, and
+// drives the epoch loop to completion. Each epoch is one harness.Run; a /clear
+// frame ends the current epoch and starts a fresh one with no history.
 func Run(ctx context.Context) error {
-	// 1. Open secrets.
-	src, err := secrets.Open(secretsEnvPath)
-	if err != nil {
-		return fmt.Errorf("read secrets: %w", err)
-	}
-
-	// LLM values are env-first-then-file: handleChatStart sets LLM_API_KEY/
-	// LLM_BASE_URL/LLM_TYPE as per-session container env when CM provisions an
-	// llm_endpoint (protocol v0.5.0), the same delivery mechanism as
-	// CM_CHAT_REPO_URL. Absent means a CM version that predates that field —
-	// the values staged in the shared /run/cm-secrets/env file (today's
-	// local-config path) are used instead.
-	llmKey := envOrSecret("LLM_API_KEY", src)
-	llmBaseURL := envOrSecret("LLM_BASE_URL", src)
-	llmType := envOrSecret("LLM_TYPE", src)
+	// 1. CM-provisioned LLM endpoint: handleChatStart sets LLM_API_KEY/
+	// LLM_BASE_URL/LLM_TYPE as per-session container env (protocol v0.5.0),
+	// the same delivery mechanism as CM_CHAT_REPO_URL. All three are always
+	// set for a launched session — an empty value is a real provisioned
+	// answer (e.g. base_url meaning "the type's canonical default").
+	llmKey := os.Getenv("LLM_API_KEY")
+	llmBaseURL := os.Getenv("LLM_BASE_URL")
+	llmType := os.Getenv("LLM_TYPE")
 
 	// Backstop for handleChatStart's fail-closed launch guard: that guard
-	// should already have refused to start any session with neither a
-	// CM-provisioned llm_endpoint nor a local llm_endpoint config, so an empty
-	// llmKey here means the guard was bypassed — e.g. an older chat service
-	// paired with a newer, more permissive CM. Fail fast with a legible error
-	// instead of letting the harness LLM client fail opaquely on the first turn.
+	// should already have refused to start any session without a
+	// CM-provisioned llm_endpoint, so an empty llmKey here means the guard was
+	// bypassed — e.g. an older chat service paired with a newer, more
+	// permissive CM. Fail fast with a legible error instead of letting the
+	// harness LLM client fail opaquely on the first turn.
 	if err := validateLLMKey(llmKey); err != nil {
 		return err
 	}
 
-	gitToken := src.Get("CM_GIT_TOKEN")
 	gitCredentialsToken := os.Getenv("CM_GIT_CREDENTIALS_TOKEN")
 
-	// 2. Configure git credential auth. Provisioned mode (CM_GIT_CREDENTIALS_TOKEN
-	// set, protocol v0.5.2): stage a 0600 config file the git-credential/
-	// gh-wrapper subcommands read from (see gitCredentialsConfigPath's doc for
-	// why NOT env — they run through the harness bash tool's scrubbed
-	// environment) and register the v2 helper GLOBALLY, since a provisioned
-	// session is multi-host by construction. Absent: today's host-scoped,
-	// shared-secrets-file helper (deprecated fallback) applies unchanged. Both
-	// branches are non-fatal: a degraded git-auth environment must not kill an
-	// otherwise-usable interactive session.
+	// 2. Configure git credential auth (CM_GIT_CREDENTIALS_TOKEN, protocol
+	// v0.5.2): stage a 0600 config file the git-credential/gh-wrapper
+	// subcommands read from (see gitCredentialsConfigPath's doc for why NOT
+	// env — they run through the harness bash tool's scrubbed environment) and
+	// register the v2 helper GLOBALLY, since a provisioned session is
+	// multi-host by construction. Setup failures are non-fatal: a degraded
+	// git-auth environment must not kill an otherwise-usable interactive
+	// session. An absent token mirrors the llmKey backstop above (the launch
+	// guard was bypassed), but degrades instead of failing — unlike inference,
+	// a git-less chat session is still usable.
 	var selfPath string
 
-	if gitCredentialsToken != "" {
+	if gitCredentialsToken == "" {
+		slog.Warn("CM did not provision git credentials; git auth unavailable this session")
+	} else {
 		if err := secrets.WriteEnvFile(gitCredentialsConfigPath(), map[string]string{
 			"CM_GIT_CREDENTIALS_URL":   os.Getenv("CM_GIT_CREDENTIALS_URL"),
 			"CM_GIT_CREDENTIALS_TOKEN": gitCredentialsToken,
 		}); err != nil {
 			return fmt.Errorf("stage git-credentials config: %w", err)
 		}
+
+		var err error
 
 		selfPath, err = os.Executable()
 		if err != nil {
@@ -96,11 +91,6 @@ func Run(ctx context.Context) error {
 
 		if err := ConfigureGitCredentialHelperV2(ctx, selfPath); err != nil {
 			slog.Warn("git credential helper v2 setup failed; continuing without git auth", "error", err)
-		}
-	} else {
-		ghHost := gitHost()
-		if err := ConfigureGitCredentialHelper(ctx, secretsEnvPath, ghHost); err != nil {
-			slog.Warn("git credential helper setup failed; continuing without git auth", "error", err)
 		}
 	}
 
@@ -134,10 +124,12 @@ func Run(ctx context.Context) error {
 	var caHTTPClient *http.Client
 
 	if caCertPath := os.Getenv("CMX_CA_CERT_FILE"); caCertPath != "" {
-		caHTTPClient, err = tlsca.HTTPClientWithCA(caCertPath)
+		c, err := tlsca.HTTPClientWithCA(caCertPath)
 		if err != nil {
 			return fmt.Errorf("build CA http client: %w", err)
 		}
+
+		caHTTPClient = c
 
 		clientOpts = append(clientOpts, llm.WithHTTPClient(caHTTPClient))
 	}
@@ -160,7 +152,7 @@ func Run(ctx context.Context) error {
 		mcpBase = caHTTPClient.Transport
 	}
 
-	reg, bridge, err := buildToolRegistry(ctx, gitToken, selfPath, mcpBase)
+	reg, bridge, err := buildToolRegistry(ctx, selfPath, mcpBase)
 	if err != nil {
 		return err
 	}
@@ -183,14 +175,10 @@ func Run(ctx context.Context) error {
 	primer := readPrimer(primerPath)
 
 	// 8. Redactor: mask the secrets from all tool output and event data. Backed
-	// by a watcher so a token the host rotates mid-session (App installation
-	// tokens expire ~60m) — or a fresh per-repo git token the credential-helper/
-	// gh-wrapper subcommands fetch mid-session (see fetchedTokensPath) — is
+	// by a watcher so a fresh per-repo git token the credential-helper/
+	// gh-wrapper subcommands fetch mid-session (see fetchedTokensPath) is
 	// picked up without restarting the worker.
-	redWatcher, err := newRedactorWatcher(secretsEnvPath, os.Getenv("CM_MCP_API_KEY"), llmKey, gitCredentialsToken, fetchedTokensPath())
-	if err != nil {
-		return fmt.Errorf("build redactor: %w", err)
-	}
+	redWatcher := newRedactorWatcher(os.Getenv("CM_MCP_API_KEY"), llmKey, gitCredentialsToken, fetchedTokensPath())
 
 	go redWatcher.watch(ctx)
 
@@ -314,11 +302,10 @@ func epochLoop(
 // gh wrapper selection: selfPath non-empty means CM provisioned git
 // credentials this session (protocol v0.5.2) — install the v2 wrapper, which
 // fetches a fresh per-repo credential from CM on every gh invocation via
-// selfPath's hidden "gh-wrapper" subcommand. Otherwise, gitToken non-empty
-// (today's shared-secrets fallback) installs the v1 wrapper, which reads
-// CM_GIT_TOKEN fresh from the secrets file per invocation. Neither leaves gh
-// unavailable — a footgun the model discovers itself if it tries to use it.
-func buildToolRegistry(ctx context.Context, gitToken, selfPath string, mcpBase http.RoundTripper) (*tools.Registry, *mcpbridge.Bridge, error) {
+// selfPath's hidden "gh-wrapper" subcommand. An empty selfPath (no provisioned
+// git credentials) leaves gh unwrapped — a footgun the model discovers itself
+// if it tries to use it.
+func buildToolRegistry(ctx context.Context, selfPath string, mcpBase http.RoundTripper) (*tools.Registry, *mcpbridge.Bridge, error) {
 	mcpURL := os.Getenv("CM_MCP_URL")
 	mcpAPIKey := os.Getenv("CM_MCP_API_KEY")
 
@@ -331,8 +318,7 @@ func buildToolRegistry(ctx context.Context, gitToken, selfPath string, mcpBase h
 
 	bashTool := tools.NewBashTool(workspaceRoot).WithMaxTimeout(bashTimeout)
 
-	switch {
-	case selfPath != "":
+	if selfPath != "" {
 		// gh reads GH_TOKEN from the env and has no hook into a rotating
 		// credential source; a baked token goes stale mid-session (App
 		// installation tokens expire ~60m, and a provisioned session's token is
@@ -345,29 +331,6 @@ func buildToolRegistry(ctx context.Context, gitToken, selfPath string, mcpBase h
 			slog.Warn("gh wrapper v2 install failed; gh may be unavailable this session", "error", err)
 		} else {
 			bashTool = bashTool.WithExtraEnv([]string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")})
-		}
-	case gitToken != "":
-		var ghEnv []string
-
-		// gh reads GH_TOKEN from the env and has no hook into the rotating
-		// credential helper git uses; a baked token goes stale in a long session
-		// (App installation tokens expire ~60m). Install a `gh` shim on PATH that
-		// reads CM_GIT_TOKEN fresh from the secrets file per invocation instead.
-		if dir, err := installGHWrapper(secretsEnvPath); err != nil {
-			slog.Warn("gh wrapper install failed; gh may be unavailable this session", "error", err)
-		} else {
-			ghEnv = append(ghEnv, "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-		}
-
-		// gh cannot infer a GitHub Enterprise host from the git remote and refuses
-		// to open a PR without it; GH_HOST names it explicitly. Harmless for
-		// github.com. Mirrors the runner entrypoint.
-		if host := gitHost(); host != "" {
-			ghEnv = append(ghEnv, "GH_HOST="+host)
-		}
-
-		if len(ghEnv) > 0 {
-			bashTool = bashTool.WithExtraEnv(ghEnv)
 		}
 	}
 
@@ -417,60 +380,13 @@ func dirFromURL(u string) string {
 	return "repo"
 }
 
-// gitHost returns the host the git token is valid for: the configured
-// github.host forwarded by the launcher as CM_GIT_HOST, falling back to the
-// seeded repo URL's host. The fallback alone is wrong for cross-project
-// sessions (no repo URL → the credential helper would default to github.com
-// while the token is minted for the GHE host). Empty means github.com.
-func gitHost() string {
-	if h := os.Getenv("CM_GIT_HOST"); h != "" {
-		return h
-	}
-
-	return hostFromRepoURL(os.Getenv("CM_CHAT_REPO_URL"))
-}
-
-// hostFromRepoURL returns the host[:port] of an https repo URL, or "" when
-// repoURL is empty or not a parseable URL with a host (e.g. an scp-style
-// remote). Used to set GH_HOST so gh recognizes a GitHub Enterprise host.
-func hostFromRepoURL(repoURL string) string {
-	if repoURL == "" {
-		return ""
-	}
-
-	u, err := url.Parse(repoURL)
-	if err != nil {
-		return ""
-	}
-
-	return u.Host
-}
-
-// envOrSecret returns the container env var value for key when the launcher
-// set it — even to an empty string, since a CM-provisioned llm_endpoint
-// (protocol v0.5.0) with an intentionally empty field (e.g. base_url meaning
-// "the type's canonical default") is a real provisioned value, not "absent".
-// Falls back to the shared secrets file (today's local-config path) when the
-// launcher did not set the var at all: a pre-v0.5.0 CM payload with no
-// llm_endpoint. This is how a per-session env override "wins" over the
-// process-shared /run/cm-secrets/env value for LLM_API_KEY/LLM_BASE_URL/
-// LLM_TYPE.
-func envOrSecret(key string, src *secrets.Source) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
-	}
-
-	return src.Get(key)
-}
-
 // validateLLMKey is Run's worker-side backstop for handleChatStart's
 // fail-closed launch guard (see the comment at Run's llmKey resolution site):
-// an empty llmKey means neither a CM-provisioned llm_endpoint nor a local
-// llm_endpoint config was available, so this session has no way to
-// authenticate any inference call.
+// an empty llmKey means no CM-provisioned llm_endpoint was available, so this
+// session has no way to authenticate any inference call.
 func validateLLMKey(llmKey string) error {
 	if llmKey == "" {
-		return fmt.Errorf("no llm api key available: CM did not provision an llm endpoint and no local llm_endpoint config exists")
+		return fmt.Errorf("no llm api key available: CM did not provision an llm endpoint")
 	}
 
 	return nil

@@ -18,74 +18,25 @@ import (
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
 )
 
-// ConfigureGitCredentialHelper writes a credential-helper script to os.TempDir()
-// and registers it as the git credential helper scoped to host (defaulting to
-// github.com when host is empty).
-// The script reads CM_GIT_TOKEN from secretsEnvPath on every git auth call,
-// so token rotation is transparent — the token is never embedded in the
-// script or git config; only the path to the env file is baked in.
-// The script is written to os.TempDir() (not alongside secretsEnvPath) because
-// the secrets mount is read-only in the container.
-func ConfigureGitCredentialHelper(ctx context.Context, secretsEnvPath, host string) error {
-	if host == "" {
-		host = "github.com"
-	}
-
-	scriptPath := filepath.Join(os.TempDir(), "cm-git-credential-helper.sh")
-
-	// Path is baked in; token is read fresh on each git auth call.
-	script := fmt.Sprintf(`#!/bin/sh
-SECRETS_ENV='%s'
-
-case "$1" in
-    get)
-        token=$(grep '^CM_GIT_TOKEN=' "$SECRETS_ENV" | cut -d= -f2-)
-        echo "username=x-access-token"
-        echo "password=$token"
-        ;;
-esac
-`, secretsEnvPath)
-
-	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
-		return fmt.Errorf("write credential helper script: %w", err)
-	}
-
-	// Scope the helper to the expected host only. A global credential.helper
-	// would offer the token to ANY https host git contacts (malicious submodule
-	// URL, redirect), leaking a live installation token off-platform.
-	scope := "credential.https://" + host
-	if err := exec.CommandContext(ctx, "git", "config", "--global", scope+".helper", scriptPath).Run(); err != nil { //nolint:gosec // G204: host is derived from the operator-supplied CM_CHAT_REPO_URL (or defaults to github.com)
-		return fmt.Errorf("git config credential helper: %w", err)
-	}
-
-	if err := exec.CommandContext(ctx, "git", "config", "--global", scope+".useHttpPath", "false").Run(); err != nil { //nolint:gosec // G204: host is derived from the operator-supplied CM_CHAT_REPO_URL (or defaults to github.com)
-		return fmt.Errorf("git config useHttpPath: %w", err)
-	}
-
-	return nil
-}
-
-// ---- v2: CM-provisioned per-repo credentials (protocol v0.5.2) --------------
+// ---- CM-provisioned per-repo credentials (protocol v0.5.2) -------------------
 //
-// Provisioned mode replaces the single static host-scoped token above with a
-// live, per-operation fetch: the worker has no upfront git token at all, only
-// a bearer for CM's GET /api/worker/git-credentials?host=&path= endpoint,
-// which mints the correct credential for whichever repo git is about to touch
-// — the only design that works for a cross-project, long-lived chat session.
+// The worker has no upfront git token at all, only a bearer for CM's
+// GET /api/worker/git-credentials?host=&path= endpoint, which mints the
+// correct credential for whichever repo git is about to touch — the only
+// design that works for a cross-project, long-lived chat session.
 
 // gitCredentialHelperV2ScriptName is the credential-helper script's filename
-// under os.TempDir() (mirrors ConfigureGitCredentialHelper's v1 script, which
-// lives alongside it there — the secrets mount itself is read-only).
+// under os.TempDir() (a writable path in the container).
 const gitCredentialHelperV2ScriptName = "cm-git-credential-helper-v2.sh" //nolint:gosec // path, not a credential
 
 // ConfigureGitCredentialHelperV2 writes a credential-helper script to
 // os.TempDir() that execs selfPath's hidden "git-credential" subcommand, and
 // registers it as the GLOBAL (unscoped) git credential helper with
-// credential.useHttpPath=true. Unscoped — unlike ConfigureGitCredentialHelper's
-// host scoping — is correct here: CM resolves the right per-project credential
-// from the (host, path) the subcommand forwards on every call, so a
-// provisioned session is multi-host by construction; scoping to one host
-// would silently break every other host the session ever touches.
+// credential.useHttpPath=true. Unscoped is correct here: CM resolves the
+// right per-project credential from the (host, path) the subcommand forwards
+// on every call, so a provisioned session is multi-host by construction;
+// scoping to one host would silently break every other host the session ever
+// touches.
 // useHttpPath=true is required so git includes the repo path in what it hands
 // the helper — without it CM cannot tell which project's credential to mint.
 // selfPath is never embedded with a secret: the script only names the binary
@@ -122,21 +73,17 @@ func ConfigureGitCredentialHelperV2(ctx context.Context, selfPath string) error 
 // subcommand reading its own env from that lineage. The file lives in
 // os.TempDir(), which resolves identically under a scrubbed environment too
 // (TMPDIR is on the allowlist) — the same reasoning that already puts the
-// credential-helper SCRIPT itself there, and the same "fixed path beats
-// inherited env" principle the read-only /run/cm-secrets/env bind mount
-// relies on for the v1 fallback.
+// credential-helper SCRIPT itself there: a fixed path beats inherited env.
 func gitCredentialsConfigPath() string {
 	return filepath.Join(os.TempDir(), "cm-git-credentials-config")
 }
 
-// fetchedTokensPath is a writable scratch file (unlike the read-only
-// /run/cm-secrets mount) that RunGitCredentialHelper and RunGHWrapper append
-// every freshly-fetched git token to. The long-running work process's
-// redactorWatcher (see redactor.go) polls it so worker-fetched tokens enter
-// the in-worker redaction set even though they are minted by a short-lived
-// subcommand process that shares no memory with Run() — best-effort, on the
-// same multi-second poll cadence the existing GitHub-token-rotation watch
-// already accepts.
+// fetchedTokensPath is a writable scratch file that RunGitCredentialHelper
+// and RunGHWrapper append every freshly-fetched git token to. The
+// long-running work process's redactorWatcher (see redactor.go) polls it so
+// worker-fetched tokens enter the in-worker redaction set even though they
+// are minted by a short-lived subcommand process that shares no memory with
+// Run() — best-effort, on a multi-second poll cadence.
 func fetchedTokensPath() string {
 	return filepath.Join(os.TempDir(), "cm-fetched-git-tokens")
 }
