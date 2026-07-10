@@ -60,7 +60,7 @@ the other way instead: satisfy a harness interface from a consumer here.
   paths; container-side events go through the harness event stream.
 - Tests sit next to code (`handler.go` → `handler_test.go`), table-driven, with
   `t.Helper()` in helpers and `t.TempDir()` for scratch dirs.
-- Spell names out: "chat", "runner", "agent" — no abbreviations in config keys,
+- Spell names out: "chat", "agent" — no abbreviations in config keys,
   code, comments, or commit messages.
 
 ### Credentials

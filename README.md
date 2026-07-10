@@ -18,8 +18,7 @@ board-aware chat.
 
 ContextMatrix splits its execution backends:
 
-- **TaskBackend** — card execution (`contextmatrix-runner` or
-  `contextmatrix-agent`).
+- **TaskBackend** — card execution (`contextmatrix-agent`).
 - **ChatBackend** — interactive chat sessions (this service).
 
 The chat backend is selected and configured operator-side and coexists with

@@ -190,7 +190,7 @@ func runServe(ctx context.Context, configPath string) error {
 
 	// Unblock in-flight /logs SSE streams when Shutdown starts; otherwise
 	// http.Server.Shutdown waits the full httpShutdownTimeout on a stream that
-	// never goes idle. (Mirror this in contextmatrix-runner's handleLogs.)
+	// never goes idle. (Mirror this in contextmatrix-agent's handleLogs.)
 	httpServer.RegisterOnShutdown(srv.CloseSSE)
 
 	adminSrv := buildAdminServer(cfg, srv, mx, logger)

@@ -538,21 +538,21 @@ func TestChatStart_NoResumeNoResumeFile(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "resume.jsonl should not exist when Resume is nil")
 }
 
-// TestChatStart_PerProjectRunnerImage verifies that a per-project worker image
-// on the chat-start payload (protocol v0.7.0, ChatStartPayload.RunnerImage)
-// replaces the service-wide base image in the LaunchSpec, and that an empty
-// RunnerImage falls back to the configured base image exactly as before. The
-// override path also emits a launch-time log line, since a per-project image
-// bypasses the startup digest-pin warning and drift must stay visible.
-func TestChatStart_PerProjectRunnerImage(t *testing.T) {
+// TestChatStart_PerProjectWorkerImage verifies that a per-project worker image
+// on the chat-start payload (ChatStartPayload.WorkerImage) replaces the
+// service-wide base image in the LaunchSpec, and that an empty WorkerImage falls
+// back to the configured base image exactly as before. The override path also
+// emits a launch-time log line, since a per-project image bypasses the startup
+// digest-pin warning and drift must stay visible.
+func TestChatStart_PerProjectWorkerImage(t *testing.T) {
 	const (
 		overrideImage = "ghcr.io/org/python-worker:v3"
-		logMsg        = "per-project runner image override"
+		logMsg        = "per-project worker image override"
 	)
 
 	cases := []struct {
 		name        string
-		runnerImage string
+		workerImage string
 		wantImage   string
 		wantLog     bool
 	}{
@@ -587,7 +587,7 @@ func TestChatStart_PerProjectRunnerImage(t *testing.T) {
 			payload := protocol.ChatStartPayload{
 				SessionID:   testSession,
 				Project:     "alpha",
-				RunnerImage: tc.runnerImage,
+				WorkerImage: tc.workerImage,
 			}
 			body := mustJSON(t, provisioned(payload))
 			w := httptest.NewRecorder()
@@ -603,10 +603,53 @@ func TestChatStart_PerProjectRunnerImage(t *testing.T) {
 					"an image override must be logged at launch")
 			} else {
 				assert.NotContains(t, logBuf.String(), logMsg,
-					"no override log line when RunnerImage is empty")
+					"no override log line when WorkerImage is empty")
 			}
 		})
 	}
+}
+
+// TestChatStart_WorkerImageWireTag pins the consumer-side JSON tag for the
+// per-project image override. It POSTs a hand-built body carrying the raw
+// "worker_image" key (not a marshaled ChatStartPayload) so the assertion fails
+// if the wire tag ever drifts from the shared protocol struct.
+func TestChatStart_WorkerImageWireTag(t *testing.T) {
+	t.Parallel()
+
+	const overrideImage = "override:image"
+
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+
+	srv := NewServer(Config{
+		APIKey:   testAPIKey,
+		Executor: fe,
+		Tracker:  tracker,
+		Chat: ChatConfig{
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			ChatRunDirBase: t.TempDir(),
+			MaxConcurrent:  10,
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	body := []byte(`{` +
+		`"session_id":"` + testSession + `",` +
+		`"project":"alpha",` +
+		`"worker_image":"` + overrideImage + `",` +
+		`"git_credentials_token":"sess-test.bearer00",` +
+		`"llm_endpoint":{"type":"openrouter","api_key":"sk-test-provisioned"}` +
+		`}`)
+
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+	launched := fe.Launched()
+	require.Len(t, launched, 1)
+	assert.Equal(t, overrideImage, launched[0].Image,
+		"the raw worker_image key must drive the launched image")
 }
 
 func TestChatStart_ConfigEnvForwarded(t *testing.T) {

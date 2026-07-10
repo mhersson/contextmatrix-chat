@@ -31,9 +31,9 @@ const caCertMountPath = "/run/cm-ca/ca.crt"
 // handleChatStart starts a long-lived chat container for the given session. It
 // creates the per-session run directory, writes resume.jsonl, builds the
 // LaunchSpec, and delegates to the executor. The response body includes the
-// container ID so CM can correlate sessions. The payload's legacy Primer field
-// is ignored: the worker carries its own orientation primer (chatwork's
-// embedded chatPrimer), so the host sends no orientation text.
+// container ID so CM can correlate sessions. The worker carries its own
+// orientation primer (chatwork's embedded chatPrimer), so the host sends no
+// orientation text; the decoder tolerates unknown keys from stale senders.
 func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	var p protocol.ChatStartPayload
 	if !s.decode(w, r, &p) {
@@ -277,18 +277,18 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		binds = append(binds, s.caCertFile+":"+caCertMountPath+":ro")
 	}
 
-	// Per-project worker image override (protocol v0.7.0,
-	// ChatStartPayload.RunnerImage — CM derives it from the board's
-	// remote_execution.runner_image). When present, it replaces the service-wide
+	// Per-project worker image override (protocol
+	// ChatStartPayload.WorkerImage — CM derives it from the board's
+	// remote_execution.worker_image). When present, it replaces the service-wide
 	// base image so a project can run a toolchain-specific worker; empty falls
 	// back to the configured base image exactly as before. A per-project image
 	// bypasses the startup digest-pin warning, so log the override at launch to
 	// keep image drift visible in the operational log.
 	image := s.image
-	if p.RunnerImage != "" {
-		image = p.RunnerImage
+	if p.WorkerImage != "" {
+		image = p.WorkerImage
 
-		s.logger.Info("chat/start: per-project runner image override",
+		s.logger.Info("chat/start: per-project worker image override",
 			"session_id", p.SessionID, "project", p.Project, "image", image)
 	}
 
@@ -407,7 +407,7 @@ func (s *Server) handleChatEnd(w http.ResponseWriter, r *http.Request) {
 
 	// Closing stdin alone does not end the session: the container runs with
 	// StdinOnce=false, so closing the attach connection does not EOF the worker.
-	// Stop the container explicitly (mirrors the runner and agent backends) so
+	// Stop the container explicitly (mirrors the agent backend) so
 	// waitAndCleanup removes the container and clears the tracker entry —
 	// otherwise a later /chat/start for the same session sees it still active and
 	// returns 409. Detached ctx: the request ctx may be cancelled once we return,
