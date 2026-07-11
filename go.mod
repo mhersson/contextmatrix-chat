@@ -9,7 +9,7 @@ require (
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/providers/structs v1.0.0
 	github.com/knadh/koanf/v2 v2.3.5
-	github.com/mhersson/contextmatrix-harness v0.9.1
+	github.com/mhersson/contextmatrix-harness v0.10.0
 	github.com/mhersson/contextmatrix-protocol v0.8.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/opencontainers/image-spec v1.1.1
