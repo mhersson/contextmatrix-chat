@@ -307,6 +307,68 @@ func TestBridgeExecuteSurfacesImages(t *testing.T) {
 	assert.Equal(t, want, got.Images[0].URL)
 }
 
+func TestBridgeExecuteReconnectsAfterSessionPoisoned(t *testing.T) {
+	hs := newTestServer(t)
+	defer hs.Close()
+
+	ctx := context.Background()
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
+	require.NoError(t, err)
+
+	defer b.Close()
+
+	ts := b.Tools()
+	require.Len(t, ts, 1)
+
+	// First call succeeds on the initial session.
+	got, err := ts[0].Execute(ctx, map[string]any{})
+	require.NoError(t, err)
+	assert.Equal(t, toolResult, got.Text)
+
+	// Poison the session the way a proxy idle-close or a CM redeploy would: the
+	// underlying session is closed, so the next call fails with an error
+	// wrapping ErrConnectionClosed unless the bridge re-dials.
+	b.CloseSessionForTest()
+
+	// Without reconnect this returns "client is closing"; with it, the adapter
+	// re-dials the same still-running server through the Bridge and succeeds.
+	got, err = ts[0].Execute(ctx, map[string]any{})
+	require.NoError(t, err)
+	assert.Equal(t, toolResult, got.Text)
+}
+
+func TestBridgeExecuteDoesNotReconnectOnToolError(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "0.0.1"}, nil)
+	server.AddTool(&mcp.Tool{
+		Name:        "error_tool",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{
+			IsError: true,
+			Content: []mcp.Content{&mcp.TextContent{Text: "boom"}},
+		}, nil
+	})
+
+	hs := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server { return server }, nil))
+	defer hs.Close()
+
+	ctx := context.Background()
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
+	require.NoError(t, err)
+
+	defer b.Close()
+
+	ts := b.Tools()
+	require.Len(t, ts, 1)
+
+	before := b.SessionForTest()
+
+	_, err = ts[0].Execute(ctx, map[string]any{})
+	require.Error(t, err) // a tool-level IsError result surfaces as a Go error
+
+	assert.Same(t, before, b.SessionForTest(), "tool-level IsError must not trigger a re-dial")
+}
+
 func TestBridgeExecuteCoercesStringScalars(t *testing.T) {
 	var (
 		mu      sync.Mutex
