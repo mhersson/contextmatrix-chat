@@ -313,8 +313,8 @@ func (s *Server) DropSession(sessionID string) {
 }
 
 // Routes returns the mux with every webhook route mounted. The mutating
-// lifecycle routes are gated on drain; /logs, /health, and /readyz stay
-// reachable during shutdown so operators can read state.
+// lifecycle routes are gated on drain; /logs, /images, /health, and /readyz
+// stay reachable during shutdown so operators can read state.
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
