@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,6 +27,12 @@ const (
 // webhook server calls it on each chat/start. *taskskills.Resolver satisfies it.
 type SkillsResolver interface {
 	Resolve(ctx context.Context) (string, error)
+}
+
+// ImageLister lists the tagged images present in the node's local image
+// store. *executor.DockerExecutor satisfies it; tests supply a fake.
+type ImageLister interface {
+	ListImages(ctx context.Context) ([]executor.ImageSummary, error)
 }
 
 // SessionSecretRegistry records and forgets a session's CM-provisioned secrets
@@ -106,6 +113,15 @@ type Config struct {
 	// servers leave it unset).
 	SessionSecrets SessionSecretRegistry
 
+	// Images lists the node's tagged images for GET /images. Nil disables the
+	// endpoint (500 internal).
+	Images ImageLister
+
+	// ImageListFilters are the per-tag substring filters applied to GET
+	// /images responses. The serve layer always supplies at least the family
+	// default; an empty slice yields an empty list, never "everything".
+	ImageListFilters []string
+
 	// Chat carries the static per-process chat backend settings.
 	Chat ChatConfig
 
@@ -140,6 +156,9 @@ type Server struct {
 	// (LLM key, git-credentials bearer) with the host-side log-bridge redactor.
 	// nil in minimal test servers.
 	sessionSecrets SessionSecretRegistry
+
+	images           ImageLister
+	imageListFilters []string
 
 	// chat config (populated from ChatConfig at NewServer time)
 	image                     string
@@ -229,6 +248,8 @@ func NewServer(cfg Config) *Server {
 		executor:                  cfg.Executor,
 		tracker:                   cfg.Tracker,
 		sessionSecrets:            cfg.SessionSecrets,
+		images:                    cfg.Images,
+		imageListFilters:          cfg.ImageListFilters,
 		image:                     cfg.Chat.Image,
 		mcpURL:                    cfg.Chat.MCPURL,
 		skillsResolver:            cfg.SkillsResolver,
@@ -301,6 +322,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("POST /chat/end", s.recordMetrics(s.auth(s.handleChatEnd)))
 	mux.HandleFunc("POST /message", s.recordMetrics(s.auth(s.drainGate(s.handleMessage))))
 	mux.HandleFunc("GET /logs", s.recordMetrics(s.auth(s.handleLogs)))
+	mux.HandleFunc("GET /images", s.recordMetrics(s.auth(s.handleImages)))
 	mux.HandleFunc("GET /health", s.recordMetrics(s.handleHealth))
 	mux.HandleFunc("GET /readyz", s.recordMetrics(s.handleReadyz))
 
@@ -313,6 +335,59 @@ func (s *Server) Routes() *http.ServeMux {
 // agent-backend signed-GET HMAC is real auth, preserved here.
 func (s *Server) AdminAuth(next http.HandlerFunc) http.HandlerFunc {
 	return s.auth(next)
+}
+
+// ---- images -----------------------------------------------------------------
+
+func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
+	if s.images == nil {
+		writeError(w, http.StatusInternalServerError, protocol.CodeInternal, "image lister not wired")
+
+		return
+	}
+
+	summaries, err := s.images.ListImages(r.Context())
+	if err != nil {
+		s.logger.Error("image list failed", "error", err)
+		writeError(w, http.StatusBadGateway, protocol.CodeUpstreamFailure, "image list failed")
+
+		return
+	}
+
+	items := make([]protocol.ImageListItem, 0, len(summaries))
+
+	for _, sum := range summaries {
+		tags := matchingTags(sum.Tags, s.imageListFilters)
+		if len(tags) == 0 {
+			continue
+		}
+
+		items = append(items, protocol.ImageListItem{
+			Tags:    tags,
+			Digests: sum.Digests,
+			Created: sum.CreatedAt,
+			Size:    sum.SizeBytes,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, protocol.ListImagesResponse{OK: true, Images: items})
+}
+
+// matchingTags returns the tags containing any of the filter substrings.
+func matchingTags(tags, filters []string) []string {
+	out := make([]string, 0, len(tags))
+
+	for _, tag := range tags {
+		for _, f := range filters {
+			if strings.Contains(tag, f) {
+				out = append(out, tag)
+
+				break
+			}
+		}
+	}
+
+	return out
 }
 
 // ---- health / readyz --------------------------------------------------------
