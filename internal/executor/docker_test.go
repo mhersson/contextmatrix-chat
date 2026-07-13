@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/docker/docker/api/types/image"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -206,4 +207,30 @@ func TestContainerConfigNoBindsWhenNil(t *testing.T) {
 	_, host := containerConfig(LaunchSpec{SessionID: "sess-x", Image: "img"})
 
 	assert.Empty(t, host.Binds, "no binds when Binds is nil")
+}
+
+func TestImageSummaries_SkipsDanglingAndMapsFields(t *testing.T) {
+	in := []image.Summary{
+		{
+			RepoTags:    []string{"contextmatrix-chat-worker:go-node"},
+			RepoDigests: []string{"contextmatrix-chat-worker@sha256:abc"},
+			Created:     1750000000,
+			Size:        2_560_000_000,
+		},
+		{RepoTags: nil, RepoDigests: []string{"orphan@sha256:def"}},     // dangling: skipped
+		{RepoTags: []string{"<none>:<none>"}},                           // dangling tag form: skipped
+		{RepoTags: []string{"other:latest", "<none>:<none>"}, Size: 42}, // <none> pruned, image kept
+	}
+
+	got := imageSummaries(in)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, ImageSummary{
+		Tags:      []string{"contextmatrix-chat-worker:go-node"},
+		Digests:   []string{"contextmatrix-chat-worker@sha256:abc"},
+		CreatedAt: 1750000000,
+		SizeBytes: 2_560_000_000,
+	}, got[0])
+	assert.Equal(t, []string{"other:latest"}, got[1].Tags)
+	assert.Equal(t, int64(42), got[1].SizeBytes)
 }
