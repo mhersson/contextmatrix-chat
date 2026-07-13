@@ -148,13 +148,15 @@ func runServe(ctx context.Context, configPath string) error {
 	skillsResolver := taskskills.NewResolver(cfg.ContextMatrixURL, cfg.APIKey, skillsCache, logger)
 
 	srv = webhook.NewServer(webhook.Config{
-		APIKey:         cfg.APIKey,
-		Skew:           cfg.ReplaySkew,
-		Executor:       exec,
-		Tracker:        tracker,
-		SkillsResolver: skillsResolver,
-		SessionSecrets: redactorRegistry,
-		Hub:            hub,
+		APIKey:           cfg.APIKey,
+		Skew:             cfg.ReplaySkew,
+		Executor:         exec,
+		Tracker:          tracker,
+		SkillsResolver:   skillsResolver,
+		SessionSecrets:   redactorRegistry,
+		Images:           exec,
+		ImageListFilters: cfg.ImageListFilters,
+		Hub:              hub,
 		Chat: webhook.ChatConfig{
 			Image:                     cfg.BaseImage,
 			MCPURL:                    composeMCPURL(base),

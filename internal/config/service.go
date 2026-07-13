@@ -41,6 +41,7 @@ type ServiceConfig struct {
 	AdminPort                 int
 	BaseImage                 string
 	ImagePullPolicy           string
+	ImageListFilters          []string
 	MaxConcurrent             int
 	ContainerMemoryBytes      int64
 	ContainerPidsLimit        int64
@@ -71,6 +72,7 @@ type serviceRaw struct {
 	AdminPort                 int               `koanf:"admin_port"`
 	BaseImage                 string            `koanf:"base_image"`
 	ImagePullPolicy           string            `koanf:"image_pull_policy"`
+	ImageListFilters          []string          `koanf:"image_list_filters"`
 	MaxConcurrent             int               `koanf:"max_concurrent"`
 	ContainerMemoryLimit      int64             `koanf:"container_memory_limit"`
 	ContainerPidsLimit        int64             `koanf:"container_pids_limit"`
@@ -149,6 +151,13 @@ func LoadService(path string) (*ServiceConfig, error) {
 
 // toConfig assembles the typed config from the wire form.
 func (r serviceRaw) toConfig() (*ServiceConfig, error) {
+	imageListFilters := r.ImageListFilters
+	if len(imageListFilters) == 0 {
+		// Omitted or explicitly empty both fall back to the family default so
+		// a misconfiguration can never expose the node's whole image inventory.
+		imageListFilters = []string{"contextmatrix-chat"}
+	}
+
 	return &ServiceConfig{
 		ContextMatrixURL:          r.ContextMatrixURL,
 		ContainerContextMatrixURL: r.ContainerContextMatrixURL,
@@ -157,6 +166,7 @@ func (r serviceRaw) toConfig() (*ServiceConfig, error) {
 		AdminPort:                 r.AdminPort,
 		BaseImage:                 r.BaseImage,
 		ImagePullPolicy:           r.ImagePullPolicy,
+		ImageListFilters:          imageListFilters,
 		MaxConcurrent:             r.MaxConcurrent,
 		ContainerMemoryBytes:      r.ContainerMemoryLimit,
 		ContainerPidsLimit:        r.ContainerPidsLimit,
@@ -210,6 +220,12 @@ func (c *ServiceConfig) Validate() error {
 	case "never", "if-not-present", "always":
 	default:
 		return fmt.Errorf("image_pull_policy must be never|if-not-present|always, got %q", c.ImagePullPolicy)
+	}
+
+	for _, f := range c.ImageListFilters {
+		if strings.TrimSpace(f) == "" {
+			return fmt.Errorf("image_list_filters entries must be non-empty")
+		}
 	}
 
 	switch c.ReasoningEffort {
