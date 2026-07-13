@@ -62,14 +62,22 @@ log_level: info
 # language-toolchain seam: the shipped default (the `full` variant) carries Go,
 # Node, Python, and Rust. A project in any other ecosystem (a JVM, Ruby, .NET, a
 # system library) needs an image that carries that toolchain — build one FROM a
-# published variant (see the agent repo's docs/custom-images.md pattern). A
-# per-project image override lands separately; today this is instance-wide.
+# published variant (see the agent repo's docs/custom-images.md pattern).
+# Projects override this per-board via the chat worker image in ContextMatrix's
+# project settings.
 # CMX_BASE_IMAGE
 # base_image: ghcr.io/mhersson/contextmatrix-chat@sha256:<digest>
 
 # Image pull policy: never | if-not-present | always. Default: if-not-present.
 # CMX_IMAGE_PULL_POLICY
 image_pull_policy: if-not-present
+
+# Substring filters for GET /images (the ContextMatrix settings dropdown).
+# An image tag is listed when it contains any of these substrings; images with
+# no matching tag are omitted. Default: [contextmatrix-chat]. YAML only — the
+# CMX_ env layer cannot express list values.
+# image_list_filters:
+#   - contextmatrix-chat
 
 # Maximum number of concurrent worker containers. Must be >= 1. Default: 5.
 # CMX_MAX_CONCURRENT
