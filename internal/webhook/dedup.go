@@ -32,17 +32,7 @@ type dedupEntry struct {
 	stored time.Time
 }
 
-// dedupCacheOption configures a DedupCache.
 type dedupCacheOption func(*DedupCache)
-
-// withDedupClock injects a deterministic clock for tests.
-func withDedupClock(now func() time.Time) dedupCacheOption {
-	return func(c *DedupCache) {
-		if now != nil {
-			c.now = now
-		}
-	}
-}
 
 // NewDedupCache builds a dedup cache with the given TTL and capacity. A TTL
 // <= 0 disables time-based expiry; a capacity <= 0 disables the hard cap.

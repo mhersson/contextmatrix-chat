@@ -15,7 +15,7 @@ import (
 )
 
 func TestLogs_SSEStream(t *testing.T) {
-	hub := logbridge.NewHub()
+	hub := logbridge.NewHubWithDropObserver(nil)
 
 	srv := NewServer(Config{
 		APIKey:            testAPIKey,
@@ -105,7 +105,7 @@ func TestLogs_SSEStream(t *testing.T) {
 func TestHandleLogs_ReturnsOnSSEShutdown(t *testing.T) {
 	t.Parallel()
 
-	srv := NewServer(Config{Hub: logbridge.NewHub()})
+	srv := NewServer(Config{Hub: logbridge.NewHubWithDropObserver(nil)})
 
 	req := httptest.NewRequest(http.MethodGet, "/logs", nil) // context.Background: never cancels
 	rec := httptest.NewRecorder()                            // implements http.Flusher
@@ -127,7 +127,7 @@ func TestHandleLogs_ReturnsOnSSEShutdown(t *testing.T) {
 }
 
 func TestLogs_SessionFilter(t *testing.T) {
-	hub := logbridge.NewHub()
+	hub := logbridge.NewHubWithDropObserver(nil)
 
 	srv := NewServer(Config{
 		APIKey:            testAPIKey,

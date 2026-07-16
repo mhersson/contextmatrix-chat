@@ -146,11 +146,11 @@ func LoadService(path string) (*ServiceConfig, error) {
 		return nil, fmt.Errorf("unmarshal service config: %w", err)
 	}
 
-	return raw.toConfig()
+	return raw.toConfig(), nil
 }
 
 // toConfig assembles the typed config from the wire form.
-func (r serviceRaw) toConfig() (*ServiceConfig, error) {
+func (r serviceRaw) toConfig() *ServiceConfig {
 	imageListFilters := r.ImageListFilters
 	if len(imageListFilters) == 0 {
 		// Omitted or explicitly empty both fall back to the family default so
@@ -183,7 +183,7 @@ func (r serviceRaw) toConfig() (*ServiceConfig, error) {
 		LogLevel:                  r.LogLevel,
 		Compaction:                r.Compaction,
 		ChatRunDir:                r.ChatRunDir,
-	}, nil
+	}
 }
 
 // isNotExist reports whether err is a missing-file error from the file
@@ -238,7 +238,8 @@ func (c *ServiceConfig) Validate() error {
 		return fmt.Errorf(
 			"max_concurrent must be >= 1, got %d: 0 disables the webhook capacity pre-check "+
 				"while the tracker refuses every launch — triggers would be accepted then all fail",
-			c.MaxConcurrent)
+			c.MaxConcurrent,
+		)
 	}
 
 	if c.Port < 1 || c.Port > 65535 {

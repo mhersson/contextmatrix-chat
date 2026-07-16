@@ -83,7 +83,6 @@ type Executor interface {
 	Launch(ctx context.Context, spec LaunchSpec) error
 	Stop(ctx context.Context, sessionID string) error
 	Kill(ctx context.Context, sessionID string) error
-	StopAll(ctx context.Context) ([]*Run, error)
 }
 
 var containerNameRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
@@ -168,7 +167,6 @@ type Config struct {
 	Metrics *metrics.Metrics
 }
 
-// NewDockerExecutor wires a DockerExecutor from its dependencies.
 func NewDockerExecutor(cfg Config) *DockerExecutor {
 	logger := cfg.Logger
 	if logger == nil {
@@ -228,7 +226,7 @@ func (e *DockerExecutor) Launch(ctx context.Context, spec LaunchSpec) error {
 		Stderr: true,
 	})
 	if err != nil {
-		e.removeContainer(ctx, resp.ID, log)
+		e.removeContainer(resp.ID, log)
 
 		return fmt.Errorf("attach container: %w", err)
 	}
@@ -242,7 +240,7 @@ func (e *DockerExecutor) Launch(ctx context.Context, spec LaunchSpec) error {
 
 	if !e.tracker.AddIfUnderLimit(run) {
 		attach.Close()
-		e.removeContainer(ctx, resp.ID, log)
+		e.removeContainer(resp.ID, log)
 
 		return ErrCapacity
 	}
@@ -250,7 +248,7 @@ func (e *DockerExecutor) Launch(ctx context.Context, spec LaunchSpec) error {
 	if err := e.docker.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		e.tracker.Remove(spec.SessionID)
 		attach.Close()
-		e.removeContainer(ctx, resp.ID, log)
+		e.removeContainer(resp.ID, log)
 
 		return fmt.Errorf("start container: %w", err)
 	}
@@ -389,25 +387,6 @@ func (e *DockerExecutor) Kill(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// StopAll kills every tracked run and returns the runs it killed. The returned
-// *Run elements are the tracker's shared pointers, not deep copies.
-func (e *DockerExecutor) StopAll(ctx context.Context) ([]*Run, error) {
-	var killed []*Run
-
-	for _, run := range e.tracker.List() {
-		if err := e.Kill(ctx, run.SessionID); err != nil && !errors.Is(err, ErrNotFound) {
-			e.logger.Warn("stop-all kill failed",
-				"session_id", run.SessionID, "error", err)
-
-			continue
-		}
-
-		killed = append(killed, run)
-	}
-
-	return killed, nil
-}
-
 // CleanupOrphans force-removes every chat-labeled container found at boot.
 // Anything matching is orphaned by definition — the tracker is empty in a fresh
 // process, so a labeled container is a leftover from a previous run. This
@@ -535,7 +514,7 @@ func (e *DockerExecutor) kill(containerID string, log *slog.Logger) {
 // removeContainer force-removes a created-but-not-supervised container on a
 // launch failure path, using a bounded detached context so a cancelled launch
 // ctx cannot turn cleanup into a no-op.
-func (e *DockerExecutor) removeContainer(_ context.Context, containerID string, log *slog.Logger) {
+func (e *DockerExecutor) removeContainer(containerID string, log *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

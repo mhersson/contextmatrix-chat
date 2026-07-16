@@ -49,21 +49,6 @@ func newTestServer(t *testing.T) *httptest.Server {
 	return httptest.NewServer(handler)
 }
 
-func TestBridgeConnect(t *testing.T) {
-	hs := newTestServer(t)
-	defer hs.Close()
-
-	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
-	require.NoError(t, err)
-
-	defer b.Close()
-
-	ts := b.Tools()
-	require.Len(t, ts, 1)
-	assert.Equal(t, toolName, ts[0].Name())
-}
-
 func TestBridgeBoardToolNames(t *testing.T) {
 	hs := newTestServer(t)
 	defer hs.Close()

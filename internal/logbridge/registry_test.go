@@ -33,7 +33,7 @@ func TestRedactorRegistry_SessionKeyLifecycle(t *testing.T) {
 
 	const sessionKey = "sk-session-provisioned-111111"
 
-	hub := logbridge.NewHub()
+	hub := logbridge.NewHubWithDropObserver(nil)
 	_, ch := hub.Subscribe("")
 	bridge := logbridge.New(hub, nil)
 
@@ -66,7 +66,7 @@ func TestRedactorRegistry_SessionKeyLifecycle(t *testing.T) {
 func TestRedactorRegistry_EmptyKeyIgnored(t *testing.T) {
 	t.Parallel()
 
-	hub := logbridge.NewHub()
+	hub := logbridge.NewHubWithDropObserver(nil)
 	_, ch := hub.Subscribe("")
 	bridge := logbridge.New(hub, nil)
 	registry := logbridge.NewRedactorRegistry(bridge)
@@ -93,7 +93,7 @@ func TestRedactorRegistry_MultipleSessionKeysBothMasked(t *testing.T) {
 		gitBearer = "sess1.git-credentials-bearer-111111"
 	)
 
-	hub := logbridge.NewHub()
+	hub := logbridge.NewHubWithDropObserver(nil)
 	_, ch := hub.Subscribe("")
 	bridge := logbridge.New(hub, nil)
 	registry := logbridge.NewRedactorRegistry(bridge)

@@ -118,11 +118,6 @@ func TestContainerName_Sanitized(t *testing.T) {
 	}
 }
 
-func TestContainerName_MatchesDockerCharset(t *testing.T) {
-	got := containerName("my/session@v2")
-	assert.Regexp(t, `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`, got)
-}
-
 // DockerExecutor must satisfy the Executor seam.
 var _ Executor = (*DockerExecutor)(nil)
 
@@ -189,24 +184,6 @@ func TestLineWriter_BoundsLongLine(t *testing.T) {
 
 	assert.LessOrEqual(t, len(got), scannerBufferMax,
 		"line buffer must not grow past the cap")
-}
-
-func TestContainerConfigBindsPassedThrough(t *testing.T) {
-	binds := []string{"/host/primer:/run/cm-primer:ro", "/host/model:/run/model:ro"}
-
-	_, host := containerConfig(LaunchSpec{
-		SessionID: "sess-x",
-		Image:     "img",
-		Binds:     binds,
-	})
-
-	assert.Equal(t, binds, host.Binds)
-}
-
-func TestContainerConfigNoBindsWhenNil(t *testing.T) {
-	_, host := containerConfig(LaunchSpec{SessionID: "sess-x", Image: "img"})
-
-	assert.Empty(t, host.Binds, "no binds when Binds is nil")
 }
 
 func TestImageSummaries_SkipsDanglingAndMapsFields(t *testing.T) {

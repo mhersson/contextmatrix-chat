@@ -8,6 +8,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// withDedupClock injects a deterministic clock for tests.
+func withDedupClock(now func() time.Time) dedupCacheOption {
+	return func(c *DedupCache) {
+		if now != nil {
+			c.now = now
+		}
+	}
+}
+
 func TestDedup_CheckAndRecordThenRollback(t *testing.T) {
 	d := NewDedupCache(time.Minute, 16)
 

@@ -8,7 +8,7 @@ conventions, and discipline that keep contributions correct.
 Two runtime roles in one binary:
 
 - **`serve`** — host service: lifecycle webhooks, one worker container per
-  session, secret staging, log SSE, graceful drain.
+  session, task-skills clone staging, log SSE, graceful drain.
 - **`work`** — hidden container entrypoint: assembles the tool registry,
   optionally clones the project repo, seeds resume history, runs the epoch loop.
 
@@ -20,12 +20,14 @@ come from the shared `contextmatrix-harness` module (version pinned in
 
 ```
 cmd/contextmatrix-chat/   entrypoint; runs the cobra root command
-internal/cli/             cobra commands: serve, work (hidden)
+internal/cli/             cobra commands: serve, work (hidden), git-credential + gh-wrapper (hidden container-internal shims)
 internal/config/          layered service config (defaults < file < env, CMX_*) + Validate
-internal/webhook/         HTTP surface: /chat/start, /chat/end, /message, /logs (SSE), /health, /readyz; HMAC auth, replay + dedup caches, drain gate
+internal/webhook/         HTTP surface: /chat/start, /chat/end, /message, /logs (SSE), /images, /health, /readyz; HMAC auth, replay + dedup caches, drain gate
 internal/executor/        Docker container lifecycle; Tracker gates concurrency; DockerExecutor implements Executor
 internal/chatwork/        container work loop: provisioned credentials, git credential helper, optional clone, tool registry, embedded primer, resume, epoch loop
 internal/mcpbridge/       dials CM's /mcp, adapts each board tool to a harness tools.Tool
+internal/taskskills/      fetches CM's task-skills pointer + shallow-clones it into the host cache bound at /run/cm-skills
+internal/tlsca/           HTTP client/transport trusting the optional extra CA (ca_cert_file)
 internal/logbridge/       Hub fanning container log frames to SSE subscribers
 internal/frames/          JSON-Lines control protocol on container stdin (user-message, clear)
 internal/secrets/         KEY=value env-file read/write (atomic write+rename); stages the worker's provisioned git-credentials config

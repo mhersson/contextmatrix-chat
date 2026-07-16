@@ -44,10 +44,6 @@ func buildExtraHosts(resolver hostResolver, mcpURL string, log *slog.Logger) []s
 		return hosts
 	}
 
-	if resolver == nil {
-		resolver = net.DefaultResolver
-	}
-
 	// Resolve under a fresh background context: a near-cancelled launch ctx must
 	// not shorten the deadline below the already-tight cap.
 	ctx, cancel := context.WithTimeout(context.Background(), dnsLookupTimeout)

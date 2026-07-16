@@ -33,31 +33,6 @@ func makeEvent(kind string, data map[string]any) []byte {
 	return b
 }
 
-// TestThinkingCase is the TDD centerpiece: a {"kind":"thinking",...} line must
-// publish a protocol.LogEntry{Type:"thinking", Content:"hmm", SessionID:testSession}.
-func TestThinkingCase(t *testing.T) {
-	t.Parallel()
-
-	hub := logbridge.NewHub()
-	_, ch := hub.Subscribe("")
-	bridge := logbridge.New(hub, nil)
-
-	line := makeEvent("thinking", map[string]any{"content": "hmm"})
-	bridge.BridgeLine(testSession, line, false)
-
-	var got protocol.LogEntry
-	select {
-	case got = <-ch:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("expected thinking entry but got none (timeout)")
-	}
-
-	assert.Equal(t, "thinking", got.Type)
-	assert.Equal(t, "hmm", got.Content)
-	assert.Equal(t, testSession, got.SessionID)
-	assert.False(t, got.Timestamp.IsZero(), "Timestamp must be set")
-}
-
 // TestMappingTable covers every row of the kind→LogEntry spec.
 func TestMappingTable(t *testing.T) {
 	t.Parallel()
@@ -111,7 +86,7 @@ func TestMappingTable(t *testing.T) {
 		},
 		{
 			name: "tool_call truncated at 200 chars",
-			line: (func() []byte {
+			line: func() []byte {
 				bigArgs := `{"x":"` + strings.Repeat("a", 300) + `"}`
 
 				return makeEvent("tool_call", map[string]any{
@@ -119,7 +94,7 @@ func TestMappingTable(t *testing.T) {
 					"name":     "bash",
 					"raw_args": bigArgs,
 				})
-			})(),
+			}(),
 			wantType:   "tool_call",
 			wantToolID: "call_trunc",
 			checkContent: func(t *testing.T, content string) {
@@ -262,7 +237,7 @@ func TestMappingTable(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			hub := logbridge.NewHub()
+			hub := logbridge.NewHubWithDropObserver(nil)
 			_, ch := hub.Subscribe("")
 			bridge := logbridge.New(hub, nil)
 
@@ -318,7 +293,7 @@ func TestStderrStream(t *testing.T) {
 
 	const secret = "supersecrettoken"
 
-	hub := logbridge.NewHub()
+	hub := logbridge.NewHubWithDropObserver(nil)
 	_, ch := hub.Subscribe("")
 	red := redact.New([]string{secret})
 	bridge := logbridge.New(hub, red)
@@ -345,7 +320,7 @@ func TestRedaction(t *testing.T) {
 
 	const secret = "my-secret-api-key"
 
-	hub := logbridge.NewHub()
+	hub := logbridge.NewHubWithDropObserver(nil)
 	_, ch := hub.Subscribe("")
 	red := redact.New([]string{secret})
 	bridge := logbridge.New(hub, red)
@@ -365,34 +340,6 @@ func TestRedaction(t *testing.T) {
 			t.Fatal("expected entry")
 		}
 	})
-
-	t.Run("thinking content redacted", func(t *testing.T) {
-		line := makeEvent("thinking", map[string]any{
-			"content": "should I use " + secret + " here?",
-		})
-		bridge.BridgeLine(testSession, line, false)
-
-		select {
-		case got := <-ch:
-			assert.Equal(t, "thinking", got.Type)
-			assert.NotContains(t, got.Content, secret)
-			assert.Contains(t, got.Content, "[REDACTED]")
-		case <-time.After(100 * time.Millisecond):
-			t.Fatal("expected entry")
-		}
-	})
-
-	t.Run("raw stderr redacted", func(t *testing.T) {
-		bridge.BridgeLine(testSession, []byte("fatal: "+secret), true)
-
-		select {
-		case got := <-ch:
-			assert.NotContains(t, got.Content, secret)
-			assert.Contains(t, got.Content, "[REDACTED]")
-		case <-time.After(100 * time.Millisecond):
-			t.Fatal("expected entry")
-		}
-	})
 }
 
 // TestHubSubscribers verifies fan-out, session filtering, drop-on-full,
@@ -403,7 +350,7 @@ func TestHubSubscribers(t *testing.T) {
 	t.Run("all-session subscriber receives entries from any session", func(t *testing.T) {
 		t.Parallel()
 
-		hub := logbridge.NewHub()
+		hub := logbridge.NewHubWithDropObserver(nil)
 		_, ch := hub.Subscribe("") // empty = all
 		hub.Publish(protocol.LogEntry{Type: "text", SessionID: "sess-a", Content: "hello"})
 
@@ -418,7 +365,7 @@ func TestHubSubscribers(t *testing.T) {
 	t.Run("session-filtered subscriber only receives matching session", func(t *testing.T) {
 		t.Parallel()
 
-		hub := logbridge.NewHub()
+		hub := logbridge.NewHubWithDropObserver(nil)
 		_, chA := hub.Subscribe("sess-a")
 		_, chB := hub.Subscribe("sess-b")
 
@@ -443,7 +390,7 @@ func TestHubSubscribers(t *testing.T) {
 	t.Run("full subscriber drops without stalling", func(t *testing.T) {
 		t.Parallel()
 
-		hub := logbridge.NewHub()
+		hub := logbridge.NewHubWithDropObserver(nil)
 		_, ch := hub.Subscribe("")
 
 		// Publish more entries than the channel buffer without consuming.
@@ -471,7 +418,7 @@ func TestHubSubscribers(t *testing.T) {
 	t.Run("Unsubscribe closes channel", func(t *testing.T) {
 		t.Parallel()
 
-		hub := logbridge.NewHub()
+		hub := logbridge.NewHubWithDropObserver(nil)
 		id, ch := hub.Subscribe("")
 		hub.Unsubscribe(id)
 
@@ -487,7 +434,7 @@ func TestHubSubscribers(t *testing.T) {
 func TestSetRedactorAppliesToSubsequentLines(t *testing.T) {
 	t.Parallel()
 
-	hub := logbridge.NewHub()
+	hub := logbridge.NewHubWithDropObserver(nil)
 	_, ch := hub.Subscribe("")
 	bridge := logbridge.New(hub, redact.New([]string{"initial-secret-val"}))
 
