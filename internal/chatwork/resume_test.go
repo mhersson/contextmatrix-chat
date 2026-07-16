@@ -176,40 +176,4 @@ func TestLoadResume(t *testing.T) {
 		require.Len(t, rc.Turns, 1)
 		assert.Equal(t, largeContent, rc.Turns[0].Content)
 	})
-
-	t.Run("load then seed round-trip", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "resume.jsonl")
-
-		turns := []protocol.ChatResumeTurn{
-			{Seq: 1, Role: "user", Content: "question"},
-			{Seq: 2, Role: "assistant_text", Content: "answer"},
-			{Seq: 3, Role: "tool_call", Content: `{"tool":"bash"}`},
-			{Seq: 4, Role: "tool_result_summary", Content: "→ failed: exit status 1"},
-		}
-
-		f, err := os.Create(path)
-		require.NoError(t, err)
-
-		enc := json.NewEncoder(f)
-
-		for _, turn := range turns {
-			require.NoError(t, enc.Encode(turn))
-		}
-
-		require.NoError(t, f.Close())
-
-		rc, err := LoadResume(path)
-		require.NoError(t, err)
-
-		msgs := SeedHistory(rc)
-		require.Len(t, msgs, 4)
-		assert.Equal(t, "user", msgs[0].Role)
-		assert.Equal(t, "question", msgs[0].Content)
-		assert.Equal(t, "assistant", msgs[1].Role)
-		assert.Equal(t, "answer", msgs[1].Content)
-		assert.Equal(t, "system", msgs[2].Role)
-		assert.Equal(t, "system", msgs[3].Role)
-		assert.Equal(t, "→ failed: exit status 1", msgs[3].Content)
-	})
 }

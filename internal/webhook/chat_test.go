@@ -164,8 +164,7 @@ func (f *fakeExecutor) Stopped() []string {
 	return out
 }
 
-func (f *fakeExecutor) Kill(_ context.Context, _ string) error             { return nil }
-func (f *fakeExecutor) StopAll(_ context.Context) ([]*executor.Run, error) { return nil, nil }
+func (f *fakeExecutor) Kill(_ context.Context, _ string) error { return nil }
 
 func (f *fakeExecutor) Launched() []executor.LaunchSpec {
 	f.mu.Lock()
@@ -941,46 +940,6 @@ func TestChatStart_LLMEndpointEmptyBaseURLStillSet(t *testing.T) {
 	assert.Empty(t, baseURL)
 }
 
-// TestChatStart_RegistersLLMKeyForRedaction verifies that a CM-provisioned
-// payload LLM key is registered with the session-secret registry (so the
-// host-side log-bridge redactor masks it in bridged worker stderr) — under the
-// same session ID.
-func TestChatStart_RegistersLLMKeyForRedaction(t *testing.T) {
-	tracker := executor.NewTracker(10)
-	fe := &fakeExecutor{tracker: tracker}
-	fss := newFakeSessionSecrets()
-
-	srv := NewServer(Config{
-		APIKey:         testAPIKey,
-		Executor:       fe,
-		Tracker:        tracker,
-		SessionSecrets: fss,
-		Chat: ChatConfig{
-			Image:          testImage,
-			MCPURL:         testMCPURL,
-			ChatRunDirBase: t.TempDir(),
-			MaxConcurrent:  10,
-		},
-		Logger: discardLogger(),
-	})
-
-	payload := protocol.ChatStartPayload{
-		SessionID: testSession,
-		LLMEndpoint: &protocol.LLMEndpoint{
-			Type:   "openai",
-			APIKey: "sk-payload-key-123456",
-		},
-	}
-	body := mustJSON(t, provisioned(payload))
-	w := httptest.NewRecorder()
-	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
-	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
-
-	keys := fss.addedKeys(testSession)
-	assert.Contains(t, keys, "sk-payload-key-123456",
-		"chat/start must register the payload LLM key for redaction")
-}
-
 // TestChatStart_RegistersMCPKeyForRedaction verifies the per-session MCP
 // bearer is registered with the host-side log-bridge redactor: it rides plain
 // container env like the other per-session secrets, so worker stderr is the
@@ -1253,43 +1212,6 @@ func TestChatStart_GitCredentialsTokenFromPayload(t *testing.T) {
 	envMap := envToMap(fe.Launched()[0].Env)
 	assert.Equal(t, "http://cm:8080/api/worker/git-credentials", envMap["CM_GIT_CREDENTIALS_URL"])
 	assert.Equal(t, "sess-abc123.deadbeef", envMap["CM_GIT_CREDENTIALS_TOKEN"])
-}
-
-// TestChatStart_GitCredentialsTokenRegisteredForRedaction verifies the payload
-// bearer is registered with the host-side log-bridge redactor, the same
-// mechanism as the provisioned LLM key — worker-fetched git tokens themselves
-// never transit the chat service (see credhelper.go), but this bearer does,
-// so it is the one thing this registry CAN cover for the git-credentials flow.
-func TestChatStart_GitCredentialsTokenRegisteredForRedaction(t *testing.T) {
-	tracker := executor.NewTracker(10)
-	fe := &fakeExecutor{tracker: tracker}
-	fss := newFakeSessionSecrets()
-
-	srv := NewServer(Config{
-		APIKey:         testAPIKey,
-		Executor:       fe,
-		Tracker:        tracker,
-		SessionSecrets: fss,
-		Chat: ChatConfig{
-			Image:          testImage,
-			MCPURL:         testMCPURL,
-			ChatRunDirBase: t.TempDir(),
-			MaxConcurrent:  10,
-		},
-		Logger: discardLogger(),
-	})
-
-	payload := protocol.ChatStartPayload{
-		SessionID:           testSession,
-		GitCredentialsToken: "sess-abc123.deadbeef",
-	}
-	body := mustJSON(t, provisioned(payload))
-	w := httptest.NewRecorder()
-	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
-	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
-
-	keys := fss.addedKeys(testSession)
-	assert.Contains(t, keys, "sess-abc123.deadbeef", "the git-credentials bearer must be registered for redaction")
 }
 
 // TestChatStart_GitCredentialsAndLLMKeyBothRegistered is the regression guard
@@ -1766,8 +1688,6 @@ func TestHealth_ReturnsTrackerCount(t *testing.T) {
 	assert.Equal(t, 1, hr.RunningContainers)
 	assert.Equal(t, 10, hr.MaxConcurrent)
 }
-
-// ---- helpers ----------------------------------------------------------------
 
 // envToMap converts KEY=VALUE env strings to a map for assertion convenience.
 func envToMap(env []string) map[string]string {

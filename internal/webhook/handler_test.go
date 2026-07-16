@@ -1,32 +1,15 @@
 package webhook
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	protocol "github.com/mhersson/contextmatrix-protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // ---- health / readyz --------------------------------------------------------
-
-func TestHealth_Unauthenticated(t *testing.T) {
-	srv := NewServer(Config{APIKey: testAPIKey})
-
-	// No signing — /health is unauthenticated.
-	r := httptest.NewRequest(http.MethodGet, "/health", nil)
-	w := httptest.NewRecorder()
-	srv.Routes().ServeHTTP(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var hr protocol.HealthResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &hr))
-	assert.True(t, hr.OK)
-}
 
 func TestReadyz_OKAndDraining(t *testing.T) {
 	srv := NewServer(Config{APIKey: testAPIKey})

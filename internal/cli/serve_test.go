@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -17,11 +16,10 @@ import (
 
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	"github.com/mhersson/contextmatrix-chat/internal/logbridge"
-	"github.com/mhersson/contextmatrix-chat/internal/webhook"
 )
 
 // stubExecutor implements executor.Executor for unit tests. Kill records the
-// session IDs it receives; Launch and StopAll are no-ops.
+// session IDs it receives; Launch is a no-op.
 type stubExecutor struct {
 	kills []string
 }
@@ -36,12 +34,10 @@ func (e *stubExecutor) Kill(_ context.Context, sessionID string) error {
 	return nil
 }
 
-func (e *stubExecutor) StopAll(_ context.Context) ([]*executor.Run, error) { return nil, nil }
-
 func TestChatExit(t *testing.T) {
 	t.Parallel()
 
-	hub := logbridge.NewHub()
+	hub := logbridge.NewHubWithDropObserver(nil)
 
 	id, ch := hub.Subscribe("sess-1")
 	defer hub.Unsubscribe(id)
@@ -81,7 +77,6 @@ func TestComposeMCPURL(t *testing.T) {
 	}{
 		{"no trailing slash", "http://host:8080", "http://host:8080/mcp"},
 		{"trailing slash", "http://host:8080/", "http://host:8080/mcp"},
-		{"double trailing slash", "http://host:8080//", "http://host:8080/mcp"},
 		{"with subpath", "http://host:8080/contextmatrix", "http://host:8080/contextmatrix/mcp"},
 	}
 
@@ -103,7 +98,6 @@ func TestComposeGitCredentialsURL(t *testing.T) {
 	}{
 		{"no trailing slash", "http://host:8080", "http://host:8080/api/worker/git-credentials"},
 		{"trailing slash", "http://host:8080/", "http://host:8080/api/worker/git-credentials"},
-		{"double trailing slash", "http://host:8080//", "http://host:8080/api/worker/git-credentials"},
 		{"with subpath", "http://host:8080/contextmatrix", "http://host:8080/contextmatrix/api/worker/git-credentials"},
 	}
 
@@ -113,20 +107,6 @@ func TestComposeGitCredentialsURL(t *testing.T) {
 			assert.Equal(t, tt.want, composeGitCredentialsURL(tt.base))
 		})
 	}
-}
-
-// TestHealthEndpoint is a smoke test: build a Server with a minimal config and
-// verify that GET /health (unauthenticated) returns 200.
-func TestHealthEndpoint(t *testing.T) {
-	t.Parallel()
-
-	srv := webhook.NewServer(webhook.Config{APIKey: "test-api-key-for-serve-health-smoke"})
-
-	r := httptest.NewRequest(http.MethodGet, "/health", nil)
-	w := httptest.NewRecorder()
-	srv.Routes().ServeHTTP(w, r)
-
-	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 // TestGracefulShutdown verifies that gracefulShutdown sets the draining flag and

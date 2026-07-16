@@ -98,8 +98,8 @@ container_pids_limit: 512
 # CMX_SECRETS_DIR
 secrets_dir: /var/run/cm-chat/secrets
 
-# Host root under which per-session run directories (resume.jsonl, primer.txt)
-# are created and bind-mounted read-only at /run/cm-chat. Required.
+# Host root under which per-session run directories (resume.jsonl) are
+# created and bind-mounted read-only at /run/cm-chat. Required.
 # CMX_CHAT_RUN_DIR
 # chat_run_dir: /var/run/cm-chat/sessions
 

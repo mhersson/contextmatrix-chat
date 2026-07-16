@@ -21,14 +21,16 @@ ContextMatrix splits its execution backends:
 - **TaskBackend** — card execution (`contextmatrix-agent`).
 - **ChatBackend** — interactive chat sessions (this service).
 
-The chat backend is selected and configured operator-side and coexists with
-whichever task backend is active. It talks to ContextMatrix over three channels:
+The chat backend is selected and configured operator-side and runs alongside
+the task backend. It talks to ContextMatrix over four channels:
 
 - **Chat lifecycle webhooks** (CM → chat) — HMAC-signed `POST /chat/start`,
   `POST /message`, `POST /chat/end`.
 - **Log stream** (chat → CM) — Server-Sent Events at `GET /logs?session_id=…`.
 - **Board operations** (worker → CM, over **MCP**) — the in-session model reads
   and writes cards through ContextMatrix's MCP endpoint.
+- **Image inventory** (CM → chat) — HMAC-signed `GET /images` backing
+  ContextMatrix's worker-image settings dropdown.
 
 The model and the per-session MCP key are chosen by ContextMatrix and arrive in
 the chat-start payload — the chat backend does not select models.
@@ -59,15 +61,15 @@ flowchart LR
 ```
 
 `serve` owns the container lifecycle: it hosts the lifecycle webhooks, launches
-one worker per session, applies resource caps, stages and refreshes secrets,
-fans container logs to SSE subscribers, and drains on `SIGTERM` (stop accepting
-work, shut down HTTP, kill tracked containers). `work` runs the inner loop
-inside the container: it assembles the tool registry (filesystem/shell tools
-rooted at `/workspace`, an optional skill tool, and the board's MCP tools),
-seeds history when resuming, and drives the interactive epoch loop. The loop,
-LLM client, tools, redaction, and event stream live in the standalone
-`contextmatrix-harness` module — FSM-free and free of any `contextmatrix-*`
-dependency.
+one worker per session, applies resource caps, writes per-session resume state
+and the host-side task-skills clone, fans container logs to SSE subscribers,
+and drains on `SIGTERM` (stop accepting work, shut down HTTP, kill tracked
+containers). `work` runs the inner loop inside the container: it assembles the
+tool registry (filesystem/shell tools rooted at `/workspace`, an optional skill
+tool, and the board's MCP tools), seeds history when resuming, and drives the
+interactive epoch loop. The loop, LLM client, tools, redaction, and event
+stream live in the standalone `contextmatrix-harness` module — FSM-free and
+free of any `contextmatrix-*` dependency.
 
 ## Requirements
 
@@ -97,10 +99,11 @@ dependency.
    single-language variants (`go-node`, `python`, `rust`) are also published.
    Toolchain versions are pinned and SHA256-verified.
 
-   The default (`full`) image covers Go, Node, Python, and Rust; **any other
-   ecosystem needs an image carrying that toolchain** — build one `FROM` a
-   published variant (see the agent repo's `docs/custom-images.md` pattern). A
-   per-project image override lands separately.
+   Any other ecosystem (a JVM, Ruby, .NET) **needs an image carrying that
+   toolchain** — build one `FROM` a published variant (see the agent repo's
+   [`docs/custom-images.md`](https://github.com/mhersson/contextmatrix-agent/blob/main/docs/custom-images.md)
+   pattern) and point a project at it via the chat worker image in
+   ContextMatrix's project settings.
 
    For a real deployment, publish a digest-pinned image and reference it from
    `base_image`.
@@ -117,7 +120,8 @@ dependency.
    ContextMatrix provisions git credentials and the LLM endpoint per session;
    the chat service carries no local credential config.
 
-   Every field also has a `CMX_*` override (see `serve.yaml.example`).
+   Every scalar field also has a `CMX_*` override (see
+   [Configuration](#configuration)).
    `container_contextmatrix_url` is the ContextMatrix URL as seen from inside
    containers — without it, workers point at their own localhost and fail at MCP
    connect. For a Docker bridge network this is typically
@@ -160,8 +164,9 @@ worker images (full + variants), pin the new full-image digest into
 ./redeploy.sh
 ```
 
-> **Writable runtime dirs.** Chat writes secrets under `secrets_dir` (default
-> `/var/run/cm-chat/secrets`) and per-session state under `chat_run_dir`.
+> **Writable runtime dirs.** Chat writes its task-skills clone cache under
+> `secrets_dir` (default `/var/run/cm-chat/secrets`) and per-session state under
+> `chat_run_dir`.
 > `/var/run` is root-owned and not created for a user service — either pre-create
 > `/var/run/cm-chat` and `chown` it to your user, or set these to paths under your
 > home (e.g. `~/.cm-chat/secrets`, `~/.cm-chat/runs`); the unit whitelists both
@@ -178,8 +183,10 @@ worker images (full + variants), pin the new full-image digest into
 
 Configuration is layered: defaults < config file < environment. The file
 defaults to `~/.config/contextmatrix-chat/serve.yaml` (the XDG config path).
-Every field has a `CMX_*` environment override; nested keys use a double
+Every scalar field has a `CMX_*` environment override; nested keys use a double
 underscore (`CMX_COMPACTION__THRESHOLD`, `CMX_COMPACTION__KEEP_RECENT_TURNS`).
+`image_list_filters` and `worker_extra_env` are YAML-only — the `CMX_` layer
+cannot express multi-element lists or case-sensitive map keys.
 `serve.yaml.example` documents every field, its default, and its env override.
 
 Required fields: `contextmatrix_url`, `api_key` (≥ 32 chars), `base_image`,

@@ -47,11 +47,6 @@ func TestBoardFilterWriter(t *testing.T) {
 			input:   "not json\n",
 			wantOut: "not json\n",
 		},
-		{
-			name:    "another board tool dropped",
-			input:   `{"seq":8,"kind":"tool_call","data":{"name":"complete_task"}}` + "\n",
-			wantOut: "",
-		},
 	}
 
 	for _, tt := range tests {

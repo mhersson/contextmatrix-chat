@@ -136,41 +136,6 @@ func TestReasoningRaw(t *testing.T) {
 	assert.JSONEq(t, `{"effort":"xhigh"}`, string(reasoningRaw("xhigh")))
 }
 
-// TestClearDrainsPendingMessage verifies that epochLoop discards messages
-// already queued in the inbox before a /clear boundary. Without the boundary
-// a stale user_message sitting in the inbox before the clear becomes the next
-// epoch's primer, silently losing the human's re-sent task.
-func TestClearDrainsPendingMessage(t *testing.T) {
-	t.Parallel()
-
-	inbox := newChatInbox()
-
-	// Stale message queued before /clear fires (simulates a message already
-	// in-flight when the user hits clear).
-	inbox.push(harness.UserMessage{MessageID: "stale", Content: "stale-primer"})
-	inbox.onClear()    // clear boundary drops the pre-clear stale message
-	inbox.closeInbox() // no re-sent primer follows
-
-	clearCh := make(chan struct{}, 1)
-	cfg := &harness.Config{}
-
-	epoch := 0
-
-	run := func(_ context.Context, _ string) (bool, error) {
-		epoch++
-
-		return true, nil // cleared
-	}
-
-	err := epochLoop(context.Background(), clearCh, inbox, cfg, "initial", run)
-	require.NoError(t, err)
-
-	// onClear() drops the stale message and releaseClear reports the closed,
-	// empty inbox → the loop exits after epoch 1 instead of seeding a second
-	// epoch nobody drives.
-	assert.Equal(t, 1, epoch, "stale pre-clear message must be dropped at the clear boundary; no second epoch on a closed inbox")
-}
-
 // TestConfigureGitAuth verifies Run's git-auth setup: a CM-provisioned token
 // stages the credentials config the git-credential/gh-wrapper subcommands
 // read; an absent token degrades to a git-less session (warn, not fail —

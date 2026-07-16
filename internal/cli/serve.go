@@ -197,7 +197,7 @@ func runServe(ctx context.Context, configPath string) error {
 
 	adminSrv := buildAdminServer(cfg, srv, mx, logger)
 
-	stopGauge := startRunningContainersGauge(tracker, mx, logger, 30*time.Second)
+	stopGauge := startRunningContainersGauge(tracker, mx)
 	defer stopGauge()
 
 	serverErr := make(chan error, 1)
@@ -347,10 +347,6 @@ func newServeLogger(lvl string) *slog.Logger {
 type dropAdapter struct{ mx *metrics.Metrics }
 
 func (a dropAdapter) ObserveDrop() {
-	if a.mx == nil {
-		return
-	}
-
 	a.mx.BroadcasterDropsTotal.Inc()
 }
 
@@ -385,25 +381,17 @@ func buildAdminServer(
 	}
 }
 
+// runningContainersGaugeInterval is the poll interval for the
+// running-containers gauge.
+const runningContainersGaugeInterval = 30 * time.Second
+
 // startRunningContainersGauge polls tracker.Count() on a ticker and publishes
-// it to the running-containers gauge. Returns an idempotent stop function. A
-// non-positive interval disables the poller.
-func startRunningContainersGauge(
-	tracker *executor.Tracker,
-	mx *metrics.Metrics,
-	logger *slog.Logger,
-	interval time.Duration,
-) func() {
-	if interval <= 0 {
-		logger.Warn("running-containers gauge disabled: non-positive interval", "interval", interval)
-
-		return func() {}
-	}
-
+// it to the running-containers gauge. Returns an idempotent stop function.
+func startRunningContainersGauge(tracker *executor.Tracker, mx *metrics.Metrics) func() {
 	stop := make(chan struct{})
 
 	go func() {
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(runningContainersGaugeInterval)
 		defer ticker.Stop()
 
 		for {

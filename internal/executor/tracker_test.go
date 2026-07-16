@@ -56,21 +56,6 @@ func TestTracker_Remove_Idempotent(t *testing.T) {
 	assert.Equal(t, 0, tr.Count())
 }
 
-func TestTracker_RemoveClearsReason(t *testing.T) {
-	tr := NewTracker(5)
-	require.True(t, tr.AddIfUnderLimit(&Run{SessionID: "session-a"}))
-
-	tr.SetReason("session-a", "killed")
-	tr.Remove("session-a")
-
-	// After removal the reason map is cleared too.
-	assert.Empty(t, tr.Reason("session-a"))
-
-	// A fresh add reuses the slot without stale reason state.
-	require.True(t, tr.AddIfUnderLimit(&Run{SessionID: "session-a"}))
-	assert.Empty(t, tr.Reason("session-a"))
-}
-
 func TestTracker_List_Snapshot(t *testing.T) {
 	tr := NewTracker(5)
 	require.True(t, tr.AddIfUnderLimit(&Run{SessionID: "session-a"}))

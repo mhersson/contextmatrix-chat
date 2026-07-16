@@ -8,13 +8,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReplayCache_DuplicateDetected(t *testing.T) {
-	c := NewReplayCache(time.Minute, 16)
+// withReplayClock injects a deterministic clock for tests.
+func withReplayClock(now func() time.Time) replayCacheOption {
+	return func(c *ReplayCache) {
+		if now != nil {
+			c.now = now
+		}
+	}
+}
 
-	// First sight: new, not a duplicate.
-	assert.False(t, c.CheckAndInsert("1000", "sig-a"))
-	// Second sight of the SAME (timestamp, signature) pair: duplicate.
-	assert.True(t, c.CheckAndInsert("1000", "sig-a"))
+// withReplaySweepInterval overrides the janitor tick. Tests shrink it; the
+// production default is derived from the TTL.
+func withReplaySweepInterval(d time.Duration) replayCacheOption {
+	return func(c *ReplayCache) {
+		if d > 0 {
+			c.interval = d
+		}
+	}
+}
+
+// len returns the current entry count. Test-only.
+func (c *ReplayCache) len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.entries.Len()
 }
 
 func TestReplayCache_DistinctPairsCoexist(t *testing.T) {
@@ -61,7 +79,8 @@ func TestReplayCache_ExpiredReadmitted(t *testing.T) {
 
 func TestReplayCache_JanitorSweepsExpired(t *testing.T) {
 	now := time.Unix(0, 0)
-	c := NewReplayCache(time.Minute, 16,
+	c := NewReplayCache(
+		time.Minute, 16,
 		withReplayClock(func() time.Time { return now }),
 		withReplaySweepInterval(5*time.Millisecond),
 	)

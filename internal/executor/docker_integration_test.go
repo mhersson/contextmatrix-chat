@@ -253,7 +253,7 @@ func TestIntegration_LongLivedContainerNotIdleReaped(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
-func TestIntegration_StopAllAndCleanupOrphans(t *testing.T) {
+func TestIntegration_KillAndCleanupOrphans(t *testing.T) {
 	integrationGuard(t)
 
 	exits := newExitRecorder()
@@ -273,9 +273,7 @@ func TestIntegration_StopAllAndCleanupOrphans(t *testing.T) {
 		Cmd:         []string{"sleep", "60"},
 	}))
 
-	killed, err := exec.StopAll(ctx)
-	require.NoError(t, err)
-	assert.Len(t, killed, 1)
+	require.NoError(t, exec.Kill(ctx, "stop-session-1"))
 
 	code := exits.wait(t, 30*time.Second)
 	assert.Equal(t, int64(137), code, "SIGKILL surfaces 137 via the wait path")

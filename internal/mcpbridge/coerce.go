@@ -81,18 +81,18 @@ func coerceArgs(args map[string]any, types propTypes) map[string]any {
 		}
 
 		allowed := types[k]
-		if len(allowed) == 0 || contains(allowed, "string") {
+		if len(allowed) == 0 || slices.Contains(allowed, "string") {
 			continue // unknown property, or genuinely string-typed -> leave it
 		}
 
 		switch {
-		case contains(allowed, "boolean") && (s == "true" || s == "false"):
+		case slices.Contains(allowed, "boolean") && (s == "true" || s == "false"):
 			out[k] = s == "true"
-		case contains(allowed, "integer"):
+		case slices.Contains(allowed, "integer"):
 			if n, err := strconv.Atoi(s); err == nil {
 				out[k] = n
 			}
-		case contains(allowed, "number"):
+		case slices.Contains(allowed, "number"):
 			if f, err := strconv.ParseFloat(s, 64); err == nil {
 				out[k] = f
 			}
@@ -100,8 +100,4 @@ func coerceArgs(args map[string]any, types propTypes) map[string]any {
 	}
 
 	return out
-}
-
-func contains(ss []string, target string) bool {
-	return slices.Contains(ss, target)
 }

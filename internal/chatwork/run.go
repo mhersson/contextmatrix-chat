@@ -143,7 +143,7 @@ func Run(ctx context.Context) error {
 		}
 	}
 
-	// 8. Redactor: mask the secrets from all tool output and event data. Backed
+	// 7. Redactor: mask the secrets from all tool output and event data. Backed
 	// by a watcher so a fresh per-repo git token the credential-helper/
 	// gh-wrapper subcommands fetch mid-session (see fetchedTokensPath) is
 	// picked up without restarting the worker.
@@ -151,12 +151,12 @@ func Run(ctx context.Context) error {
 
 	go redWatcher.watch(ctx)
 
-	// 9. Compaction and tool-output config from env, with documented defaults.
+	// 8. Compaction and tool-output config from env, with documented defaults.
 	threshold := envFloatDefault("CMX_COMPACTION_THRESHOLD", defaultCompactionThreshold)
 	keepRecent := envIntDefault("CMX_COMPACTION_KEEP_RECENT_TURNS", defaultKeepRecentTurns)
 	toolOutputMaxBytes := envIntDefault("CMX_TOOL_OUTPUT_MAX_BYTES", 131072)
 
-	// 10. Inbox: channel-backed; Pump reads stdin frames in a goroutine and
+	// 9. Inbox: channel-backed; Pump reads stdin frames in a goroutine and
 	// closes the inbox on EOF so harness.Run exits when the host closes stdin.
 	// clearCh carries /clear signals from the frame reader to the epoch loop.
 	in := newChatInbox()
@@ -164,13 +164,13 @@ func Run(ctx context.Context) error {
 	clearCh := make(chan struct{}, 1)
 	go in.Pump(os.Stdin, clearCh)
 
-	// 11. Emitter: board tool_call lines are filtered from the transcript
+	// 10. Emitter: board tool_call lines are filtered from the transcript
 	// (noise reduction — the MCP bridge tools, named mcp__*). All other events
 	// reach stdout for the serve-side log bridge.
 	filteredWriter := newBoardFilterWriter(os.Stdout, bridge.BoardToolNames())
 	emit := events.NewEmitter(io.Discard, filteredWriter)
 
-	// 12. Epoch loop: one harness.Run per epoch; /clear resets history and
+	// 11. Epoch loop: one harness.Run per epoch; /clear resets history and
 	// restarts with the embedded primer as the new task. Every epoch's first
 	// user turn is the primer (chatPrimer, embedded next to the environment it
 	// describes) — the host sends only /clear, never orientation text.

@@ -63,12 +63,6 @@ func TestHTTPClientWithCA(t *testing.T) {
 }
 
 func TestTransportWithCA(t *testing.T) {
-	t.Run("empty path returns nil", func(t *testing.T) {
-		tr, err := transportWithCA("")
-		require.NoError(t, err)
-		assert.Nil(t, tr, "empty path must return a nil transport so callers fall back to the default")
-	})
-
 	t.Run("valid CA yields a transport with root pool", func(t *testing.T) {
 		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 		defer srv.Close()

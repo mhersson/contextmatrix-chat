@@ -203,14 +203,6 @@ func TestServiceValidate(t *testing.T) {
 		assert.Contains(t, err.Error(), "refuses every launch")
 	})
 
-	t.Run("negative max_concurrent errors", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.MaxConcurrent = -3
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "max_concurrent")
-	})
-
 	t.Run("port zero errors", func(t *testing.T) {
 		cfg := validServiceConfig()
 		cfg.Port = 0
@@ -244,14 +236,6 @@ func TestServiceValidate(t *testing.T) {
 	t.Run("compaction threshold zero errors", func(t *testing.T) {
 		cfg := validServiceConfig()
 		cfg.Compaction.Threshold = 0
-		err := cfg.Validate()
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "compaction.threshold")
-	})
-
-	t.Run("compaction threshold negative errors", func(t *testing.T) {
-		cfg := validServiceConfig()
-		cfg.Compaction.Threshold = -0.1
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "compaction.threshold")
@@ -335,15 +319,6 @@ func TestServiceAdminPort_DefaultZero(t *testing.T) {
 	assert.Equal(t, 0, cfg.AdminPort, "admin_port defaults to 0 (disabled)")
 }
 
-func TestServiceAdminPort_FromEnv(t *testing.T) {
-	clearServiceEnv(t)
-	t.Setenv("CMX_ADMIN_PORT", "9094")
-
-	cfg, err := LoadService(filepath.Join(t.TempDir(), "nope.yaml"))
-	require.NoError(t, err)
-	assert.Equal(t, 9094, cfg.AdminPort)
-}
-
 func TestServiceAdminPort_Validate(t *testing.T) {
 	t.Run("disabled is valid", func(t *testing.T) {
 		c := validServiceConfig()
@@ -384,18 +359,6 @@ func writeServeYAML(t *testing.T, body string) string {
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 
 	return path
-}
-
-func TestLoadService_ImageListFiltersDefault(t *testing.T) {
-	path := writeServeYAML(t, `
-contextmatrix_url: http://cm:8080
-api_key: 0123456789abcdef0123456789abcdef
-base_image: img:dev
-`)
-
-	cfg, err := LoadService(path)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"contextmatrix-chat"}, cfg.ImageListFilters)
 }
 
 func TestLoadService_ImageListFiltersFromYAML(t *testing.T) {

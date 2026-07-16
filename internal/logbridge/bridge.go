@@ -38,13 +38,8 @@ type Hub struct {
 	dropObserver DropObserver
 }
 
-// NewHub creates a ready Hub.
-func NewHub() *Hub {
-	return &Hub{subs: make(map[int]*sub)}
-}
-
 // NewHubWithDropObserver creates a Hub that notifies obs each time a full
-// subscriber channel forces a drop. A nil obs behaves like NewHub.
+// subscriber channel forces a drop. A nil obs disables drop observation.
 func NewHubWithDropObserver(obs DropObserver) *Hub {
 	return &Hub{subs: make(map[int]*sub), dropObserver: obs}
 }

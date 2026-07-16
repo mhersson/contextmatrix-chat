@@ -18,8 +18,6 @@ import (
 // execs it by absolute path so it never recurses into itself.
 const realGHPath = "/usr/bin/gh"
 
-// ---- CM-provisioned per-repo credentials (protocol v0.5.2) -------------------
-
 // installGHWrapperV2 writes a `gh` shim to a fresh dir and returns that dir
 // for prepending to the bash tool's PATH. The shim delegates the per-call
 // credential fetch to selfPath's hidden "gh-wrapper" subcommand, since

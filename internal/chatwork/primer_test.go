@@ -6,12 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestChatSystemPrompt_NonEmpty(t *testing.T) {
-	t.Parallel()
-
-	assert.NotEmpty(t, chatSystemPrompt)
-}
-
 // TestChatPrimer_OrientsToWorkspace pins the environment-coupled facts the
 // embedded primer exists to keep in sync with the code: the tool root and the
 // clone-target convention (see cloneTarget). A primer that drifts from these

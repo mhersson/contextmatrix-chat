@@ -236,44 +236,13 @@ func TestRunGHWrapper_GitHubComNoGHHost(t *testing.T) {
 	assert.False(t, hasGHHost)
 }
 
-// TestRunGHWrapper_NoOriginRemote_FetchesWithEmptyHostPath verifies that with
-// no origin remote in cwd, the wrapper still attempts the fetch with an empty
-// host/path pair (CM is documented to serve the instance-wide credential for
-// that case) rather than refusing outright.
-func TestRunGHWrapper_NoOriginRemote_FetchesWithEmptyHostPath(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
-
-	dir := gitRepoWithOrigin(t, "")
-
-	var gotHost, gotPath string
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotHost = r.URL.Query().Get("host")
-		gotPath = r.URL.Query().Get("path")
-		_ = json.NewEncoder(w).Encode(map[string]string{"username": "x-access-token", "token": "ghs_instance"})
-	}))
-	defer srv.Close()
-
-	require.NoError(t, secrets.WriteEnvFile(gitCredentialsConfigPath(), map[string]string{
-		"CM_GIT_CREDENTIALS_URL":   srv.URL,
-		"CM_GIT_CREDENTIALS_TOKEN": "file-bearer-token",
-	}))
-
-	restore := stubExecFunc(t, func(string, []string, []string) error { return nil })
-	defer restore()
-
-	require.NoError(t, RunGHWrapper(context.Background(), dir, []string{"--version"}))
-	assert.Empty(t, gotHost)
-	assert.Empty(t, gotPath)
-}
-
-// TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected goes one step
-// further than TestRunGHWrapper_NoOriginRemote_FetchesWithEmptyHostPath: CM's
-// worker git-credentials endpoint now serves the instance-wide credential for
-// the empty (host, path) pair (rather than 400ing), so a no-origin directory
-// has a real happy path. This proves the wrapper completes that happy path
-// end to end — the fetched instance token actually reaches gh's exec'd
-// environment.
+// TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected verifies that
+// with no origin remote in cwd, the wrapper still fetches with an empty
+// (host, path) pair — CM's worker git-credentials endpoint serves the
+// instance-wide credential for that pair (rather than 400ing), so a no-origin
+// directory has a real happy path. This proves the wrapper completes that
+// happy path end to end — the fetched instance token actually reaches gh's
+// exec'd environment.
 func TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 

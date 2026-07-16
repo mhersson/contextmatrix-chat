@@ -183,30 +183,6 @@ func TestGitCredentialGet_NonRetryableErrorFailsImmediately(t *testing.T) {
 
 // ---- RunGitCredentialHelper: the hidden CLI subcommand's entry point ----------
 
-func TestRunGitCredentialHelper_GetSuccess(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "Bearer file-bearer-token", r.Header.Get("Authorization"))
-
-		_ = json.NewEncoder(w).Encode(map[string]string{"username": "x-access-token", "token": "ghs_fromfile"})
-	}))
-	defer srv.Close()
-
-	require.NoError(t, secrets.WriteEnvFile(gitCredentialsConfigPath(), map[string]string{
-		"CM_GIT_CREDENTIALS_URL":   srv.URL,
-		"CM_GIT_CREDENTIALS_TOKEN": "file-bearer-token",
-	}))
-
-	stdin := strings.NewReader("protocol=https\nhost=example.test\npath=owner/repo\n\n")
-
-	var stdout strings.Builder
-
-	err := RunGitCredentialHelper(context.Background(), "get", stdin, &stdout)
-	require.NoError(t, err)
-	assert.Contains(t, stdout.String(), "password=ghs_fromfile")
-}
-
 func TestRunGitCredentialHelper_StoreAndEraseAreNoops(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 

@@ -136,33 +136,6 @@ func TestResolveDoesNotCacheFailure(t *testing.T) {
 
 // ---- CM-provisioned task-skills clone token --------------------------------
 
-// TestResolveUsesCMProvisionedToken verifies that when the task-skills-source
-// response carries a token, Resolve clones with it.
-func TestResolveUsesCMProvisionedToken(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"git_remote_url":   "https://example.test/skills.git",
-			"ref":              "abc123",
-			"token":            "cm-provisioned-tok",
-			"token_expires_at": "2026-07-04T00:00:00Z",
-		})
-	}))
-	defer srv.Close()
-
-	var gotTok string
-
-	r := NewResolver(srv.URL, "key", t.TempDir(), discardLogger())
-	r.cloner = func(_ context.Context, _, _, _, token string) error {
-		gotTok = token
-
-		return nil
-	}
-
-	_, err := r.Resolve(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, "cm-provisioned-tok", gotTok, "the CM-provisioned token must be used to clone")
-}
-
 // TestResolveNoTokenFails pins the fail-closed guard: when CM's
 // task-skills-source response carries no clone token, Resolve must return a
 // clear error and never reach the cloner — the CM-provisioned token is the

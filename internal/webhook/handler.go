@@ -437,8 +437,6 @@ func (s *Server) decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// ---- write helpers ----------------------------------------------------------
-
 // writeJSON marshals v and writes it with the given status. A marshal failure
 // falls back to a fixed internal-error body so the client always gets
 // well-formed JSON.

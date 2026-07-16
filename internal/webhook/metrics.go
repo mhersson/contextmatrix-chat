@@ -9,9 +9,8 @@ import (
 )
 
 // statusRecorder wraps a ResponseWriter to capture the written HTTP status so
-// recordMetrics can observe it after the handler returns. Flush and Unwrap are
-// preserved so the SSE /logs handler keeps flushing and its write-deadline
-// control still reaches the real writer.
+// recordMetrics can observe it after the handler returns. Flush is preserved
+// so the SSE /logs handler keeps flushing through the wrapper.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -40,10 +39,6 @@ func (sr *statusRecorder) Flush() {
 	if f, ok := sr.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
-}
-
-func (sr *statusRecorder) Unwrap() http.ResponseWriter {
-	return sr.ResponseWriter
 }
 
 // recordMetrics wraps a handler and records request count + duration on the

@@ -41,27 +41,7 @@ type replayEntry struct {
 	seen time.Time
 }
 
-// replayCacheOption configures a ReplayCache.
 type replayCacheOption func(*ReplayCache)
-
-// withReplayClock injects a deterministic clock for tests.
-func withReplayClock(now func() time.Time) replayCacheOption {
-	return func(c *ReplayCache) {
-		if now != nil {
-			c.now = now
-		}
-	}
-}
-
-// withReplaySweepInterval overrides the janitor tick. Tests shrink it; the
-// production default is derived from the TTL.
-func withReplaySweepInterval(d time.Duration) replayCacheOption {
-	return func(c *ReplayCache) {
-		if d > 0 {
-			c.interval = d
-		}
-	}
-}
 
 // NewReplayCache builds a replay cache with the given TTL and capacity. A TTL
 // <= 0 disables time-based expiry (entries live until evicted by capacity); a
@@ -190,12 +170,4 @@ func (c *ReplayCache) sweep() {
 		c.entries.Remove(front)
 		delete(c.index, entry.key)
 	}
-}
-
-// len returns the current entry count. Test-only.
-func (c *ReplayCache) len() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.entries.Len()
 }
