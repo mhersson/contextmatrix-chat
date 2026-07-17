@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mhersson/contextmatrix-backendkit/logbridge"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
-	"github.com/mhersson/contextmatrix-chat/internal/logbridge"
 	"github.com/mhersson/contextmatrix-chat/internal/metrics"
 	protocol "github.com/mhersson/contextmatrix-protocol"
 )

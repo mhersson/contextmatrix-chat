@@ -15,13 +15,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mhersson/contextmatrix-backendkit/logbridge"
 	protocol "github.com/mhersson/contextmatrix-protocol"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 
 	"github.com/mhersson/contextmatrix-chat/internal/config"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
-	"github.com/mhersson/contextmatrix-chat/internal/logbridge"
 	"github.com/mhersson/contextmatrix-chat/internal/metrics"
 	"github.com/mhersson/contextmatrix-chat/internal/taskskills"
 	"github.com/mhersson/contextmatrix-chat/internal/webhook"
@@ -86,8 +86,8 @@ func runServe(ctx context.Context, configPath string) error {
 	}
 
 	tracker := executor.NewTracker(cfg.MaxConcurrent)
-	hub := logbridge.NewHubWithDropObserver(dropAdapter{mx: mx})
-	bridge := logbridge.New(hub, nil)
+	hub := logbridge.NewHub(func(e protocol.LogEntry) string { return e.SessionID }, dropAdapter{mx: mx})
+	bridge := logbridge.NewBridge(logbridge.BridgeConfig{Hub: hub})
 
 	// The redactor registry is the single source of truth for the log-bridge
 	// redaction set: every live session's CM-provisioned secrets (LLM key,
@@ -105,7 +105,9 @@ func runServe(ctx context.Context, configPath string) error {
 		Docker:     docker,
 		Tracker:    tracker,
 		PullPolicy: cfg.ImagePullPolicy,
-		OnLog:      bridge.BridgeLine,
+		OnLog: func(sessionID string, line []byte, stderr bool) {
+			bridge.BridgeLine(logbridge.Key{SessionID: sessionID}, line, stderr)
+		},
 		OnExit: func(sessionID string, code int64) {
 			teardownRunDir(sessionID, code)
 

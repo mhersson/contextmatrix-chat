@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mhersson/contextmatrix-chat/internal/logbridge"
+	"github.com/mhersson/contextmatrix-backendkit/logbridge"
 	protocol "github.com/mhersson/contextmatrix-protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestLogs_SSEStream(t *testing.T) {
-	hub := logbridge.NewHubWithDropObserver(nil)
+	hub := logbridge.NewHub(func(e protocol.LogEntry) string { return e.SessionID }, nil)
 
 	srv := NewServer(Config{
 		APIKey:            testAPIKey,
@@ -105,7 +105,7 @@ func TestLogs_SSEStream(t *testing.T) {
 func TestHandleLogs_ReturnsOnSSEShutdown(t *testing.T) {
 	t.Parallel()
 
-	srv := NewServer(Config{Hub: logbridge.NewHubWithDropObserver(nil)})
+	srv := NewServer(Config{Hub: logbridge.NewHub(func(e protocol.LogEntry) string { return e.SessionID }, nil)})
 
 	req := httptest.NewRequest(http.MethodGet, "/logs", nil) // context.Background: never cancels
 	rec := httptest.NewRecorder()                            // implements http.Flusher
@@ -127,7 +127,7 @@ func TestHandleLogs_ReturnsOnSSEShutdown(t *testing.T) {
 }
 
 func TestLogs_SessionFilter(t *testing.T) {
-	hub := logbridge.NewHubWithDropObserver(nil)
+	hub := logbridge.NewHub(func(e protocol.LogEntry) string { return e.SessionID }, nil)
 
 	srv := NewServer(Config{
 		APIKey:            testAPIKey,
