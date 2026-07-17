@@ -16,20 +16,25 @@ The interactive loop, LLM client, tool primitives, redaction, and event stream
 come from the shared `contextmatrix-harness` module (version pinned in
 `go.mod`).
 
+The HTTP transport core (HMAC auth, replay cache, drain gate, SSE `/logs`,
+health/readiness/images probes, request metrics), the log bridge, the metrics
+bundle, the stdin frame codec, and the task-skills resolver come from the shared
+`contextmatrix-backendkit` module (version pinned in `go.mod`). The
+chat-specific lifecycle handlers, the container executor, and the MCP bridge
+live here; they mount onto and inject into the shared pieces.
+
 ## Package map
 
 ```
 cmd/contextmatrix-chat/   entrypoint; runs the cobra root command
 internal/cli/             cobra commands: serve, work (hidden), git-credential + gh-wrapper (hidden container-internal shims)
 internal/config/          layered service config (defaults < file < env, CMX_*) + Validate
-internal/webhook/         HTTP surface: /chat/start, /chat/end, /message, /logs (SSE), /images, /health, /readyz; HMAC auth, replay + dedup caches, drain gate
+internal/webhook/         HTTP surface: /chat/start, /chat/end, /message lifecycle handlers + message dedup, mounted on backendkit/webhookcore.Core (HMAC auth, replay cache, drain gate, SSE /logs, /images, /health, /readyz)
 internal/executor/        Docker container lifecycle; Tracker gates concurrency; DockerExecutor implements Executor
 internal/chatwork/        container work loop: provisioned credentials, git credential helper, optional clone, tool registry, embedded primer, resume, epoch loop
 internal/mcpbridge/       dials CM's /mcp, adapts each board tool to a harness tools.Tool
-internal/taskskills/      fetches CM's task-skills pointer + shallow-clones it into the host cache bound at /run/cm-skills
-internal/logbridge/       Hub fanning container log frames to SSE subscribers
 internal/secrets/         KEY=value env-file read/write (atomic write+rename); stages the worker's provisioned git-credentials config
-internal/metrics/         Prometheus metric set on a dedicated registry
+internal/metrics/         chat's Prometheus metric set: the shared backendkit bundle (namespaced cm_chat) plus the endpoint allowlist
 docker/Dockerfile.worker  worker image; entrypoint `contextmatrix-chat work`
 ```
 
