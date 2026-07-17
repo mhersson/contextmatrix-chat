@@ -35,7 +35,7 @@ func TestConfigureGitCredentialHelperV2_RegistersGlobally(t *testing.T) {
 	helperOut, err := exec.Command("git", "config", "--global", "--get", "credential.helper").Output()
 	require.NoError(t, err)
 	assert.Equal(t, scriptPath, strings.TrimSpace(string(helperOut)),
-		"provisioned mode registers the helper UNSCOPED — applies to every host")
+		"provisioned mode registers the helper UNSCOPED - applies to every host")
 
 	useHTTPPathOut, err := exec.Command("git", "config", "--global", "--get", "credential.useHttpPath").Output()
 	require.NoError(t, err)
@@ -90,7 +90,7 @@ func TestGitCredentialGet_Success(t *testing.T) {
 	defer srv.Close()
 
 	// capability[]= and wwwauth[]= lines are part of git's real protocol but
-	// carry no protocol/host/path information — the parser must ignore them.
+	// carry no protocol/host/path information - the parser must ignore them.
 	stdin := strings.NewReader("capability[]=authtype\nprotocol=https\nhost=github.com\npath=owner/repo.git\nwwwauth[]=Basic\n\n")
 
 	var stdout strings.Builder
@@ -156,7 +156,7 @@ func TestGitCredentialGet_FailsAfterMaxRetriesOn409(t *testing.T) {
 	err := gitCredentialGetWithClient(context.Background(), stdin, &stdout, client, nil)
 	require.Error(t, err)
 	assert.Equal(t, int32(client.maxAttempts), atomic.LoadInt32(&attempts))
-	assert.Empty(t, stdout.String(), "no stdout on failure — git surfaces its own auth error")
+	assert.Empty(t, stdout.String(), "no stdout on failure - git surfaces its own auth error")
 }
 
 func TestGitCredentialGet_NonRetryableErrorFailsImmediately(t *testing.T) {
@@ -205,7 +205,7 @@ func TestRunGitCredentialHelper_StoreAndEraseAreNoops(t *testing.T) {
 		assert.Empty(t, stdout.String(), "op=%s", op)
 	}
 
-	assert.False(t, hit.Load(), "store/erase must never call CM — CM mints fresh tokens per get, nothing to persist or invalidate locally")
+	assert.False(t, hit.Load(), "store/erase must never call CM - CM mints fresh tokens per get, nothing to persist or invalidate locally")
 }
 
 func TestRunGitCredentialHelper_NoConfigFileReturnsError(t *testing.T) {
@@ -224,7 +224,7 @@ func TestRunGitCredentialHelper_NoConfigFileReturnsError(t *testing.T) {
 // that the helper never depends on inherited process environment. The model
 // invokes git through the harness bash tool, which execs with a SCRUBBED
 // environment (tools.ScrubbedEnv) stripping everything outside a small
-// allowlist (PATH, HOME, USER, LANG, LC_ALL, TMPDIR, TERM) — so
+// allowlist (PATH, HOME, USER, LANG, LC_ALL, TMPDIR, TERM) - so
 // CM_GIT_CREDENTIALS_TOKEN/URL would be invisible there if read via
 // os.Getenv. Setting them here to WRONG values and proving the fetch still
 // authenticates with the FILE's (correct) bearer is a stronger proof than

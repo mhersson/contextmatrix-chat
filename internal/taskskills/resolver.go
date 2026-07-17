@@ -1,7 +1,7 @@
 // Package taskskills resolves ContextMatrix's task-skills onto the chat serve
 // host: it fetches a {git_remote_url, ref} pointer from CM and shallow-clones it
 // once into a cache dir the executor binds read-only into worker containers. The
-// chat service carries no task-skills config — CM is the single source of truth.
+// chat service carries no task-skills config - CM is the single source of truth.
 package taskskills
 
 import (
@@ -82,7 +82,7 @@ func (r *Resolver) Resolve(ctx context.Context) (string, error) {
 	}
 
 	// The CM-provisioned clone token is the only clone credential. Absent
-	// means a CM version that predates provisioned task-skills clone tokens —
+	// means a CM version that predates provisioned task-skills clone tokens -
 	// no skills this run.
 	token := p.Token
 	if token == "" {
@@ -110,13 +110,13 @@ func (r *Resolver) Resolve(ctx context.Context) (string, error) {
 type pointer struct {
 	GitRemoteURL string `json:"git_remote_url"`
 	Ref          string `json:"ref"`
-	// Token is a CM-provisioned short-lived token for cloning GitRemoteURL —
+	// Token is a CM-provisioned short-lived token for cloning GitRemoteURL -
 	// the only clone credential. Absent means a CM version that predates
 	// provisioned task-skills clone tokens; Resolve fails and the session
 	// runs without skills.
 	Token string `json:"token,omitempty"`
 	// TokenExpiresAt is the RFC3339 expiry of Token. Decoded for wire-contract
-	// fidelity; currently unused — Resolve caches the clone for the process
+	// fidelity; currently unused - Resolve caches the clone for the process
 	// lifetime and never re-checks token freshness after a successful clone.
 	TokenExpiresAt string `json:"token_expires_at,omitempty"`
 }

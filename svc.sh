@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# svc.sh — manage the contextmatrix-chat systemd user service.
+# svc.sh - manage the contextmatrix-chat systemd user service.
 #
 # Deployment mode: systemd --user (per-user service).
 # -------------------------------------------------
@@ -21,7 +21,7 @@
 # -----------------
 # ExecStart passes --config explicitly so systemd and redeploy.sh agree
 # on one file. The path honors XDG_CONFIG_HOME and defaults to
-# ~/.config/contextmatrix-chat/serve.yaml — the same location the binary
+# ~/.config/contextmatrix-chat/serve.yaml - the same location the binary
 # would resolve on its own via os.UserConfigDir().
 #
 # Hardening.
@@ -33,19 +33,19 @@
 #   ProtectKernelModules, ProtectControlGroups, LockPersonality,
 #   MemoryDenyWriteExecute, RestrictRealtime, RestrictNamespaces,
 #   RestrictAddressFamilies, SystemCallArchitectures,
-#   SystemCallFilter — restrict syscall/fs/namespace surface.
-#   MemoryMax, TasksMax, LimitNOFILE — bound resource usage.
+#   SystemCallFilter - restrict syscall/fs/namespace surface.
+#   MemoryMax, TasksMax, LimitNOFILE - bound resource usage.
 #   Restart=on-failure, RestartSec + RestartSteps + RestartMaxDelaySec
-#   — exponential backoff with jitter to avoid thundering-herd on a
+#   - exponential backoff with jitter to avoid thundering-herd on a
 #   flaky Docker daemon.
-#   ReadWritePaths — narrow the filesystem to the runtime dirs chat
+#   ReadWritePaths - narrow the filesystem to the runtime dirs chat
 #   actually writes to: the secrets dir plus the configured chat_run_dir
 #   (read from serve.yaml). Paths are prefixed with `-` so a missing dir
 #   is tolerated rather than blocking startup.
 #
 # NOTE: the default secrets_dir is /var/run/cm-chat/secrets and chat_run_dir
 # has no default (it is required in serve.yaml). /var/run is root-owned and
-# not auto-created for a user service — either pre-create /var/run/cm-chat
+# not auto-created for a user service - either pre-create /var/run/cm-chat
 # and chown it to the operator, or set secrets_dir/chat_run_dir to paths
 # under %h (e.g. ~/.cm-chat/secrets, ~/.cm-chat/runs). Putting chat_run_dir
 # under /var/run/cm-chat/runs keeps it inside an already-whitelisted tree.

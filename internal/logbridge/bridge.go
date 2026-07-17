@@ -105,7 +105,7 @@ func New(hub *Hub, r *redact.Redactor) *Bridge {
 }
 
 // SetRedactor atomically swaps the redactor used for all lines bridged after
-// the call. Safe for concurrent use with BridgeLine — the RedactorRegistry
+// the call. Safe for concurrent use with BridgeLine - the RedactorRegistry
 // calls it on every session-secret add/remove so the masked set tracks the
 // live sessions without a restart.
 func (b *Bridge) SetRedactor(r *redact.Redactor) {
@@ -131,7 +131,7 @@ func (b *Bridge) BridgeLine(sessionID string, line []byte, isStderr bool) {
 		Data map[string]any `json:"data"`
 	}
 	if err := json.Unmarshal(line, &ev); err != nil {
-		// Unparsable (e.g. panic stack trace) — surface as stderr.
+		// Unparsable (e.g. panic stack trace) - surface as stderr.
 		b.hub.Publish(protocol.LogEntry{
 			Timestamp: time.Now(),
 			SessionID: sessionID,
@@ -161,7 +161,7 @@ func (b *Bridge) mapEvent(kind string, data map[string]any) (entry protocol.LogE
 	case "model_response":
 		content := strField(data, "content")
 		if strings.TrimSpace(content) == "" {
-			// Pure tool-call turn — no text to show; skip the empty frame.
+			// Pure tool-call turn - no text to show; skip the empty frame.
 			return protocol.LogEntry{}, true
 		}
 
@@ -205,7 +205,7 @@ func (b *Bridge) mapEvent(kind string, data map[string]any) (entry protocol.LogE
 
 	case "state_change":
 		if strField(data, "state") == "awaiting_human" {
-			// Normal idle between chat turns — not a transcript entry.
+			// Normal idle between chat turns - not a transcript entry.
 			return protocol.LogEntry{}, true
 		}
 
@@ -226,7 +226,7 @@ func (b *Bridge) mapEvent(kind string, data map[string]any) (entry protocol.LogE
 			Content: strField(data, "error"),
 		}, false
 
-	// Transcript-only kinds — not bridged.
+	// Transcript-only kinds - not bridged.
 	case "model_request", "tool_result", "tool_repair", "user_input", "verification":
 		return protocol.LogEntry{}, true
 

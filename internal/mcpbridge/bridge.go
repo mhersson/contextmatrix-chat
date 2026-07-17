@@ -63,7 +63,7 @@ func Connect(ctx context.Context, mcpURL, apiKey string, base http.RoundTripper)
 
 	// dial builds a fresh session with the same auth/CA posture. DisableStandaloneSSE:
 	// chat registers no server->client handlers (NewClient gets nil options), so the
-	// standalone GET stream carries nothing — while its SDK-side retry counter only
+	// standalone GET stream carries nothing - while its SDK-side retry counter only
 	// resets on event-ID progress, meaning any handful of idle closes over the
 	// session lifetime (proxy idle timeouts, CM redeploys, blips) would otherwise
 	// deterministically poison the whole long-lived session.
@@ -235,7 +235,7 @@ func allText(result *mcp.CallToolResult) string {
 
 // imageURLs extracts inline ImageContent blocks from an MCP tool result as
 // OpenAI image_url data URLs, best-effort: blobs with empty data or no MIME
-// type are skipped. Generic across every board tool — no get_card special-casing.
+// type are skipped. Generic across every board tool - no get_card special-casing.
 func imageURLs(result *mcp.CallToolResult) []llm.ImageURL {
 	var out []llm.ImageURL
 

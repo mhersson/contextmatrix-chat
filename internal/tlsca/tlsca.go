@@ -33,8 +33,8 @@ func HTTPClientWithCA(path string) (*http.Client, error) {
 // transportWithCA returns an *http.Transport whose TLS config trusts the system
 // pool plus the PEM certificate(s) at path. It is cloned from
 // http.DefaultTransport so proxy (ProxyFromEnvironment), timeouts, and
-// connection pooling are preserved — a TLS-inspecting deployment usually implies
-// an explicit HTTP(S) proxy too — overriding only the trust store. An empty path
+// connection pooling are preserved - a TLS-inspecting deployment usually implies
+// an explicit HTTP(S) proxy too - overriding only the trust store. An empty path
 // returns (nil, nil) so callers fall back to http.DefaultTransport.
 func transportWithCA(path string) (*http.Transport, error) {
 	if path == "" {

@@ -148,7 +148,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	// Git credentials: the CM-provisioned per-session bearer (protocol v0.5.2,
 	// ChatStartPayload.GitCredentialsToken) lets the worker fetch fresh,
 	// per-repo git credentials on demand from CM's
-	// GET /api/worker/git-credentials?host=&path= endpoint — the only design
+	// GET /api/worker/git-credentials?host=&path= endpoint - the only design
 	// that works for a cross-project, long-lived chat session, since a single
 	// upfront token cannot cover a repo not yet known at chat-start. A
 	// provisioned session is multi-host by construction: CM resolves the
@@ -161,7 +161,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	// Same documented tradeoff as CM_MCP_API_KEY/LLM_API_KEY above: the
 	// bearer rides plain container env. Register it with the host-side
-	// log-bridge redactor the same way as the provisioned LLM key — but
+	// log-bridge redactor the same way as the provisioned LLM key - but
 	// note this covers ONLY the bearer. The actual git tokens the worker
 	// mints per operation from CM never transit the chat service (worker
 	// -> CM directly), so this registry cannot know them at all; in-worker
@@ -181,7 +181,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	// the three values are delivered via the same per-session env mechanism as
 	// CM_CHAT_REPO_URL and CM_MCP_API_KEY above. All three are written even when
 	// a field is its zero value (e.g. an empty base_url meaning "the type's
-	// canonical default") — that is a real provisioned answer, not an omission.
+	// canonical default") - that is a real provisioned answer, not an omission.
 	//
 	// Same documented tradeoff as CM_MCP_API_KEY: LLM_API_KEY rides plain
 	// container env (visible to docker inspect and /proc/<pid>/environ) because
@@ -198,7 +198,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	// key BEFORE the container starts, so a key that surfaces on worker stderr
 	// or an unparsable stdout line (e.g. a panic stack trace) is masked before
 	// it reaches the /logs stream. The in-worker redactor covers tool output
-	// and events but never sees worker stderr — that surface is bridged
+	// and events but never sees worker stderr - that surface is bridged
 	// host-side and this is its only masking. Unregistered on container exit
 	// (DropSession) so the set stays bounded; an empty key is ignored.
 	if s.sessionSecrets != nil {
@@ -207,7 +207,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve task-skills from CM (the single source of truth): fetch the git
 	// pointer, clone once, and bind the clone read-only at skillsMountPath. A
-	// failure or empty pointer means this session runs without the Skill tool —
+	// failure or empty pointer means this session runs without the Skill tool -
 	// never fatal to the chat start.
 	var skillsHostDir string
 
@@ -249,7 +249,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	// Warn when worker_extra_env sets an LLM_* key, since that operator value
 	// silently overrides the session's CM-provisioned credential. Log the env
-	// NAME(s) only — never the value — and once per process, so a long-lived
+	// NAME(s) only - never the value - and once per process, so a long-lived
 	// server with a static worker_extra_env does not spam its log every session.
 	if names := llmExtraEnvKeys(s.workerExtraEnv); len(names) > 0 {
 		s.llmOverrideWarnOnce.Do(func() {
@@ -258,7 +258,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// The overriding operator key — not the provisioned one — is what the
+	// The overriding operator key - not the provisioned one - is what the
 	// worker actually sends on every inference call, so it is what can surface
 	// on worker stderr. Register it host-side like the provisioned secrets;
 	// AddSessionKey ignores the empty (no-override) case.
@@ -278,7 +278,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Per-project worker image override (protocol
-	// ChatStartPayload.WorkerImage — CM derives it from the board's
+	// ChatStartPayload.WorkerImage - CM derives it from the board's
 	// remote_execution.worker_image). When present, it replaces the service-wide
 	// base image so a project can run a toolchain-specific worker; empty falls
 	// back to the configured base image exactly as before. A per-project image
@@ -379,7 +379,7 @@ func writeResumeJSONL(path string, turns []protocol.ChatResumeTurn) error {
 // handleChatEnd closes the stdin of the tracked chat container, signalling EOF
 // to the work process so it exits naturally. It is idempotent: an untracked
 // session (already ended or never started) returns 200. A stale or already-
-// closed stdin is not a hard error — we log it and return 202 regardless.
+// closed stdin is not a hard error - we log it and return 202 regardless.
 func (s *Server) handleChatEnd(w http.ResponseWriter, r *http.Request) {
 	var p protocol.ChatEndPayload
 	if !s.decode(w, r, &p) {
@@ -408,7 +408,7 @@ func (s *Server) handleChatEnd(w http.ResponseWriter, r *http.Request) {
 	// Closing stdin alone does not end the session: the container runs with
 	// StdinOnce=false, so closing the attach connection does not EOF the worker.
 	// Stop the container explicitly (mirrors the agent backend) so
-	// waitAndCleanup removes the container and clears the tracker entry —
+	// waitAndCleanup removes the container and clears the tracker entry -
 	// otherwise a later /chat/start for the same session sees it still active and
 	// returns 409. Detached ctx: the request ctx may be cancelled once we return,
 	// but the stop must run to completion.

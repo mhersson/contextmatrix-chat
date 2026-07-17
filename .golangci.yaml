@@ -1,3 +1,5 @@
+# Canonical copy: contextmatrix-agent/.golangci.yaml - sync by full-file copy
+# plus repo-name word swap.
 version: "2"
 linters:
   default: none
@@ -43,7 +45,7 @@ linters:
     - linters: [gosec]
       text: "G104"
     # G301/G302/G306: files written into chat workspaces are repo source files,
-    # not secrets — git checkouts use 0644/0755 and the worked code must keep
+    # not secrets - git checkouts use 0644/0755 and the worked code must keep
     # standard modes. Secrets never go through these write paths.
     - linters: [gosec]
       text: "G301|G302|G306"
@@ -68,6 +70,9 @@ linters:
 issues:
   max-issues-per-linter: 50
   max-same-issues: 8
+  # No auto-fix: `golangci-lint run` must never rewrite the working tree.
+  # Auto-applied edits in unrelated files pollute diffs for humans and derail
+  # agent runs (dirty-tree confusion mid-task).
   fix: false
 formatters:
   enable:

@@ -1,4 +1,6 @@
 # Dependabot config for contextmatrix-chat.
+# Canonical copy: contextmatrix-agent/.github/dependabot.yml - sync by
+# full-file copy plus repo-name swap.
 # Tracks three ecosystems weekly:
 #   - gomod          : Go module dependencies at the repo root.
 #   - docker         : worker Dockerfile base image (+ ARG-pinned tools).

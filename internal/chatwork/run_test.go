@@ -26,7 +26,7 @@ func TestDialectFromType(t *testing.T) {
 // TestClearSelfSeedsNextEpochPrimer verifies that a /clear during active work
 // establishes an epoch boundary: a stale in-flight message queued before the
 // clear is dropped, the next epoch's task is the embedded primer (the worker
-// re-orients itself — nothing is re-sent from the host), and a user message
+// re-orients itself - nothing is re-sent from the host), and a user message
 // that arrives after the clear survives for the new epoch's inbox.
 func TestClearSelfSeedsNextEpochPrimer(t *testing.T) {
 	t.Parallel()
@@ -43,7 +43,7 @@ func TestClearSelfSeedsNextEpochPrimer(t *testing.T) {
 
 	// Pump processes every frame in order: the clear boundary is set (stale
 	// dropped) and the follow-up is queued behind the hold before epochLoop
-	// runs — deterministic, no sleep.
+	// runs - deterministic, no sleep.
 	inbox.Pump(&buf, clearCh)
 
 	cfg := &harness.Config{History: []llm.Message{{Role: "user", Content: "old"}}}
@@ -138,7 +138,7 @@ func TestReasoningRaw(t *testing.T) {
 
 // TestConfigureGitAuth verifies Run's git-auth setup: a CM-provisioned token
 // stages the credentials config the git-credential/gh-wrapper subcommands
-// read; an absent token degrades to a git-less session (warn, not fail —
+// read; an absent token degrades to a git-less session (warn, not fail -
 // unlike inference, a git-less chat is still usable).
 func TestConfigureGitAuth(t *testing.T) {
 	t.Run("degrades to git-less session without a token", func(t *testing.T) {

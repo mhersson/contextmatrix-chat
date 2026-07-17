@@ -83,7 +83,7 @@ func TestRedactorRegistry_EmptyKeyIgnored(t *testing.T) {
 // BOTH a CM-provisioned LLM key and a CM-provisioned git-credentials bearer
 // (two independent multi-user-mode features), registered under the SAME
 // session ID via two separate AddSessionKey calls. The second call must not
-// silently displace the first — both must stay masked until the session ends,
+// silently displace the first - both must stay masked until the session ends,
 // and RemoveSessionKey(sessionID) must forget both together.
 func TestRedactorRegistry_MultipleSessionKeysBothMasked(t *testing.T) {
 	t.Parallel()

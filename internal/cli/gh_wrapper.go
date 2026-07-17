@@ -9,7 +9,7 @@ import (
 // chatwork.installGHWrapperV2 writes execs
 // `contextmatrix-chat gh-wrapper <gh's own args>`. It fetches a fresh per-repo
 // git credential from CM and execs the real gh binary, replacing this
-// process. Never invoked by a human. DisableFlagParsing is required — args
+// process. Never invoked by a human. DisableFlagParsing is required - args
 // are gh's own flags (e.g. -R, --repo), not this subcommand's.
 func newGHWrapperCmd() *cobra.Command {
 	return &cobra.Command{

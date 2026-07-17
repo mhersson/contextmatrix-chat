@@ -91,7 +91,7 @@ func runServe(ctx context.Context, configPath string) error {
 
 	// The redactor registry is the single source of truth for the log-bridge
 	// redaction set: every live session's CM-provisioned secrets (LLM key,
-	// git-credentials bearer — registered at chat-start, forgotten on
+	// git-credentials bearer - registered at chat-start, forgotten on
 	// container exit). Worker stderr and unparsable stdout are bridged to
 	// /logs with only this redactor applied, so every live secret must be in
 	// the union.
@@ -118,7 +118,7 @@ func runServe(ctx context.Context, configPath string) error {
 	})
 
 	// Force-remove any chat-labeled containers left by a previous process before
-	// we start serving — a labeled container in a fresh process is an orphan.
+	// we start serving - a labeled container in a fresh process is an orphan.
 	if err := exec.CleanupOrphans(ctx); err != nil {
 		logger.Warn("orphan cleanup failed", "error", err)
 	}
@@ -134,7 +134,7 @@ func runServe(ctx context.Context, configPath string) error {
 	}
 
 	// Pre-retirement deployments staged local credentials at
-	// <secrets_dir>/shared/env — in PAT mode a long-lived token. The refresher
+	// <secrets_dir>/shared/env - in PAT mode a long-lived token. The refresher
 	// that owned that file is gone; remove the residue best-effort so it does
 	// not linger on a persistent secrets_dir.
 	_ = os.RemoveAll(filepath.Join(cfg.SecretsDir, "shared"))
@@ -142,7 +142,7 @@ func runServe(ctx context.Context, configPath string) error {
 	// Task-skills resolver: fetches the {git_remote_url, ref} pointer from CM and
 	// shallow-clones it once into a host cache dir that handleChatStart binds
 	// read-only into each worker at /run/cm-skills. CM is the single source of
-	// truth — chat carries no task-skills config. Uses cfg.ContextMatrixURL (the
+	// truth - chat carries no task-skills config. Uses cfg.ContextMatrixURL (the
 	// host-reachable CM URL), not the container URL.
 	skillsCache := filepath.Join(cfg.SecretsDir, "task-skills-cache")
 	skillsResolver := taskskills.NewResolver(cfg.ContextMatrixURL, cfg.APIKey, skillsCache, logger)
@@ -239,7 +239,7 @@ func runServe(ctx context.Context, configPath string) error {
 }
 
 // gracefulShutdown drains the HTTP listener and kills every tracked container.
-// No status callback is made — the chat backend has no ContextMatrix reporter.
+// No status callback is made - the chat backend has no ContextMatrix reporter.
 //  1. flip draining so /readyz returns 503 and mutating routes refuse new work
 //  2. Shutdown the HTTP server with a bounded budget
 //  3. Shutdown the admin server if enabled

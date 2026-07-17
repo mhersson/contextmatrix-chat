@@ -138,7 +138,7 @@ func TestResolveDoesNotCacheFailure(t *testing.T) {
 
 // TestResolveNoTokenFails pins the fail-closed guard: when CM's
 // task-skills-source response carries no clone token, Resolve must return a
-// clear error and never reach the cloner — the CM-provisioned token is the
+// clear error and never reach the cloner - the CM-provisioned token is the
 // only clone credential.
 func TestResolveNoTokenFails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

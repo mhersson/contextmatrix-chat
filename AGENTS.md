@@ -1,4 +1,4 @@
-# AGENTS.md — ContextMatrix Chat
+# AGENTS.md - ContextMatrix Chat
 
 Contributor guide for `contextmatrix-chat`, the chat backend for ContextMatrix.
 For what the service is, how it fits ContextMatrix, the runtime data flow, and
@@ -7,9 +7,9 @@ conventions, and discipline that keep contributions correct.
 
 Two runtime roles in one binary:
 
-- **`serve`** — host service: lifecycle webhooks, one worker container per
+- **`serve`** - host service: lifecycle webhooks, one worker container per
   session, task-skills clone staging, log SSE, graceful drain.
-- **`work`** — hidden container entrypoint: assembles the tool registry,
+- **`work`** - hidden container entrypoint: assembles the tool registry,
   optionally clones the project repo, seeds resume history, runs the epoch loop.
 
 The interactive loop, LLM client, tool primitives, redaction, and event stream
@@ -42,7 +42,7 @@ only its own `events` / `llm` / `tools` / `redact` / `harness` packages and
 takes **no** `contextmatrix-*` dependency. Chat-specific policy (webhooks,
 container lifecycle, MCP bridging, transcript filtering) lives here in
 `internal/` and is injected into the harness through the seams it already
-exposes — the `Inbox`, the tool registry, the event emitter, the redactor. If a
+exposes - the `Inbox`, the tool registry, the event emitter, the redactor. If a
 change tempts you to push chat policy down into the harness, push the dependency
 the other way instead: satisfy a harness interface from a consumer here.
 
@@ -50,7 +50,7 @@ the other way instead: satisfy a harness interface from a consumer here.
 
 ### Go
 
-- Everything lives under `internal/` — nothing exported outside the module.
+- Everything lives under `internal/` - nothing exported outside the module.
 - Interfaces belong in the package that uses them: the webhook server consumes
   the `executor.Executor` interface that `DockerExecutor` satisfies.
 - Constructors return concrete types; consumers take interfaces.
@@ -62,7 +62,7 @@ the other way instead: satisfy a harness interface from a consumer here.
   paths; container-side events go through the harness event stream.
 - Tests sit next to code (`handler.go` → `handler_test.go`), table-driven, with
   `t.Helper()` in helpers and `t.TempDir()` for scratch dirs.
-- Spell names out: "chat", "agent" — no abbreviations in config keys,
+- Spell names out: "chat", "agent" - no abbreviations in config keys,
   code, comments, or commit messages.
 
 ### Credentials
@@ -83,19 +83,22 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
 
 ### Documentation
 
-Document the CURRENT STATE: what exists NOW and WHY, not how we got here.
+- Document the CURRENT STATE: what exists NOW and WHY, not how we got here.
+- Do not write doc comments on simple functions - if what it does is
+  straightforward, the code itself is the documentation.
+- Never use em-dashes; use hyphens (-).
 
 ## Key domain rules
 
 1. **One container per session.** serve refuses a second container for a live
    session (409) and enforces `max_concurrent` (429) before touching Docker.
-2. **serve owns the container lifecycle** — launch, resource caps, orphan
+2. **serve owns the container lifecycle** - launch, resource caps, orphan
    cleanup on startup, and graceful drain (flip draining → HTTP shutdown →
    kill tracked containers). It makes no status callback to CM.
 3. **work runs the interactive epoch loop.** Each epoch is one `harness.Run`,
    opened by the embedded orientation primer (`chatwork/primer.md`) as its
    first user turn. A `/clear` frame ends the epoch, resets history to nil,
-   and re-orients the next epoch from the same primer — the host sends only
+   and re-orients the next epoch from the same primer - the host sends only
    `/clear`. Resume seeds history from `resume.jsonl` when `CM_CHAT_RESUME=1`.
 4. **Compaction is on** (harness): older turns drop at `compaction.threshold`
    (default 0.85) of the model's context window; `keep_recent_turns` (default 6)
@@ -107,7 +110,7 @@ Document the CURRENT STATE: what exists NOW and WHY, not how we got here.
    `<container_contextmatrix_url>/mcp`, lists board tools, and offers them to
    the model alongside the filesystem/shell tools rooted at `/workspace`.
 7. **Git credentials are fetched per-repo, per-operation from CM**
-   (`CM_GIT_CREDENTIALS_TOKEN`, always provisioned — chat/start fails closed
+   (`CM_GIT_CREDENTIALS_TOKEN`, always provisioned - chat/start fails closed
    without it). At boot, `Run` stages the credentials URL/token into a 0600
    scratch file and registers the global v2 git credential helper and `gh`
    wrapper; both read only that file, never `os.Getenv` (the model's git/`gh`
@@ -128,13 +131,13 @@ Document the CURRENT STATE: what exists NOW and WHY, not how we got here.
     no separators, no `..`) so per-session run-dir cleanup cannot escape its
     base.
 
-Not part of chat — do not document or implement these as if they were:
+Not part of chat - do not document or implement these as if they were:
 orchestrator phases, review specialists, model selection / registry / blacklist,
 per-card budget ceilings, HITL gates, git autosquash / force-push.
 
 ## Verification & commit discipline
 
-Run before every commit — all must be clean:
+Run before every commit - all must be clean:
 
 ```bash
 go fix ./...   # modernize stdlib idioms
@@ -151,7 +154,7 @@ daemon are gated by `CMX_TEST_DOCKER` and skip when it is unset.
 
 Commit messages: conventional (`type(scope): description`), short and
 imperative, with bullet points in the body for the what/why. NEVER reference a
-plan phase, slice ID, task number, or private ContextMatrix card ID — they are
+plan phase, slice ID, task number, or private ContextMatrix card ID - they are
 meaningless to outside readers.
 
 ```
