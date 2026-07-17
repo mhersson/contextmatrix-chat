@@ -5,13 +5,12 @@
 // so Metrics is a direct alias of the shared bundle.
 //
 // Label cardinality is bounded on purpose: no card_id / project labels;
-// endpoint labels pass through NormalizeEndpoint; container outcome is a fixed
-// enum; broadcaster drops are unlabeled.
+// endpoint labels pass through the bundle's NormalizeEndpoint against the
+// per-backend allowlist; container outcome is a fixed enum; broadcaster drops
+// are unlabeled.
 package metrics
 
 import (
-	"slices"
-
 	backendkitmetrics "github.com/mhersson/contextmatrix-backendkit/metrics"
 )
 
@@ -29,9 +28,10 @@ const (
 )
 
 // endpointAllowlist enumerates the request paths the chat service serves. Any
-// inbound path outside this set collapses to "other" so a stray probe cannot
-// inflate metric label cardinality. Keep this in lockstep with
-// webhook.Server.Routes() (the main mux) plus the admin /metrics path.
+// inbound path outside this set collapses to "other" via the bundle's
+// NormalizeEndpoint so a stray probe cannot inflate metric label cardinality.
+// Keep this in lockstep with webhook.Server.Routes() (the main mux) plus the
+// admin /metrics path.
 var endpointAllowlist = []string{
 	"/chat/start",
 	"/chat/end",
@@ -46,14 +46,4 @@ var endpointAllowlist = []string{
 // registry and returns the bundle.
 func New() *Metrics {
 	return backendkitmetrics.New("cm_chat", endpointAllowlist)
-}
-
-// NormalizeEndpoint collapses an arbitrary request path to one of the chat
-// service's well-known endpoints, or "other" for unknown paths.
-func NormalizeEndpoint(path string) string {
-	if slices.Contains(endpointAllowlist, path) {
-		return path
-	}
-
-	return "other"
 }

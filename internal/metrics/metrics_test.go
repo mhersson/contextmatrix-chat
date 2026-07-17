@@ -85,11 +85,15 @@ func TestNew_MultipleCallsUseIsolatedRegistries(t *testing.T) {
 }
 
 func TestNormalizeEndpoint(t *testing.T) {
+	// The behaviour lives on the shared bundle's method; this pins that chat's
+	// New() wires the correct allowlist through it.
+	m := metrics.New()
+
 	allowed := []string{
 		"/chat/start", "/chat/end", "/message", "/logs", "/health", "/readyz", "/metrics",
 	}
 	for _, p := range allowed {
-		assert.Equal(t, p, metrics.NormalizeEndpoint(p), "allowlisted path %q must round-trip", p)
+		assert.Equal(t, p, m.NormalizeEndpoint(p), "allowlisted path %q must round-trip", p)
 	}
 
 	// Agent task routes that are NOT in the chat allowlist must collapse.
@@ -98,6 +102,6 @@ func TestNormalizeEndpoint(t *testing.T) {
 		"/trigger", "/kill", "/stop-all", "/promote", "/end-session", "/containers",
 	}
 	for _, p := range unknown {
-		assert.Equal(t, "other", metrics.NormalizeEndpoint(p), "unknown path %q must collapse", p)
+		assert.Equal(t, "other", m.NormalizeEndpoint(p), "unknown path %q must collapse", p)
 	}
 }

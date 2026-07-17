@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mhersson/contextmatrix-backendkit/frames"
+	"github.com/mhersson/contextmatrix-backendkit/webhookcore"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	protocol "github.com/mhersson/contextmatrix-protocol"
 )
@@ -36,7 +37,7 @@ const caCertMountPath = "/run/cm-ca/ca.crt"
 // orientation text; the decoder tolerates unknown keys from stale senders.
 func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	var p protocol.ChatStartPayload
-	if !s.decode(w, r, &p) {
+	if !webhookcore.Decode(w, r, &p) {
 		return
 	}
 
@@ -47,7 +48,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		p.SessionID != filepath.Base(p.SessionID) ||
 		strings.ContainsAny(p.SessionID, `/\`) ||
 		strings.Contains(p.SessionID, "..") {
-		writeError(w, http.StatusBadRequest, protocol.CodeInvalidField, "invalid session_id")
+		webhookcore.WriteError(w, http.StatusBadRequest, protocol.CodeInvalidField, "invalid session_id")
 
 		return
 	}
@@ -56,14 +57,14 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	if s.tracker.Count() >= s.maxConcurrent {
 		s.logger.Warn("chat/start: capacity limit reached",
 			"session_id", p.SessionID, "limit", s.maxConcurrent)
-		writeError(w, http.StatusTooManyRequests, protocol.CodeLimitReached, "concurrency limit reached")
+		webhookcore.WriteError(w, http.StatusTooManyRequests, protocol.CodeLimitReached, "concurrency limit reached")
 
 		return
 	}
 
 	// Conflict check: exactly one container per session.
 	if _, exists := s.tracker.Get(p.SessionID); exists {
-		writeError(w, http.StatusConflict, protocol.CodeConflict, "session already active")
+		webhookcore.WriteError(w, http.StatusConflict, protocol.CodeConflict, "session already active")
 
 		return
 	}
@@ -75,7 +76,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	// can never clone or push.
 	if p.GitCredentialsToken == "" {
 		s.logger.Warn("chat/start: no git credential source", "session_id", p.SessionID)
-		writeError(w, http.StatusInternalServerError, protocol.CodeInternal,
+		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal,
 			"CM did not provision git credentials")
 
 		return
@@ -88,7 +89,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	// fails opaquely on the first turn. Mirrors the git credentials guard above.
 	if p.LLMEndpoint == nil {
 		s.logger.Warn("chat/start: no llm credential source", "session_id", p.SessionID)
-		writeError(w, http.StatusInternalServerError, protocol.CodeInternal,
+		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal,
 			"CM did not provision an llm endpoint")
 
 		return
@@ -99,7 +100,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	runDir := filepath.Join(s.chatRunDirBase, p.SessionID)
 	if err := os.MkdirAll(runDir, 0o750); err != nil {
 		s.logger.Error("chat/start: mkdir failed", "session_id", p.SessionID, "error", err)
-		writeError(w, http.StatusInternalServerError, protocol.CodeInternal, "internal error")
+		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal, "internal error")
 
 		return
 	}
@@ -110,7 +111,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		if err := writeResumeJSONL(filepath.Join(runDir, "resume.jsonl"), p.Resume.Turns); err != nil {
 			s.logger.Error("chat/start: write resume.jsonl failed",
 				"session_id", p.SessionID, "error", err)
-			writeError(w, http.StatusInternalServerError, protocol.CodeInternal, "internal error")
+			webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal, "internal error")
 
 			return
 		}
@@ -311,13 +312,13 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if errors.Is(err, executor.ErrCapacity) {
-			writeError(w, http.StatusTooManyRequests, protocol.CodeLimitReached, "concurrency limit reached")
+			webhookcore.WriteError(w, http.StatusTooManyRequests, protocol.CodeLimitReached, "concurrency limit reached")
 
 			return
 		}
 
 		s.logger.Error("chat/start: launch failed", "session_id", p.SessionID, "error", err)
-		writeError(w, http.StatusBadGateway, protocol.CodeUpstreamFailure, "launch failed")
+		webhookcore.WriteError(w, http.StatusBadGateway, protocol.CodeUpstreamFailure, "launch failed")
 
 		return
 	}
@@ -330,7 +331,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("chat/start: session started",
 		"session_id", p.SessionID, "container_id", containerID)
 
-	writeJSON(w, http.StatusAccepted, protocol.ChatStartResponse{
+	webhookcore.WriteJSON(w, http.StatusAccepted, protocol.ChatStartResponse{
 		OK:          true,
 		ContainerID: containerID,
 	})
@@ -382,14 +383,14 @@ func writeResumeJSONL(path string, turns []protocol.ChatResumeTurn) error {
 // closed stdin is not a hard error - we log it and return 202 regardless.
 func (s *Server) handleChatEnd(w http.ResponseWriter, r *http.Request) {
 	var p protocol.ChatEndPayload
-	if !s.decode(w, r, &p) {
+	if !webhookcore.Decode(w, r, &p) {
 		return
 	}
 
 	run, ok := s.tracker.Get(p.SessionID)
 	if !ok {
 		// Idempotent: session not found means it was already ended or never started.
-		writeJSON(w, http.StatusOK, protocol.SuccessResponse{OK: true})
+		webhookcore.WriteJSON(w, http.StatusOK, protocol.SuccessResponse{OK: true})
 
 		return
 	}
@@ -422,7 +423,7 @@ func (s *Server) handleChatEnd(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("chat/end: session ended", "session_id", p.SessionID)
 
-	writeJSON(w, http.StatusAccepted, protocol.SuccessResponse{OK: true})
+	webhookcore.WriteJSON(w, http.StatusAccepted, protocol.SuccessResponse{OK: true})
 }
 
 // handleMessage delivers a user message frame to the tracked chat container's
@@ -435,13 +436,13 @@ func (s *Server) handleChatEnd(w http.ResponseWriter, r *http.Request) {
 // catch them) cannot both pass the check and deliver the frame twice.
 func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	var p protocol.MessagePayload
-	if !s.decode(w, r, &p) {
+	if !webhookcore.Decode(w, r, &p) {
 		return
 	}
 
 	run, ok := s.tracker.Get(p.SessionID)
 	if !ok {
-		writeError(w, http.StatusNotFound, protocol.CodeNotFound, "no tracked container")
+		webhookcore.WriteError(w, http.StatusNotFound, protocol.CodeNotFound, "no tracked container")
 
 		return
 	}
@@ -466,7 +467,7 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 	if s.dedup.CheckAndRecord(p.SessionID, p.MessageID) {
 		mu.Unlock()
 
-		writeJSON(w, http.StatusOK, protocol.SuccessResponse{
+		webhookcore.WriteJSON(w, http.StatusOK, protocol.SuccessResponse{
 			OK:        true,
 			Message:   "duplicate message acknowledged",
 			MessageID: p.MessageID,
@@ -488,21 +489,21 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, frames.ErrFrameTooLarge) {
 			s.logger.Warn("message rejected: frame too large",
 				"session_id", p.SessionID, "message_id", p.MessageID)
-			writeError(w, http.StatusRequestEntityTooLarge, protocol.CodeTooLarge, "message content too large")
+			webhookcore.WriteError(w, http.StatusRequestEntityTooLarge, protocol.CodeTooLarge, "message content too large")
 
 			return
 		}
 
 		s.logger.Error("message stdin write failed",
 			"session_id", p.SessionID, "error", err)
-		writeError(w, http.StatusInternalServerError, protocol.CodeInternal, "write failed")
+		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal, "write failed")
 
 		return
 	}
 
 	mu.Unlock()
 
-	writeJSON(w, http.StatusAccepted, protocol.SuccessResponse{
+	webhookcore.WriteJSON(w, http.StatusAccepted, protocol.SuccessResponse{
 		OK:        true,
 		MessageID: p.MessageID,
 	})

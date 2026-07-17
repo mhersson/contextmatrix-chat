@@ -1,25 +1,24 @@
+// Package webhook is the chat backend's HTTP surface: the HMAC-verified
+// lifecycle endpoints (chat/start, chat/end, message), the SSE /logs stream,
+// and the health/readiness probes ContextMatrix drives the backend through.
+// The embedded *webhookcore.Core supplies the shared transport surface (HMAC
+// auth, the drain gate, request metrics, the SSE /logs stream, and the
+// health/readiness/images probes); this package adds the chat-specific
+// lifecycle handlers. It implements the contextmatrix-protocol wire contract.
 package webhook
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/mhersson/contextmatrix-backendkit/logbridge"
+	"github.com/mhersson/contextmatrix-backendkit/webhookcore"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	"github.com/mhersson/contextmatrix-chat/internal/metrics"
-	protocol "github.com/mhersson/contextmatrix-protocol"
-)
-
-const (
-	// maxRequestBodyBytes caps the body the auth middleware reads before HMAC
-	// verification. A larger body is a misbehaving or hostile client.
-	maxRequestBodyBytes = 1 << 20 // 1 MiB
 )
 
 // SkillsResolver fetches the task-skills pointer from CM, clones it once, and
@@ -27,12 +26,6 @@ const (
 // webhook server calls it on each chat/start. *taskskills.Resolver satisfies it.
 type SkillsResolver interface {
 	Resolve(ctx context.Context) (string, error)
-}
-
-// ImageLister lists the tagged images present in the node's local image
-// store. *executor.DockerExecutor satisfies it; tests supply a fake.
-type ImageLister interface {
-	ListImages(ctx context.Context) ([]executor.ImageSummary, error)
 }
 
 // SessionSecretRegistry records and forgets a session's CM-provisioned secrets
@@ -115,7 +108,7 @@ type Config struct {
 
 	// Images lists the node's tagged images for GET /images. Nil disables the
 	// endpoint (500 internal).
-	Images ImageLister
+	Images webhookcore.ImageLister
 
 	// ImageListFilters are the per-tag substring filters applied to GET
 	// /images responses. The serve layer always supplies at least the family
@@ -127,7 +120,7 @@ type Config struct {
 
 	Hub *logbridge.Hub
 
-	Replay *ReplayCache
+	Replay *webhookcore.ReplayCache
 	Dedup  *DedupCache
 
 	Draining *atomic.Bool
@@ -142,12 +135,14 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// Server is the chat backend's HTTP surface. It owns no goroutines beyond the
-// per-session supervision goroutines spawned by the executor; the replay janitor
-// lives in its owner.
+// Server is the chat backend's HTTP surface. The embedded *webhookcore.Core
+// provides the shared transport surface (HMAC auth, the drain gate, request
+// metrics, the SSE /logs stream, and the health/readiness/images probes); the
+// Server adds the chat-specific lifecycle handlers. It owns no goroutines
+// beyond the per-session supervision goroutines spawned by the executor; the
+// replay janitor lives in its owner.
 type Server struct {
-	apiKey string
-	skew   time.Duration
+	*webhookcore.Core
 
 	executor executor.Executor
 	tracker  *executor.Tracker
@@ -156,9 +151,6 @@ type Server struct {
 	// (LLM key, git-credentials bearer) with the host-side log-bridge redactor.
 	// nil in minimal test servers.
 	sessionSecrets SessionSecretRegistry
-
-	images           ImageLister
-	imageListFilters []string
 
 	// chat config (populated from ChatConfig at NewServer time)
 	image                     string
@@ -177,18 +169,7 @@ type Server struct {
 	caCertFile                string
 	gitCredentialsURL         string
 
-	hub *logbridge.Hub
-
-	replay *ReplayCache
-	dedup  *DedupCache
-
-	draining *atomic.Bool
-
-	// keepaliveInterval is the SSE comment heartbeat period. Zero means the
-	// package default. Tests shrink it; production leaves it unset.
-	keepaliveInterval time.Duration
-
-	metrics *metrics.Metrics
+	dedup *DedupCache
 
 	logger *slog.Logger
 
@@ -200,12 +181,6 @@ type Server struct {
 	// retain-forever design is no longer needed.
 	stdinMu sync.Map // map[string]*sync.Mutex
 
-	// sseShutdown is closed by CloseSSE at drain so every in-flight /logs handler
-	// returns promptly (an SSE stream never idles, so http.Server.Shutdown would
-	// otherwise block the full timeout). Guarded by sseShutdownOnce for idempotency.
-	sseShutdown     chan struct{}
-	sseShutdownOnce sync.Once
-
 	// llmOverrideWarnOnce guards the "worker_extra_env overrides CM-provisioned
 	// llm credentials" warning so it logs once per server process - a static
 	// worker_extra_env produces the same override on every session, and
@@ -213,23 +188,32 @@ type Server struct {
 	llmOverrideWarnOnce sync.Once
 }
 
-// NewServer wires a Server from its dependencies. The replay cache, dedup
-// cache, and draining flag are created if the caller leaves them nil so a bare
-// Config still yields a usable server (tests rely on this).
+// NewServer wires a Server from its dependencies. It builds the transport Core
+// first (which defaults the skew, replay cache, and draining flag when the
+// caller leaves them nil) then wires the chat-specific fields. The dedup cache
+// is defaulted here so a bare Config still yields a usable server (tests rely
+// on this).
 func NewServer(cfg Config) *Server {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	skew := cfg.Skew
-	if skew == 0 {
-		skew = protocol.DefaultMaxClockSkew
-	}
-
-	replay := cfg.Replay
-	if replay == nil {
-		replay = NewReplayCache(skew, 4096)
+	coreCfg := webhookcore.CoreConfig{
+		APIKey:            cfg.APIKey,
+		Skew:              cfg.Skew,
+		Replay:            cfg.Replay,
+		Draining:          cfg.Draining,
+		KeepaliveInterval: cfg.KeepaliveInterval,
+		Metrics:           cfg.Metrics,
+		Logger:            logger,
+		Hub:               cfg.Hub,
+		LogsFilterParam:   "session_id",
+		LogsFilterAttr:    "session_id",
+		Tracker:           cfg.Tracker,
+		MaxConcurrent:     cfg.Chat.MaxConcurrent,
+		Images:            cfg.Images,
+		ImageListFilters:  cfg.ImageListFilters,
 	}
 
 	dedup := cfg.Dedup
@@ -237,19 +221,11 @@ func NewServer(cfg Config) *Server {
 		dedup = NewDedupCache(10*time.Minute, 4096)
 	}
 
-	draining := cfg.Draining
-	if draining == nil {
-		draining = &atomic.Bool{}
-	}
-
 	return &Server{
-		apiKey:                    cfg.APIKey,
-		skew:                      skew,
+		Core:                      webhookcore.NewCore(coreCfg),
 		executor:                  cfg.Executor,
 		tracker:                   cfg.Tracker,
 		sessionSecrets:            cfg.SessionSecrets,
-		images:                    cfg.Images,
-		imageListFilters:          cfg.ImageListFilters,
 		image:                     cfg.Chat.Image,
 		mcpURL:                    cfg.Chat.MCPURL,
 		skillsResolver:            cfg.SkillsResolver,
@@ -265,21 +241,9 @@ func NewServer(cfg Config) *Server {
 		reasoningEffort:           cfg.Chat.ReasoningEffort,
 		caCertFile:                cfg.Chat.CACertFile,
 		gitCredentialsURL:         cfg.Chat.GitCredentialsURL,
-		hub:                       cfg.Hub,
-		replay:                    replay,
 		dedup:                     dedup,
-		draining:                  draining,
-		keepaliveInterval:         cfg.KeepaliveInterval,
-		metrics:                   cfg.Metrics,
 		logger:                    logger,
-		sseShutdown:               make(chan struct{}),
 	}
-}
-
-// CloseSSE unblocks every in-flight /logs SSE handler. Wire it via
-// httpServer.RegisterOnShutdown so SIGTERM drain returns promptly. Idempotent.
-func (s *Server) CloseSSE() {
-	s.sseShutdownOnce.Do(func() { close(s.sseShutdown) })
 }
 
 // stdinLock returns the per-session mutex for sessionID, creating it on first
@@ -314,149 +278,19 @@ func (s *Server) DropSession(sessionID string) {
 
 // Routes returns the mux with every webhook route mounted. The mutating
 // lifecycle routes are gated on drain; /logs, /images, /health, and /readyz
-// stay reachable during shutdown so operators can read state.
+// stay reachable during shutdown so operators can read state. The transport
+// middlewares and the health/readiness/images/logs handlers are promoted from
+// the embedded Core.
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /chat/start", s.recordMetrics(s.auth(s.drainGate(s.handleChatStart))))
-	mux.HandleFunc("POST /chat/end", s.recordMetrics(s.auth(s.handleChatEnd)))
-	mux.HandleFunc("POST /message", s.recordMetrics(s.auth(s.drainGate(s.handleMessage))))
-	mux.HandleFunc("GET /logs", s.recordMetrics(s.auth(s.handleLogs)))
-	mux.HandleFunc("GET /images", s.recordMetrics(s.auth(s.handleImages)))
-	mux.HandleFunc("GET /health", s.recordMetrics(s.handleHealth))
-	mux.HandleFunc("GET /readyz", s.recordMetrics(s.handleReadyz))
+	mux.HandleFunc("POST /chat/start", s.RecordMetrics(s.Auth(s.DrainGate(s.handleChatStart))))
+	mux.HandleFunc("POST /chat/end", s.RecordMetrics(s.Auth(s.handleChatEnd)))
+	mux.HandleFunc("POST /message", s.RecordMetrics(s.Auth(s.DrainGate(s.handleMessage))))
+	mux.HandleFunc("GET /logs", s.RecordMetrics(s.Auth(s.HandleLogs)))
+	mux.HandleFunc("GET /images", s.RecordMetrics(s.Auth(s.HandleImages)))
+	mux.HandleFunc("GET /health", s.RecordMetrics(s.HandleHealth))
+	mux.HandleFunc("GET /readyz", s.RecordMetrics(s.HandleReadyz))
 
 	return mux
-}
-
-// AdminAuth exposes the HMAC verifier for the admin /metrics endpoint, which
-// the serve layer mounts on a separate loopback listener. It reuses the same
-// signed-GET verification, replay cache, and skew as the webhook routes - the
-// agent-backend signed-GET HMAC is real auth, preserved here.
-func (s *Server) AdminAuth(next http.HandlerFunc) http.HandlerFunc {
-	return s.auth(next)
-}
-
-// ---- images -----------------------------------------------------------------
-
-func (s *Server) handleImages(w http.ResponseWriter, r *http.Request) {
-	if s.images == nil {
-		writeError(w, http.StatusInternalServerError, protocol.CodeInternal, "image lister not wired")
-
-		return
-	}
-
-	summaries, err := s.images.ListImages(r.Context())
-	if err != nil {
-		s.logger.Error("image list failed", "error", err)
-		writeError(w, http.StatusBadGateway, protocol.CodeUpstreamFailure, "image list failed")
-
-		return
-	}
-
-	items := make([]protocol.ImageListItem, 0, len(summaries))
-
-	for _, sum := range summaries {
-		tags := matchingTags(sum.Tags, s.imageListFilters)
-		if len(tags) == 0 {
-			continue
-		}
-
-		items = append(items, protocol.ImageListItem{
-			Tags:    tags,
-			Digests: sum.Digests,
-			Created: sum.CreatedAt,
-			Size:    sum.SizeBytes,
-		})
-	}
-
-	writeJSON(w, http.StatusOK, protocol.ListImagesResponse{OK: true, Images: items})
-}
-
-// matchingTags returns the tags containing any of the filter substrings.
-func matchingTags(tags, filters []string) []string {
-	out := make([]string, 0, len(tags))
-
-	for _, tag := range tags {
-		for _, f := range filters {
-			if strings.Contains(tag, f) {
-				out = append(out, tag)
-
-				break
-			}
-		}
-	}
-
-	return out
-}
-
-// ---- health / readyz --------------------------------------------------------
-
-func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	running := 0
-	if s.tracker != nil {
-		running = s.tracker.Count()
-	}
-
-	writeJSON(w, http.StatusOK, protocol.HealthResponse{
-		OK:                true,
-		RunningContainers: running,
-		MaxConcurrent:     s.maxConcurrent,
-	})
-}
-
-// readyResponse is the /readyz body. It is a custom shape (not ErrorResponse)
-// so the readiness probe stays self-describing for orchestrators.
-type readyResponse struct {
-	OK     bool   `json:"ok"`
-	Reason string `json:"reason,omitempty"`
-}
-
-func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
-	if s.draining.Load() {
-		writeJSON(w, http.StatusServiceUnavailable, readyResponse{OK: false, Reason: "draining"})
-
-		return
-	}
-
-	writeJSON(w, http.StatusOK, readyResponse{OK: true})
-}
-
-// ---- decode + write helpers -------------------------------------------------
-
-// decode unmarshals the (already auth-verified) request body into v. The body
-// was re-injected by the auth middleware, so a normal read suffices. On a JSON
-// error it writes a 400 and returns false.
-func (s *Server) decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		writeError(w, http.StatusBadRequest, protocol.CodeInvalidJSON, "invalid JSON")
-
-		return false
-	}
-
-	return true
-}
-
-// writeJSON marshals v and writes it with the given status. A marshal failure
-// falls back to a fixed internal-error body so the client always gets
-// well-formed JSON.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-
-	body, err := json.Marshal(v)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"ok":false,"code":"internal","message":"response marshal failed"}`))
-
-		return
-	}
-
-	w.WriteHeader(status)
-	_, _ = w.Write(body)
-}
-
-// writeError serialises a protocol.ErrorResponse. msg must be a fixed,
-// client-safe string, never raw err.Error() text.
-func writeError(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, protocol.ErrorResponse{OK: false, Code: code, Message: msg})
 }
