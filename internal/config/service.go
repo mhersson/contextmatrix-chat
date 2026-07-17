@@ -237,7 +237,7 @@ func (c *ServiceConfig) Validate() error {
 	if c.MaxConcurrent < 1 {
 		return fmt.Errorf(
 			"max_concurrent must be >= 1, got %d: 0 disables the webhook capacity pre-check "+
-				"while the tracker refuses every launch — triggers would be accepted then all fail",
+				"while the tracker refuses every launch - triggers would be accepted then all fail",
 			c.MaxConcurrent,
 		)
 	}

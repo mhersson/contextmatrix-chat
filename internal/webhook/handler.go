@@ -36,7 +36,7 @@ type ImageLister interface {
 }
 
 // SessionSecretRegistry records and forgets a session's CM-provisioned secrets
-// (the LLM key, protocol v0.5.0; the git-credentials bearer, protocol v0.5.2 —
+// (the LLM key, protocol v0.5.0; the git-credentials bearer, protocol v0.5.2 -
 // a session may register either, both, or neither) so the host-side log-bridge
 // redactor masks them in bridged worker stderr and unparsable stdout (the only
 // masking those surfaces get). handleChatStart registers each key before the
@@ -207,7 +207,7 @@ type Server struct {
 	sseShutdownOnce sync.Once
 
 	// llmOverrideWarnOnce guards the "worker_extra_env overrides CM-provisioned
-	// llm credentials" warning so it logs once per server process — a static
+	// llm credentials" warning so it logs once per server process - a static
 	// worker_extra_env produces the same override on every session, and
 	// repeating it per request would spam a long-lived server's log.
 	llmOverrideWarnOnce sync.Once
@@ -292,7 +292,7 @@ func (s *Server) stdinLock(sessionID string) *sync.Mutex {
 }
 
 // DropSession removes the per-session stdin mutex and forgets the session's
-// CM-provisioned secrets (the LLM key, the git-credentials bearer — a session
+// CM-provisioned secrets (the LLM key, the git-credentials bearer - a session
 // may register either, both, or neither) from the log-bridge redactor once the
 // session's container has exited (wired into the executor OnExit hook). After
 // the container is gone no writer can hold the lock, so the delete/recreate
@@ -331,7 +331,7 @@ func (s *Server) Routes() *http.ServeMux {
 
 // AdminAuth exposes the HMAC verifier for the admin /metrics endpoint, which
 // the serve layer mounts on a separate loopback listener. It reuses the same
-// signed-GET verification, replay cache, and skew as the webhook routes — the
+// signed-GET verification, replay cache, and skew as the webhook routes - the
 // agent-backend signed-GET HMAC is real auth, preserved here.
 func (s *Server) AdminAuth(next http.HandlerFunc) http.HandlerFunc {
 	return s.auth(next)

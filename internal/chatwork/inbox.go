@@ -48,7 +48,7 @@ func (in *chatInbox) Pump(r io.Reader, clearCh chan<- struct{}) {
 		case frames.TypeClear:
 			// Drop everything queued before the clear and hold the inbox so
 			// the dying epoch's harness cannot swallow a user message that
-			// arrives after the clear — it belongs to the next epoch.
+			// arrives after the clear - it belongs to the next epoch.
 			in.onClear()
 
 			select {

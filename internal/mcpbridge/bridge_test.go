@@ -173,7 +173,7 @@ func TestBridgeUsesBaseTransport(t *testing.T) {
 
 	t.Run("base transport composes under a bearer key", func(t *testing.T) {
 		// The base transport (stand-in for the CA transport) must still carry the
-		// request AND the bearer header must be applied on top — proving
+		// request AND the bearer header must be applied on top - proving
 		// bearerTransport wraps the injected base rather than replacing it.
 		server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "0.0.1"}, nil)
 		server.AddTool(&mcp.Tool{

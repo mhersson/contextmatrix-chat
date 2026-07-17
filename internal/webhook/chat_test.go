@@ -180,7 +180,7 @@ func (f *fakeExecutor) Launched() []executor.LaunchSpec {
 // and cleanup tests can assert the handler registers payload secrets (the LLM
 // key, the git-credentials bearer) and forgets them. It satisfies
 // SessionSecretRegistry. added holds every key registered per session, not
-// just the last one — a session can carry both a provisioned LLM key and a
+// just the last one - a session can carry both a provisioned LLM key and a
 // provisioned git-credentials bearer simultaneously, and a naive single-value
 // map would silently let the second AddSessionKey call clobber the first.
 type fakeSessionSecrets struct {
@@ -852,7 +852,7 @@ func TestChatStart_NoSkillsWhenResolverEmpty(t *testing.T) {
 
 // TestChatStart_NoSkillsWhenResolverFails pins the skills degrade contract:
 // a resolver error (e.g. CM did not provision a task-skills clone token, so
-// Resolve hard-fails) must never be fatal to the chat start — the session
+// Resolve hard-fails) must never be fatal to the chat start - the session
 // launches without the Skill tool.
 func TestChatStart_NoSkillsWhenResolverFails(t *testing.T) {
 	tracker := executor.NewTracker(10)
@@ -885,7 +885,7 @@ func TestChatStart_NoSkillsWhenResolverFails(t *testing.T) {
 
 // TestChatStart_LLMEndpointFromPayload verifies that the CM-provisioned
 // llm_endpoint on the chat-start payload is delivered to the worker as
-// per-session LLM_API_KEY/LLM_BASE_URL/LLM_TYPE container env — the same
+// per-session LLM_API_KEY/LLM_BASE_URL/LLM_TYPE container env - the same
 // delivery mechanism already used for CM_CHAT_REPO_URL.
 func TestChatStart_LLMEndpointFromPayload(t *testing.T) {
 	srv, _, fe := newChatServer(t)
@@ -915,7 +915,7 @@ func TestChatStart_LLMEndpointFromPayload(t *testing.T) {
 
 // TestChatStart_LLMEndpointEmptyBaseURLStillSet verifies that an explicitly
 // empty base_url on the provisioned LLMEndpoint (the type's canonical default)
-// is still written as a real env value, not skipped — it is a real provisioned
+// is still written as a real env value, not skipped - it is a real provisioned
 // answer, not an omission.
 func TestChatStart_LLMEndpointEmptyBaseURLStillSet(t *testing.T) {
 	srv, _, fe := newChatServer(t)
@@ -979,8 +979,8 @@ func TestChatStart_RegistersMCPKeyForRedaction(t *testing.T) {
 
 // TestChatStart_RegistersWorkerExtraEnvLLMKeyForRedaction covers the operator
 // escape hatch: a worker_extra_env LLM_API_KEY overrides the CM-provisioned
-// key inside the container (Docker keeps the last duplicate), so it — not the
-// provisioned key — is what can surface on worker stderr and must be in the
+// key inside the container (Docker keeps the last duplicate), so it - not the
+// provisioned key - is what can surface on worker stderr and must be in the
 // host-side redaction set.
 func TestChatStart_RegistersWorkerExtraEnvLLMKeyForRedaction(t *testing.T) {
 	tracker := executor.NewTracker(10)
@@ -1013,7 +1013,7 @@ func TestChatStart_RegistersWorkerExtraEnvLLMKeyForRedaction(t *testing.T) {
 }
 
 // TestChatStart_LaunchFailureUnregistersLLMKey verifies that when Launch fails
-// after the key is registered, the handler forgets it — the OnExit → DropSession
+// after the key is registered, the handler forgets it - the OnExit → DropSession
 // cleanup never fires for a container that never started, so a leak would
 // otherwise persist for the process lifetime.
 func TestChatStart_LaunchFailureUnregistersLLMKey(t *testing.T) {
@@ -1075,8 +1075,8 @@ func TestDropSession_UnregistersLLMKey(t *testing.T) {
 
 // TestChatStart_WorkerExtraEnvLLMOverrideWarns verifies that when
 // worker_extra_env sets an LLM_* key, chat/start warns for operator
-// visibility — the operator value overrides the session's CM-provisioned
-// credential — logging the env NAME only, never the value.
+// visibility - the operator value overrides the session's CM-provisioned
+// credential - logging the env NAME only, never the value.
 func TestChatStart_WorkerExtraEnvLLMOverrideWarns(t *testing.T) {
 	tracker := executor.NewTracker(10)
 	fe := &fakeExecutor{tracker: tracker}
@@ -1255,7 +1255,7 @@ func TestChatStart_GitCredentialsAndLLMKeyBothRegistered(t *testing.T) {
 
 // TestChatStart_LaunchFailureUnregistersGitCredentialsKey mirrors
 // TestChatStart_LaunchFailureUnregistersLLMKey for the git-credentials bearer:
-// when Launch fails after the key is registered, the handler must forget it —
+// when Launch fails after the key is registered, the handler must forget it -
 // otherwise a leak persists for the process lifetime (DropSession's OnExit
 // path never fires for a container that never started).
 func TestChatStart_LaunchFailureUnregistersGitCredentialsKey(t *testing.T) {
@@ -1314,7 +1314,7 @@ func TestChatEnd_ClosesStdin(t *testing.T) {
 
 // TestChatEnd_StopsContainerAndClearsTracker is the regression guard for the
 // end→reopen 409: closing stdin alone never EOFs the worker (StdinOnce=false),
-// so /chat/end must stop the container and clear the tracker — otherwise a later
+// so /chat/end must stop the container and clear the tracker - otherwise a later
 // /chat/start for the same session returns 409 "session already active".
 func TestChatEnd_StopsContainerAndClearsTracker(t *testing.T) {
 	srv, tracker, fe := newChatServer(t)
@@ -1342,7 +1342,7 @@ func TestChatEnd_StopsContainerAndClearsTracker(t *testing.T) {
 func TestChatEnd_IdempotentWhenNotFound(t *testing.T) {
 	srv, _, _ := newChatServer(t)
 
-	// No session tracked — /chat/end should return 200 (idempotent).
+	// No session tracked - /chat/end should return 200 (idempotent).
 	body := mustJSON(t, protocol.ChatEndPayload{SessionID: "unknown-session"})
 	w := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/end", body))
@@ -1459,7 +1459,7 @@ func TestMessage_DedupCachedAck(t *testing.T) {
 
 	// Second request with same message_id but a distinct timestamp so the replay
 	// cache does not reject it (replay key = timestamp+"."+signature). This is the
-	// retry scenario — same payload, fresh signature.
+	// retry scenario - same payload, fresh signature.
 	bytesAfterFirst := len(stdin.Bytes())
 
 	ts2 := strconv.FormatInt(time.Now().Add(time.Second).Unix(), 10)
@@ -1533,7 +1533,7 @@ func TestMessage_EmptyMessageIDNeverDeduped(t *testing.T) {
 		body := mustJSON(t, protocol.MessagePayload{
 			SessionID: testSession,
 			Content:   "no dedup",
-			MessageID: "", // empty — opt out of at-most-once
+			MessageID: "", // empty - opt out of at-most-once
 		})
 		w := httptest.NewRecorder()
 		srv.Routes().ServeHTTP(w, signedPostBodyAt(t, "/message", body, ts))

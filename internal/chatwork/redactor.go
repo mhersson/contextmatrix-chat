@@ -34,7 +34,7 @@ type redactorWatcher struct {
 	// (disabling the source). fetchedLastMod is the mtime observed by the
 	// most recent successful reload. Set synchronously in newRedactorWatcher
 	// (before the watch goroutine starts) and thereafter only touched by the
-	// single watch goroutine — never read or written concurrently, so no lock
+	// single watch goroutine - never read or written concurrently, so no lock
 	// is needed. Establishing it at construction time (rather than lazily on
 	// watch's first tick) avoids a race against a file rewrite that lands
 	// between "go w.watch(ctx)" being called and the goroutine actually
@@ -44,10 +44,10 @@ type redactorWatcher struct {
 }
 
 // newRedactorWatcher builds the initial redactor. mcpKey, llmKey, and
-// gitCredentialsToken are captured once — CM_MCP_API_KEY, LLM_API_KEY, and
+// gitCredentialsToken are captured once - CM_MCP_API_KEY, LLM_API_KEY, and
 // CM_GIT_CREDENTIALS_TOKEN are static per-session values delivered via
 // container env. fetchedPath, when non-empty, is polled for worker-fetched
-// git tokens (see fetchedTokensPath) — a missing or unreadable fetchedPath is
+// git tokens (see fetchedTokensPath) - a missing or unreadable fetchedPath is
 // not an error, just "nothing fetched yet".
 func newRedactorWatcher(mcpKey, llmKey, gitCredentialsToken, fetchedPath string) *redactorWatcher {
 	w := &redactorWatcher{
@@ -68,11 +68,11 @@ func newRedactorWatcher(mcpKey, llmKey, gitCredentialsToken, fetchedPath string)
 // closes a TOCTOU window: if a rewrite lands between the stat and the read,
 // reload still picks up the NEW content (since the read happens after the
 // rewrite) but stamps the OLD mtime, so the next tick sees the mtime has
-// moved again and re-reloads — a redundant but idempotent no-op. The
+// moved again and re-reloads - a redundant but idempotent no-op. The
 // alternative order (read then stat) can stamp the NEW mtime while the
 // redactor was built from the OLD content, silently missing a fetched token
 // until the next one. A missing fetchedPath contributes nothing (not an
-// error) — the common case when no credential has been fetched yet, or CM
+// error) - the common case when no credential has been fetched yet, or CM
 // never provisioned git credentials this session.
 func (w *redactorWatcher) reload() {
 	all := []string{w.llmKey, w.mcpKey, w.gitCredentialsToken}
@@ -144,7 +144,7 @@ func (w *redactorWatcher) watch(ctx context.Context) {
 }
 
 // changed reports whether fetchedPath's mtime has moved since the last
-// successful reload. A stat failure is not itself a change — reload's own
+// successful reload. A stat failure is not itself a change - reload's own
 // readLines call handles a genuinely missing file gracefully.
 func (w *redactorWatcher) changed() bool {
 	if w.fetchedPath == "" {

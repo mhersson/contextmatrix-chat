@@ -22,7 +22,7 @@ import (
 //
 // The worker has no upfront git token at all, only a bearer for CM's
 // GET /api/worker/git-credentials?host=&path= endpoint, which mints the
-// correct credential for whichever repo git is about to touch — the only
+// correct credential for whichever repo git is about to touch - the only
 // design that works for a cross-project, long-lived chat session.
 
 // gitCredentialHelperV2ScriptName is the credential-helper script's filename
@@ -38,7 +38,7 @@ const gitCredentialHelperV2ScriptName = "cm-git-credential-helper-v2.sh" //nolin
 // scoping to one host would silently break every other host the session ever
 // touches.
 // useHttpPath=true is required so git includes the repo path in what it hands
-// the helper — without it CM cannot tell which project's credential to mint.
+// the helper - without it CM cannot tell which project's credential to mint.
 // selfPath is never embedded with a secret: the script only names the binary
 // to exec; the subcommand itself resolves the bearer from the staged config
 // file (see gitCredentialsConfigPath), never from an argument.
@@ -65,14 +65,14 @@ func ConfigureGitCredentialHelperV2(ctx context.Context, selfPath string) error 
 // gitCredentialsConfigPath is the writable 0600 scratch file Run() stages at
 // boot (with the container's full, unscrubbed environment) holding
 // CM_GIT_CREDENTIALS_URL/CM_GIT_CREDENTIALS_TOKEN. RunGitCredentialHelper and
-// RunGHWrapper read ONLY this file for those two values — never
-// os.Getenv — because git/gh are invoked by the model through the harness
+// RunGHWrapper read ONLY this file for those two values - never
+// os.Getenv - because git/gh are invoked by the model through the harness
 // bash tool, which execs with a SCRUBBED environment (tools.ScrubbedEnv) that
 // strips everything outside a small allowlist (PATH, HOME, USER, LANG,
 // LC_ALL, TMPDIR, TERM). CM_GIT_CREDENTIALS_TOKEN/URL would be invisible to a
 // subcommand reading its own env from that lineage. The file lives in
 // os.TempDir(), which resolves identically under a scrubbed environment too
-// (TMPDIR is on the allowlist) — the same reasoning that already puts the
+// (TMPDIR is on the allowlist) - the same reasoning that already puts the
 // credential-helper SCRIPT itself there: a fixed path beats inherited env.
 func gitCredentialsConfigPath() string {
 	return filepath.Join(os.TempDir(), "cm-git-credentials-config")
@@ -83,7 +83,7 @@ func gitCredentialsConfigPath() string {
 // long-running work process's redactorWatcher (see redactor.go) polls it so
 // worker-fetched tokens enter the in-worker redaction set even though they
 // are minted by a short-lived subcommand process that shares no memory with
-// Run() — best-effort, on a multi-second poll cadence.
+// Run() - best-effort, on a multi-second poll cadence.
 func fetchedTokensPath() string {
 	return filepath.Join(os.TempDir(), "cm-fetched-git-tokens")
 }
@@ -111,7 +111,7 @@ func recordFetchedToken(token string) error {
 
 // recordFetchedTokenBestEffort appends token to fetchedTokensPath, logging
 // (not failing) on error: a write failure here must not fail the credential
-// fetch the model's git/gh operation is waiting on — the operation already has
+// fetch the model's git/gh operation is waiting on - the operation already has
 // what it needs. Losing in-worker redaction coverage for this one token is the
 // accepted downside of a best-effort, poll-based mechanism (see
 // fetchedTokensPath's doc).
@@ -134,13 +134,13 @@ const (
 	gitCredentialDefaultRetryDelay  = 500 * time.Millisecond
 )
 
-// errGitCredentialSessionNotLive marks CM's 409 response — the only status
+// errGitCredentialSessionNotLive marks CM's 409 response - the only status
 // code gitCredentialClient.fetch retries (400, 401, 404, 500, 502, etc. all
 // fail immediately). The body is NOT inspected, so every 409 is treated as
 // this same retryable case, including CM's other use of 409: a broken project
 // credential binding, which retrying can never fix. That case still retries
 // the bounded gitCredentialDefaultMaxAttempts (~1s total delay) before
-// failing — acceptable today; distinguishing it by response body to fail
+// failing - acceptable today; distinguishing it by response body to fail
 // immediately is a follow-up, not implemented here.
 var errGitCredentialSessionNotLive = errors.New("chat session is not yet live")
 
@@ -174,7 +174,7 @@ func newGitCredentialClient(credentialsURL, bearer string) *gitCredentialClient 
 }
 
 // fetch mints a fresh credential for (host, path), retrying up to
-// c.maxAttempts times — bounded to errGitCredentialSessionNotLive only — with
+// c.maxAttempts times - bounded to errGitCredentialSessionNotLive only - with
 // c.retryDelay between attempts. host and path may be empty (an instance-wide
 // credential fetch, e.g. the gh wrapper with no origin remote).
 func (c *gitCredentialClient) fetch(ctx context.Context, host, path string) (gitCredential, error) {
@@ -252,11 +252,11 @@ func (c *gitCredentialClient) doFetch(ctx context.Context, host, path string) (g
 // worker git-credentials endpoint: it reads git's key=value stdin protocol
 // from r (only protocol/host/path are used), fetches a fresh credential from
 // credentialsURL, and writes username=/password= lines to w. onFetched, when
-// non-nil, is called with the minted token before it is written — the caller
+// non-nil, is called with the minted token before it is written - the caller
 // uses it to register the token for in-worker redaction (see
 // recordFetchedTokenBestEffort). A fetch failure writes nothing to w and
 // returns an error; the caller (RunGitCredentialHelper, via the hidden CLI
-// subcommand) surfaces it as a single stderr line — git then fails the git
+// subcommand) surfaces it as a single stderr line - git then fails the git
 // operation itself with its own "could not read Username" error, which is
 // what actually reaches the model/user.
 func GitCredentialGet(
@@ -326,7 +326,7 @@ func parseGitCredentialInput(r io.Reader) (host, path string) {
 
 // RunGitCredentialHelper is the entry point for the hidden "git-credential"
 // CLI subcommand (see cli.newGitCredentialCmd). op is git's requested
-// operation (get/store/erase, from argv); only "get" does anything — CM mints
+// operation (get/store/erase, from argv); only "get" does anything - CM mints
 // a fresh credential on every fetch, so there is nothing to persist ("store")
 // or invalidate ("erase") locally. Returns an error only for "get"; the
 // caller surfaces it as a single stderr line (git then fails the git

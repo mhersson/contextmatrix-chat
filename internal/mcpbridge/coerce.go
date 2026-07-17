@@ -13,7 +13,7 @@ type propTypes map[string][]string
 
 // schemaPropTypes extracts each top-level property's allowed JSON-Schema types
 // from a tool InputSchema. The schema arrives as `any` (a map over the wire),
-// so it is marshaled and re-read into a minimal shape — robust whether it is a
+// so it is marshaled and re-read into a minimal shape - robust whether it is a
 // map, a typed schema, or raw JSON. Returns nil on any failure or when the
 // schema declares no properties.
 func schemaPropTypes(inputSchema any) propTypes {

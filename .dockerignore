@@ -6,7 +6,7 @@ docker
 .dockerignore
 .golangci.yaml
 
-# Documentation and project metadata — not needed to build the binary.
+# Documentation and project metadata - not needed to build the binary.
 *.md
 LICENSE
 serve.yaml.example

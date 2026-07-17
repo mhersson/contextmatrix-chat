@@ -258,7 +258,7 @@ func (e *DockerExecutor) Launch(ctx context.Context, spec LaunchSpec) error {
 	// supervision must outlive the request ctx that triggered Launch, otherwise
 	// a returned webhook handler would cancel a still-running container's wait
 	// and cleanup. Chat containers are long-lived; there is no per-container
-	// deadline — the container runs until /chat/end closes stdin.
+	// deadline - the container runs until /chat/end closes stdin.
 	//nolint:gosec // G118: detached ctx is intentional; container outlives the request
 	go e.waitAndCleanup(spec.SessionID, resp.ID, run.StartedAt, attach, log)
 
@@ -290,7 +290,7 @@ func (e *DockerExecutor) pump(sessionID string, r io.Reader, log *slog.Logger) {
 	stderrW.Flush()
 }
 
-// waitAndCleanup blocks on ContainerWait with no deadline — chat containers are
+// waitAndCleanup blocks on ContainerWait with no deadline - chat containers are
 // long-lived and run until /chat/end closes stdin so the work process exits
 // naturally. It then force-removes the container, observes its duration by
 // outcome, clears the tracker entry, closes the attach connection, and fires
@@ -388,7 +388,7 @@ func (e *DockerExecutor) Kill(ctx context.Context, sessionID string) error {
 }
 
 // CleanupOrphans force-removes every chat-labeled container found at boot.
-// Anything matching is orphaned by definition — the tracker is empty in a fresh
+// Anything matching is orphaned by definition - the tracker is empty in a fresh
 // process, so a labeled container is a leftover from a previous run. This
 // assumes exclusive ownership of contextmatrix.chat-labeled containers on the
 // daemon; a second executor process sharing the Docker daemon would have its

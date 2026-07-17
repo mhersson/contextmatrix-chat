@@ -42,7 +42,7 @@ func TestOpenMissingFile(t *testing.T) {
 }
 
 // TestOpenOtherReadErrorStillErrors verifies Open only tolerates a missing
-// file — a different filesystem error (e.g. the path is a directory, so the
+// file - a different filesystem error (e.g. the path is a directory, so the
 // open fails with EISDIR, not ENOENT) must still be reported, not silently
 // swallowed into an empty Source.
 func TestOpenOtherReadErrorStillErrors(t *testing.T) {

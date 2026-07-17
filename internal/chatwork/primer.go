@@ -13,7 +13,7 @@ Work collaboratively: answer questions, explore code, implement changes, and upd
 board state when the human asks. Be concise and precise.`
 
 // chatPrimer is the ContextMatrix orientation injected as the first user turn
-// of every epoch — on cold open, on resume, and again after each /clear. It
+// of every epoch - on cold open, on resume, and again after each /clear. It
 // lives here, next to the environment it describes (tool set, /workspace
 // paths), so the two cannot drift apart; the host sends nothing.
 //

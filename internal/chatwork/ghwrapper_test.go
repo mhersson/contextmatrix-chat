@@ -19,7 +19,7 @@ import (
 
 // captureStderr temporarily replaces os.Stderr with a pipe so a test can
 // inspect what the function under test wrote there, restoring the original
-// on cleanup. Must not be used by a t.Parallel() test — os.Stderr is global
+// on cleanup. Must not be used by a t.Parallel() test - os.Stderr is global
 // process state, and none of RunGHWrapper's tests (which also use
 // t.Setenv, itself incompatible with t.Parallel()) run in parallel with each
 // other or with anything else in this package.
@@ -150,7 +150,7 @@ func TestOriginHostPath(t *testing.T) {
 
 // TestRunGHWrapper_Success proves the full flow: derive host/path from the
 // cwd's origin remote, fetch a credential from CM using the FILE-staged
-// bearer (never env — same reasoning as RunGitCredentialHelper), and export
+// bearer (never env - same reasoning as RunGitCredentialHelper), and export
 // GH_TOKEN/GH_ENTERPRISE_TOKEN/GH_HOST for the final exec of the real gh
 // binary. execFunc is swapped for a recorder so the test observes the final
 // argv/env without replacing the test process image.
@@ -189,7 +189,7 @@ func TestRunGHWrapper_Success(t *testing.T) {
 	defer restore()
 
 	// args are gh's OWN arguments, as cobra's DisableFlagParsing hands them to
-	// RunGHWrapper — no leading "gh" (that was already consumed by the shim's
+	// RunGHWrapper - no leading "gh" (that was already consumed by the shim's
 	// "$@" / argv[0] resolution before it ever reached this function).
 	err := RunGHWrapper(context.Background(), dir, []string{"pr", "create"})
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func TestRunGHWrapper_Success(t *testing.T) {
 }
 
 // TestRunGHWrapper_GitHubComNoGHHost proves GH_HOST is withheld for
-// github.com — gh needs it only for GitHub Enterprise Server hosts.
+// github.com - gh needs it only for GitHub Enterprise Server hosts.
 func TestRunGHWrapper_GitHubComNoGHHost(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 
@@ -238,10 +238,10 @@ func TestRunGHWrapper_GitHubComNoGHHost(t *testing.T) {
 
 // TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected verifies that
 // with no origin remote in cwd, the wrapper still fetches with an empty
-// (host, path) pair — CM's worker git-credentials endpoint serves the
+// (host, path) pair - CM's worker git-credentials endpoint serves the
 // instance-wide credential for that pair (rather than 400ing), so a no-origin
 // directory has a real happy path. This proves the wrapper completes that
-// happy path end to end — the fetched instance token actually reaches gh's
+// happy path end to end - the fetched instance token actually reaches gh's
 // exec'd environment.
 func TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
@@ -286,8 +286,8 @@ func TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected(t *testing.T) {
 // regression test for the review finding: RunGHWrapper used to return before
 // ever calling execFunc when the credential fetch failed, breaking every
 // repo-less gh call (gh --version, gh auth status, gh api /user, gh repo
-// list, gh repo create) in provisioned mode. It must now still exec gh — with
-// no injected token — and log exactly one concise stderr note that carries
+// list, gh repo create) in provisioned mode. It must now still exec gh - with
+// no injected token - and log exactly one concise stderr note that carries
 // no token, bearer, or URL query value. On the pre-fix code, execFunc is
 // never invoked and this test fails.
 func TestRunGHWrapper_FetchFailure_StillExecsWithoutToken(t *testing.T) {
@@ -349,7 +349,7 @@ func TestRunGHWrapper_FetchFailure_StillExecsWithoutToken(t *testing.T) {
 // CM_GIT_CREDENTIALS_TOKEN/URL in the process environment to deliberately
 // WRONG values and proving the fetch still authenticates with the
 // boot-staged config FILE's (correct) bearer shows RunGHWrapper never
-// consults os.Getenv for these two values either — required since gh is
+// consults os.Getenv for these two values either - required since gh is
 // invoked by the model through the harness bash tool, which execs with a
 // scrubbed environment.
 func TestRunGHWrapper_IgnoresEnvUsesConfigFile(t *testing.T) {

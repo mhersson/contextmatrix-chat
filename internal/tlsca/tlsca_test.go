@@ -77,7 +77,7 @@ func TestTransportWithCA(t *testing.T) {
 		require.NotNil(t, tr.TLSClientConfig)
 		assert.NotNil(t, tr.TLSClientConfig.RootCAs)
 		// Cloned from http.DefaultTransport, so proxy-from-environment is
-		// preserved — the transport works behind an explicit HTTPS_PROXY too.
+		// preserved - the transport works behind an explicit HTTPS_PROXY too.
 		assert.NotNil(t, tr.Proxy, "the CA transport must preserve DefaultTransport's proxy support")
 	})
 }

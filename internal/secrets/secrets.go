@@ -21,8 +21,8 @@ type Source struct{ vals map[string]string }
 // Open parses a KEY=value env file. Blank lines and lines beginning with '#'
 // are ignored. Values may contain '=' characters. A missing file is not an
 // error: it returns an empty, usable Source (every Get returns "") rather than
-// failing, so a caller that legitimately has nothing staged yet — e.g. the
-// gh-wrapper subcommand before any git-credentials config exists — is not
+// failing, so a caller that legitimately has nothing staged yet - e.g. the
+// gh-wrapper subcommand before any git-credentials config exists - is not
 // forced to special-case "file absent" itself. Any other read error
 // (permission denied, path is a directory, ...) still fails.
 func Open(path string) (*Source, error) {
@@ -68,7 +68,7 @@ func (s *Source) Get(key string) string {
 
 // WriteEnvFile writes vals to path atomically (write-tmp + rename).
 // The directory is created with mode 0700; the file is written with mode 0600.
-// Keys are written in sorted order — map iteration is randomized, and the
+// Keys are written in sorted order - map iteration is randomized, and the
 // output must be byte-identical across rewrites.
 func WriteEnvFile(path string, vals map[string]string) error {
 	dir := filepath.Dir(path)
