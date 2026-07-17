@@ -1,3 +1,5 @@
+# Canonical copy: contextmatrix-agent/.golangci.yaml - sync by full-file copy
+# plus repo-name word swap.
 version: "2"
 linters:
   default: none
@@ -68,6 +70,9 @@ linters:
 issues:
   max-issues-per-linter: 50
   max-same-issues: 8
+  # No auto-fix: `golangci-lint run` must never rewrite the working tree.
+  # Auto-applied edits in unrelated files pollute diffs for humans and derail
+  # agent runs (dirty-tree confusion mid-task).
   fix: false
 formatters:
   enable:
