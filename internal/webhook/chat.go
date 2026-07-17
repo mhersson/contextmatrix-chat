@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mhersson/contextmatrix-backendkit/frames"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
-	"github.com/mhersson/contextmatrix-chat/internal/frames"
 	protocol "github.com/mhersson/contextmatrix-protocol"
 )
 

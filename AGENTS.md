@@ -27,9 +27,7 @@ internal/executor/        Docker container lifecycle; Tracker gates concurrency;
 internal/chatwork/        container work loop: provisioned credentials, git credential helper, optional clone, tool registry, embedded primer, resume, epoch loop
 internal/mcpbridge/       dials CM's /mcp, adapts each board tool to a harness tools.Tool
 internal/taskskills/      fetches CM's task-skills pointer + shallow-clones it into the host cache bound at /run/cm-skills
-internal/tlsca/           HTTP client/transport trusting the optional extra CA (ca_cert_file)
 internal/logbridge/       Hub fanning container log frames to SSE subscribers
-internal/frames/          JSON-Lines control protocol on container stdin (user-message, clear)
 internal/secrets/         KEY=value env-file read/write (atomic write+rename); stages the worker's provisioned git-credentials config
 internal/metrics/         Prometheus metric set on a dedicated registry
 docker/Dockerfile.worker  worker image; entrypoint `contextmatrix-chat work`

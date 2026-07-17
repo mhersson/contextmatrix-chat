@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mhersson/contextmatrix-backendkit/frames"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
-	"github.com/mhersson/contextmatrix-chat/internal/frames"
 	protocol "github.com/mhersson/contextmatrix-protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1646,7 +1646,7 @@ func TestMessageDedupConcurrent(t *testing.T) {
 	wg.Wait()
 
 	// Count user_message frames written to stdin.
-	rd := frames.NewReader(bytes.NewReader(stdin.Bytes()))
+	rd := frames.NewReader(bytes.NewReader(stdin.Bytes()), frames.TypeUserMessage, frames.TypeClear)
 
 	frameCount := 0
 

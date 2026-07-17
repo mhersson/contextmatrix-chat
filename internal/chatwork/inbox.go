@@ -5,7 +5,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/mhersson/contextmatrix-chat/internal/frames"
+	"github.com/mhersson/contextmatrix-backendkit/frames"
 	"github.com/mhersson/contextmatrix-harness/harness"
 )
 
@@ -31,7 +31,7 @@ func newChatInbox() *chatInbox {
 // inbox on EOF. Run Pump in a goroutine; it exits when the reader reaches EOF
 // or returns a non-EOF error.
 func (in *chatInbox) Pump(r io.Reader, clearCh chan<- struct{}) {
-	fr := frames.NewReader(r)
+	fr := frames.NewReader(r, frames.TypeUserMessage, frames.TypeClear)
 
 	for {
 		f, err := fr.Next()
