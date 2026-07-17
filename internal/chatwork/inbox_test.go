@@ -148,6 +148,45 @@ func TestReleaseClearReportsClosedInbox(t *testing.T) {
 	})
 }
 
+// TestPumpIgnoresAgentOnlyFrameTypes pins the chat-only accepted frame set to
+// exactly {user_message, clear}. promote and end_session are agent-only frame
+// types (see the frames package doc) that must never reach the inbox or raise
+// a clear signal; a future edit that both widens the Pump call's accepted
+// list and adds a matching switch case for one of them (the realistic way
+// agent-only handling leaks into chat) will fail this test.
+func TestPumpIgnoresAgentOnlyFrameTypes(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	require.NoError(t, frames.Write(&buf, frames.Frame{Type: frames.TypePromote, Content: "promote-me"}))
+	require.NoError(t, frames.Write(&buf, frames.Frame{Type: frames.TypeEndSession}))
+	require.NoError(t, frames.Write(&buf, frames.Frame{Type: frames.TypeUserMessage, MessageID: "m1", Content: "hello"}))
+
+	in := newChatInbox()
+	clearCh := make(chan struct{}, 1)
+
+	// bytes.Buffer never blocks, so Pump can run synchronously here (as in
+	// TestClearSelfSeedsNextEpochPrimer): it processes all three lines and
+	// returns on EOF.
+	in.Pump(&buf, clearCh)
+
+	got := in.Drain()
+	require.Len(t, got, 1, "only the user_message frame should have reached the inbox")
+	assert.Equal(t, "m1", got[0].MessageID)
+	assert.Equal(t, "hello", got[0].Content)
+
+	select {
+	case <-clearCh:
+		t.Fatal("promote/end_session frames must not produce a clear signal")
+	default:
+	}
+
+	// Pump closes the inbox on EOF regardless; confirms the whole stream was
+	// consumed rather than the reader stopping early on the first frame.
+	_, err := in.Wait(context.Background())
+	assert.ErrorIs(t, err, harness.ErrInboxClosed)
+}
+
 func TestChatInbox_Pump_ClearSignal(t *testing.T) {
 	t.Parallel()
 
