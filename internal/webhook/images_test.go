@@ -8,24 +8,23 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mhersson/contextmatrix-backendkit/webhookcore"
 	protocol "github.com/mhersson/contextmatrix-protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/mhersson/contextmatrix-chat/internal/executor"
 )
 
 type fakeImageLister struct {
-	summaries []executor.ImageSummary
+	summaries []webhookcore.ImageSummary
 	err       error
 }
 
-func (f *fakeImageLister) ListImages(_ context.Context) ([]executor.ImageSummary, error) {
+func (f *fakeImageLister) ListImages(_ context.Context) ([]webhookcore.ImageSummary, error) {
 	return f.summaries, f.err
 }
 
 // newImagesServer builds a minimal Server with the images dependency wired.
-func newImagesServer(images ImageLister) *Server {
+func newImagesServer(images webhookcore.ImageLister) *Server {
 	return NewServer(Config{
 		APIKey:           testAPIKey,
 		Images:           images,
@@ -46,7 +45,7 @@ func signedGet(t *testing.T, srv *Server, target string) *httptest.ResponseRecor
 }
 
 func TestImages_FiltersPerTagAndMaps(t *testing.T) {
-	srv := newImagesServer(&fakeImageLister{summaries: []executor.ImageSummary{
+	srv := newImagesServer(&fakeImageLister{summaries: []webhookcore.ImageSummary{
 		{
 			Tags:      []string{"contextmatrix-chat-worker:go-node"},
 			Digests:   []string{"contextmatrix-chat-worker@sha256:abc"},

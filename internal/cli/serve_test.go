@@ -11,11 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mhersson/contextmatrix-backendkit/logbridge"
+	protocol "github.com/mhersson/contextmatrix-protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
-	"github.com/mhersson/contextmatrix-chat/internal/logbridge"
 )
 
 // stubExecutor implements executor.Executor for unit tests. Kill records the
@@ -37,7 +38,7 @@ func (e *stubExecutor) Kill(_ context.Context, sessionID string) error {
 func TestChatExit(t *testing.T) {
 	t.Parallel()
 
-	hub := logbridge.NewHubWithDropObserver(nil)
+	hub := logbridge.NewHub(func(e protocol.LogEntry) string { return e.SessionID }, nil)
 
 	id, ch := hub.Subscribe("sess-1")
 	defer hub.Unsubscribe(id)

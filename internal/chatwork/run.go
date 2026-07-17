@@ -16,10 +16,10 @@ import (
 
 	"github.com/mhersson/contextmatrix-chat/internal/mcpbridge"
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
-	"github.com/mhersson/contextmatrix-chat/internal/tlsca"
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
+	"github.com/mhersson/contextmatrix-harness/tlsca"
 	"github.com/mhersson/contextmatrix-harness/tools"
 )
 
