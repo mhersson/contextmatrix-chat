@@ -16,7 +16,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/mhersson/contextmatrix-chat/internal/config"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
+	"github.com/mhersson/contextmatrix-chat/internal/metrics"
+	"github.com/mhersson/contextmatrix-chat/internal/webhook"
 )
 
 // stubExecutor implements executor.Executor for unit tests. Kill records the
@@ -139,4 +142,32 @@ func TestGracefulShutdown(t *testing.T) {
 
 	assert.True(t, draining.Load(), "draining flag must be set after shutdown")
 	assert.Len(t, exec.kills, 2, "Kill must be called once per tracked session")
+}
+
+func TestBuildAdminServer_DisabledWhenZero(t *testing.T) {
+	cfg := &config.ServiceConfig{AdminPort: 0}
+	srv := webhook.NewServer(webhook.Config{APIKey: "k"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	assert.Nil(t, buildAdminServer(cfg, srv, metrics.New(), logger))
+}
+
+func TestBuildAdminServer_LoopbackAddr(t *testing.T) {
+	cfg := &config.ServiceConfig{AdminPort: 9094}
+	srv := webhook.NewServer(webhook.Config{APIKey: "k"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	admin := buildAdminServer(cfg, srv, metrics.New(), logger)
+	require.NotNil(t, admin)
+	assert.Equal(t, "127.0.0.1:9094", admin.Addr, "empty bind addr defaults to loopback")
+}
+
+func TestBuildAdminServer_CustomBindAddr(t *testing.T) {
+	cfg := &config.ServiceConfig{AdminPort: 9094, AdminBindAddr: "0.0.0.0"}
+	srv := webhook.NewServer(webhook.Config{APIKey: "k"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	admin := buildAdminServer(cfg, srv, metrics.New(), logger)
+	require.NotNil(t, admin)
+	assert.Equal(t, "0.0.0.0:9094", admin.Addr)
 }
