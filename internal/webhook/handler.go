@@ -89,7 +89,13 @@ type ChatConfig struct {
 // the serve layer; the server does not take ownership of their lifecycles.
 type Config struct {
 	APIKey string
-	Skew   time.Duration
+
+	// MetricsToken is the static bearer token AdminAuth accepts on the admin
+	// /metrics route as an alternative to the signed-GET HMAC. Empty keeps
+	// the route HMAC-only.
+	MetricsToken string
+
+	Skew time.Duration
 
 	// Executor and Tracker drive the chat container lifecycle. Wired at serve
 	// startup; nil in minimal test servers that exercise infra routes only.
@@ -201,6 +207,7 @@ func NewServer(cfg Config) *Server {
 
 	coreCfg := webhookcore.CoreConfig{
 		APIKey:            cfg.APIKey,
+		MetricsToken:      cfg.MetricsToken,
 		Skew:              cfg.Skew,
 		Replay:            cfg.Replay,
 		Draining:          cfg.Draining,

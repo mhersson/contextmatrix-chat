@@ -39,6 +39,8 @@ type ServiceConfig struct {
 	APIKey                    string
 	Port                      int
 	AdminPort                 int
+	AdminBindAddr             string
+	MetricsToken              string
 	BaseImage                 string
 	ImagePullPolicy           string
 	ImageListFilters          []string
@@ -70,6 +72,8 @@ type serviceRaw struct {
 	APIKey                    string            `koanf:"api_key"`
 	Port                      int               `koanf:"port"`
 	AdminPort                 int               `koanf:"admin_port"`
+	AdminBindAddr             string            `koanf:"admin_bind_addr"`
+	MetricsToken              string            `koanf:"metrics_token"`
 	BaseImage                 string            `koanf:"base_image"`
 	ImagePullPolicy           string            `koanf:"image_pull_policy"`
 	ImageListFilters          []string          `koanf:"image_list_filters"`
@@ -95,6 +99,7 @@ type serviceRaw struct {
 func serviceDefaults() serviceRaw {
 	return serviceRaw{
 		Port:                   9093,
+		AdminBindAddr:          "127.0.0.1",
 		ImagePullPolicy:        "if-not-present",
 		MaxConcurrent:          5,
 		ContainerMemoryLimit:   8 * 1024 * 1024 * 1024, // 8 GiB
@@ -164,6 +169,8 @@ func (r serviceRaw) toConfig() *ServiceConfig {
 		APIKey:                    r.APIKey,
 		Port:                      r.Port,
 		AdminPort:                 r.AdminPort,
+		AdminBindAddr:             r.AdminBindAddr,
+		MetricsToken:              r.MetricsToken,
 		BaseImage:                 r.BaseImage,
 		ImagePullPolicy:           r.ImagePullPolicy,
 		ImageListFilters:          imageListFilters,
@@ -252,6 +259,10 @@ func (c *ServiceConfig) Validate() error {
 
 	if c.AdminPort != 0 && c.AdminPort == c.Port {
 		return fmt.Errorf("admin_port must differ from port (both set to %d)", c.Port)
+	}
+
+	if c.AdminBindAddr == "" {
+		c.AdminBindAddr = "127.0.0.1"
 	}
 
 	if c.SecretsDir == "" {
