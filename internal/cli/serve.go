@@ -90,7 +90,7 @@ func runServe(ctx context.Context, configPath string) error {
 
 	tracker := executor.NewTracker(cfg.MaxConcurrent)
 	hub := logbridge.NewHub(func(e protocol.LogEntry) string { return e.SessionID }, dropAdapter{mx: mx})
-	bridge := logbridge.NewBridge(logbridge.BridgeConfig{Hub: hub})
+	bridge := logbridge.NewBridge(logbridge.BridgeConfig{Hub: hub, SurfaceRunState: true})
 
 	// The redactor registry is the single source of truth for the log-bridge
 	// redaction set: every live session's CM-provisioned secrets (LLM key,
