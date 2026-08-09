@@ -103,7 +103,7 @@ func serviceDefaults() serviceRaw {
 		ImagePullPolicy:        "if-not-present",
 		MaxConcurrent:          5,
 		ContainerMemoryLimit:   8 * 1024 * 1024 * 1024, // 8 GiB
-		ContainerPidsLimit:     512,
+		ContainerPidsLimit:     2048,
 		SecretsDir:             defaultSecretsDir,
 		ReplaySkewSeconds:      330,
 		ReplayCacheSize:        10000,
