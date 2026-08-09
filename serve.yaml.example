@@ -99,9 +99,10 @@ max_concurrent: 5
 # CMX_CONTAINER_MEMORY_LIMIT
 container_memory_limit: 8589934592
 
-# Maximum container PID count. Default: 512.
+# Maximum container PID count (cgroup pids limit - threads count too, so a
+# parallel test suite on a many-core host needs headroom). Default: 2048.
 # CMX_CONTAINER_PIDS_LIMIT
-container_pids_limit: 512
+container_pids_limit: 2048
 
 # Host directory the service uses for its working state - today only the
 # task-skills clone cache (<secrets_dir>/task-skills-cache). Credentials are

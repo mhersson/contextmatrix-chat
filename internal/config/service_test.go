@@ -47,7 +47,7 @@ func TestServiceDefaults(t *testing.T) {
 	assert.Equal(t, "if-not-present", cfg.ImagePullPolicy)
 	assert.Equal(t, 5, cfg.MaxConcurrent)
 	assert.Equal(t, int64(8*1024*1024*1024), cfg.ContainerMemoryBytes)
-	assert.Equal(t, int64(512), cfg.ContainerPidsLimit)
+	assert.Equal(t, int64(2048), cfg.ContainerPidsLimit)
 	assert.Equal(t, "/var/run/cm-chat/secrets", cfg.SecretsDir)
 	assert.Equal(t, 330*time.Second, cfg.ReplaySkew)
 	assert.Equal(t, 10000, cfg.ReplayCacheSize)
