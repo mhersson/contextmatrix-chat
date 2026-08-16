@@ -4,11 +4,11 @@ go 1.26.5
 
 require (
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/knadh/koanf/parsers/yaml v1.1.0
+	github.com/knadh/koanf/parsers/yaml v1.1.1
 	github.com/knadh/koanf/providers/env v1.1.0
 	github.com/knadh/koanf/providers/file v1.2.1
-	github.com/knadh/koanf/providers/structs v1.0.0
-	github.com/knadh/koanf/v2 v2.3.5
+	github.com/knadh/koanf/providers/structs v1.0.1
+	github.com/knadh/koanf/v2 v2.3.6
 	github.com/mhersson/contextmatrix-backendkit v0.3.0
 	github.com/mhersson/contextmatrix-harness v0.14.0
 	github.com/mhersson/contextmatrix-protocol v0.15.0
