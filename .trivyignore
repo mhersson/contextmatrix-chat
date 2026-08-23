@@ -61,3 +61,37 @@ CVE-2025-47273
 # own dependency pins; clears when a golangci-lint release requires x/text
 # >= v0.39.0.
 CVE-2026-56852
+
+# --- util-linux 2.41-5 in the debian:trixie-slim base (bsdutils, libblkid1,
+# libmount1, libsmartcols1, libuuid1, mount, util-linux and friends); the fix
+# is 2.41.5-0+deb13u1. All four are in the SUID mount(8) program (TOCTOU and an
+# integer overflow) - the worker never invokes mount and runs as the
+# unprivileged user. The newest debian:trixie-slim tag (2026-08-05) still ships
+# 2.41-5, so no digest refresh clears this yet - clears when a trixie-slim
+# digest carries deb13u1.
+CVE-2026-53612
+CVE-2026-53613
+CVE-2026-53614
+CVE-2026-53615
+
+# --- golang.org/x/mod inside the gh (v0.38.0), gofumpt (v0.38.0) and
+# golangci-lint (v0.35.0) binaries; the fix is v0.40.0. Both CVEs are
+# sumdb-related module-content forgery (CVE-2026-56864: malicious GOSUMDB
+# serves arbitrary module content; CVE-2026-56865: malicious GOPROXY forges
+# up to two sumdb entries). These tools run repo-controlled code that can
+# already execute arbitrary bash, so they add no marginal attack surface. The
+# latest releases (gh v2.97.0, gofumpt v0.11.0, golangci-lint v2.12.2) pin the
+# affected versions and `go install pkg@version` cannot raise a module's own
+# dependency pins - clears when those releases require x/mod >= v0.40.0. Same
+# entries as contextmatrix-agent.
+CVE-2026-56864
+CVE-2026-56865
+
+# --- The bundled npm CLI ships tar 7.5.19
+# (/usr/lib/node_modules/npm/node_modules/tar); the fix is 7.5.21. DoS via a
+# crafted long-path tar archive - inside the npm CLI the only archives tar
+# reads are registry tarballs npm fetches itself on the single-tenant worker.
+# npm's own transitive dependency: 11.19.0 (the newest npm that supports
+# Node 25) and 12.0.2 both still bundle 7.5.19 - clears when an npm release
+# pulls in >= 7.5.21.
+CVE-2026-73566
