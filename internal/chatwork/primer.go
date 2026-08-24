@@ -2,6 +2,7 @@ package chatwork
 
 import (
 	_ "embed"
+	"strings"
 )
 
 // chatSystemPrompt is injected as the system turn for every chat session. It
@@ -19,3 +20,11 @@ board state when the human asks. Be concise and precise.`
 //
 //go:embed primer.md
 var chatPrimer string
+
+// renderPrimer substitutes the {{SESSION_ID}} placeholder in the embedded
+// primer with the given sessionID. Uses a single ReplaceAll call instead of
+// text/template to avoid a parse-and-execute error path in the epoch hot
+// path.
+func renderPrimer(sessionID string) string {
+	return strings.ReplaceAll(chatPrimer, "{{SESSION_ID}}", sessionID)
+}
