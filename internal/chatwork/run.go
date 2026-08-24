@@ -131,7 +131,15 @@ func Run(ctx context.Context) error {
 
 	defer func() { _ = bridge.Close() }()
 
-	// 6. History: seed from a prior session when CM_CHAT_RESUME == "1".
+	// 6. Session ID is provisioned by the host as container env, always
+	// set for a launched session. Read it now for primer interpolation; a
+	// blank value means a local or misconfigured run and is worth surfacing.
+	sessionID := os.Getenv("CM_CHAT_SESSION")
+	if sessionID == "" {
+		slog.Warn("CM_CHAT_SESSION is empty; session_id will be blank in the primer")
+	}
+
+	// 7. History: seed from a prior session when CM_CHAT_RESUME == "1".
 	var history []llm.Message
 
 	if os.Getenv("CM_CHAT_RESUME") == "1" {
@@ -143,7 +151,7 @@ func Run(ctx context.Context) error {
 		}
 	}
 
-	// 7. Redactor: mask the secrets from all tool output and event data. Backed
+	// 8. Redactor: mask the secrets from all tool output and event data. Backed
 	// by a watcher so a fresh per-repo git token the credential-helper/
 	// gh-wrapper subcommands fetch mid-session (see fetchedTokensPath) is
 	// picked up without restarting the worker.
@@ -151,12 +159,12 @@ func Run(ctx context.Context) error {
 
 	go redWatcher.watch(ctx)
 
-	// 8. Compaction and tool-output config from env, with documented defaults.
+	// 9. Compaction and tool-output config from env, with documented defaults.
 	threshold := envFloatDefault("CMX_COMPACTION_THRESHOLD", defaultCompactionThreshold)
 	keepRecent := envIntDefault("CMX_COMPACTION_KEEP_RECENT_TURNS", defaultKeepRecentTurns)
 	toolOutputMaxBytes := envIntDefault("CMX_TOOL_OUTPUT_MAX_BYTES", 131072)
 
-	// 9. Inbox: channel-backed; Pump reads stdin frames in a goroutine and
+	// 10. Inbox: channel-backed; Pump reads stdin frames in a goroutine and
 	// closes the inbox on EOF so harness.Run exits when the host closes stdin.
 	// clearCh carries /clear signals from the frame reader to the epoch loop.
 	in := newChatInbox()
@@ -164,16 +172,16 @@ func Run(ctx context.Context) error {
 	clearCh := make(chan struct{}, 1)
 	go in.Pump(os.Stdin, clearCh)
 
-	// 10. Emitter: board tool_call lines are filtered from the transcript
+	// 11. Emitter: board tool_call lines are filtered from the transcript
 	// (noise reduction - the MCP bridge tools, named mcp__*). All other events
 	// reach stdout for the serve-side log bridge.
 	filteredWriter := newBoardFilterWriter(os.Stdout, bridge.BoardToolNames())
 	emit := events.NewEmitter(io.Discard, filteredWriter)
 
-	// 11. Epoch loop: one harness.Run per epoch; /clear resets history and
-	// restarts with the embedded primer as the new task. Every epoch's first
-	// user turn is the primer (chatPrimer, embedded next to the environment it
-	// describes) - the host sends only /clear, never orientation text.
+	// 12. Epoch loop: one harness.Run per epoch; /clear resets history and
+	// restarts with the rendered primer as the new task. Every epoch's first
+	// user turn is the rendered primer - the host sends only /clear, never
+	// orientation text.
 	cfg := harness.Config{
 		Model:              model,
 		ContextWindow:      ctxWindow,
@@ -220,15 +228,17 @@ func Run(ctx context.Context) error {
 		return wasCleared, nil
 	}
 
-	return epochLoop(ctx, clearCh, in, &cfg, chatPrimer, run)
+	return epochLoop(ctx, clearCh, in, &cfg, renderPrimer(sessionID), run)
 }
 
 // epochLoop drives the per-epoch harness.Run lifecycle. run is called once per
 // epoch; if it returns cleared=true the epoch was cut short by a /clear frame,
 // History is reset to nil, and the next epoch re-orients itself with the
-// embedded primer as its task. The loop exits when run returns cleared=false
-// (done or error) or when the inbox is closed with nothing queued at the epoch
-// boundary (stdin gone: nobody would drive a fresh epoch).
+// rendered primer as its task (captured at the call site so the post-/clear
+// re-arm uses the same rendered version, not the raw embed). The loop exits
+// when run returns cleared=false (done or error) or when the inbox is closed
+// with nothing queued at the epoch boundary (stdin gone: nobody would drive a
+// fresh epoch).
 func epochLoop(
 	ctx context.Context,
 	clearCh <-chan struct{},
@@ -237,6 +247,8 @@ func epochLoop(
 	task string,
 	run func(context.Context, string) (bool, error),
 ) error {
+	primer := task // capture the rendered primer for post-/clear re-arm
+
 	for {
 		cleared, err := run(ctx, task)
 		if !cleared {
@@ -253,7 +265,7 @@ func epochLoop(
 			return nil
 		}
 
-		task = chatPrimer
+		task = primer
 
 		// drain any stale clear signal that arrived between epochs
 		select {

@@ -69,7 +69,7 @@ func TestClearSelfSeedsNextEpochPrimer(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tasks, 2)
 	assert.Equal(t, "initial task", tasks[0])
-	assert.Equal(t, chatPrimer, tasks[1], "the next epoch re-orients from the embedded primer")
+	assert.Equal(t, "initial task", tasks[1], "the next epoch re-orients from the same primer passed as the initial task")
 	assert.Nil(t, secondHistory)
 
 	// The post-clear user message was not consumed as the task: it is released
@@ -77,6 +77,35 @@ func TestClearSelfSeedsNextEpochPrimer(t *testing.T) {
 	msgs := inbox.Drain()
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "follow-up", msgs[0].Content)
+}
+
+// TestEpochLoopPrimerRendered verifies that when a session ID is set, the
+// epoch task carries that session ID and the post-/clear epoch task does too.
+func TestEpochLoopPrimerRendered(t *testing.T) {
+	t.Parallel()
+
+	cfg := &harness.Config{}
+
+	sessionID := "sesstest-123"
+	rendered := renderPrimer(sessionID)
+
+	epoch := 0
+	tasks := make([]string, 0, 2)
+
+	run := func(_ context.Context, task string) (bool, error) {
+		epoch++
+
+		tasks = append(tasks, task)
+
+		return epoch == 1, nil
+	}
+
+	err := epochLoop(context.Background(), make(chan struct{}, 1), newChatInbox(), cfg, rendered, run)
+	require.NoError(t, err)
+	require.Len(t, tasks, 2)
+	assert.Contains(t, tasks[0], sessionID, "initial epoch task must contain the session id")
+	assert.Contains(t, tasks[1], sessionID, "post-/clear epoch task must contain the session id")
+	assert.NotContains(t, tasks[1], "{{SESSION_ID}}", "rendered primer must have no placeholder tokens")
 }
 
 // TestEpochLoop_NaturalDone verifies that a run returning done (not cleared)
