@@ -150,11 +150,6 @@ make test      # go test ./...  (also: make test-race)
 make lint      # golangci-lint run
 ```
 
-Never run `go fix ./...` here: a Go toolchain newer than go.mod rewrites
-idioms (errors.AsType, WaitGroup.Go, strings.SplitSeq) that the module's
-declared version cannot build in CI. Adopting new idioms is a deliberate,
-separate change: bump go.mod first, then run go fix as its own commit.
-
 Also confirm `gofumpt -l .` is empty. Executor tests needing a real Docker
 daemon are gated by `CMX_TEST_DOCKER` and skip when it is unset.
 
