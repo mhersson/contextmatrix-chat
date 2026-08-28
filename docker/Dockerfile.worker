@@ -273,11 +273,16 @@ COPY --chmod=0777 --from=rust-toolchain /home/user/.rustup /home/user/.rustup
 COPY --chmod=0777 --from=rust-toolchain /home/user/.cargo /home/user/.cargo
 
 COPY --from=build /out/contextmatrix-chat /usr/local/bin/contextmatrix-chat
-# Create /workspace (the chat work loop's sandbox root) and hand it to
-# UID 1000 before switching to the unprivileged user.
+# Create /workspace (the chat work loop's sandbox root) and set explicit
+# ownership on /home/user and the two Rust toolchain roots before switching to
+# the unprivileged user: --chmod on the COPY above reaches the files walked out
+# of the source stage, but not reliably the destination directories it creates
+# or the /home/user parent implied by them, so those are stated here rather
+# than left to propagate from the copy.
 RUN useradd -m -u 1000 -s /bin/bash user \
     && mkdir -p /workspace \
-    && chown 1000:1000 /workspace
+    && chown 1000:1000 /workspace /home/user /home/user/.rustup /home/user/.cargo \
+    && chmod 0755 /home/user /home/user/.rustup /home/user/.cargo
 USER 1000:1000
 WORKDIR /home/user
 HEALTHCHECK NONE
