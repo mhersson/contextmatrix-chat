@@ -10,6 +10,8 @@ import (
 )
 
 func TestDefaultsYAML(t *testing.T) {
+	clearServiceEnv(t)
+
 	out, err := DefaultsYAML()
 	require.NoError(t, err)
 
