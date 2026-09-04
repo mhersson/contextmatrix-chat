@@ -1,6 +1,6 @@
 module github.com/mhersson/contextmatrix-chat
 
-go 1.26.7
+go 1.26.8
 
 require (
 	github.com/docker/docker v28.5.2+incompatible
