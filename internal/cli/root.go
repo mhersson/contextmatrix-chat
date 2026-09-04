@@ -14,6 +14,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newWorkCmd())
 	root.AddCommand(newGitCredentialCmd())
 	root.AddCommand(newGHWrapperCmd())
+	root.AddCommand(newConfigCmd())
 
 	return root
 }
