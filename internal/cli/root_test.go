@@ -23,4 +23,5 @@ func TestNewRootCmd(t *testing.T) {
 	assert.True(t, names["work"], "expected work subcommand")
 	assert.True(t, names["git-credential"], "expected git-credential subcommand")
 	assert.True(t, names["gh-wrapper"], "expected gh-wrapper subcommand")
+	assert.True(t, names["config"], "expected config subcommand")
 }

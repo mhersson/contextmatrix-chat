@@ -174,10 +174,12 @@ worker images (full + variants), pin the new full-image digest into
 
 ## Commands
 
-| Command | Purpose                                                                              |
-| ------- | ------------------------------------------------------------------------------------ |
-| `serve` | Run the chat backend: host ContextMatrix chat sessions and launch worker containers. |
-| `work`  | Container entrypoint (hidden): run one interactive chat session.                     |
+| Command                                   | Purpose                                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `serve`                                   | Run the chat backend: host ContextMatrix chat sessions and launch worker containers. |
+| `work`                                    | Container entrypoint (hidden): run one interactive chat session.                     |
+| `contextmatrix-chat config defaults`      | Print the complete default service config as YAML (schema for contextmatrix-setup)   |
+| `contextmatrix-chat config validate FILE` | Load `FILE` as `serve` would; exit 1 on the first error                              |
 
 ## Configuration
 
