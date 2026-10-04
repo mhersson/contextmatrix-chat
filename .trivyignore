@@ -3,95 +3,31 @@
 # bare CVE id on its own line is what actively suppresses it. Review on each
 # worker-image bump and delete entries whose fix has shipped.
 
-# CVE-2026-34040 - Docker SDK Moby daemon authz-bypass (v29.3.1 fixes);
-# the chat service uses the Docker *client* only, against a trusted local
-# daemon; govulncheck reports no finding. v28->v29 major bump pending
-# Dependabot review.
-CVE-2026-34040
-
-# --- The apt-installed GitHub CLI (/usr/bin/gh, latest release v2.97.0) is a
-# prebuilt upstream binary compiled with Go 1.26.5; these are stdlib and
-# vendored x/net findings in that embedded toolchain, fixed in Go 1.26.6.
-# Everything this repo compiles is already on 1.26.8 (builder image, in-image
-# toolchain, chat binary - all scan clean); only GitHub's release pipeline can
-# rebuild gh. Inside the worker container repo-controlled code already executes
-# arbitrary bash, so these DoS/parsing issues add no marginal attack surface.
-# Clears when apt pulls a gh release built on Go >= 1.26.6. (The previous entry
-# here, CVE-2026-39822 against a Go 1.26.4 gh, cleared when v2.97.0 shipped.)
-CVE-2026-33818
-CVE-2026-39821
-CVE-2026-46600
-CVE-2026-56853
-CVE-2026-56858
-CVE-2026-56859
-CVE-2026-56860
-CVE-2026-56862
-
-# CVE-2026-14257 / CVE-2026-69152 - npm-bundled brace-expansion 5.0.7 DoS via
-# glob brace expansion (5.0.8 and 5.0.9 fix); the single-tenant worker only
-# expands globs npm generates itself. npm 11.19.0 (the newest npm that
-# supports Node 25) still bundles 5.0.7; clears when an npm upgrade pulls in
-# >= 5.0.9.
-CVE-2026-14257
-CVE-2026-69152
-
-# CVE-2026-69192 - npm-bundled ip-address 10.2.0 SSRF-shaped parse
-# inconsistency (10.3.1 fixes), on npm's socks-proxy path which the worker
-# does not configure. npm 11.19.0 still bundles 10.2.0; clears when an npm
-# upgrade pulls in >= 10.3.1.
-CVE-2026-69192
+# --- The bundled npm CLI (/usr/lib/node_modules/npm/node_modules) ships
+# brace-expansion 5.0.9 and undici 6.28.0. CVE-2026-102276 / CVE-2026-102278
+# are brace-expansion DoS via crafted brace patterns (5.0.11 fixes); the
+# single-tenant worker only expands globs npm generates itself.
+# CVE-2026-19534 is an undici DoS via an unrequested WebSocket subprotocol
+# (6.28.1 fixes); npm never opens WebSockets. npm 12.2.0, the latest release,
+# still bundles both - clears when an npm release pulls in the fixed versions.
+CVE-2026-102276
+CVE-2026-102278
+CVE-2026-19534
 
 # --- The uv-managed CPython (/opt/python) bundles pip, whose _vendor tree pins
-# msgpack==1.1.2 and setuptools==70.3.0 (pip/_vendor/vendor.txt - Trivy reads
-# the pins as installed packages). GHSA-6v7p-g79w-8964 (msgpack Unpacker-reuse
-# out-of-bounds read, fixed in 1.2.1) touches only pip's deserialization of its
-# own local HTTP cache. CVE-2025-47273 (setuptools PackageIndex path traversal,
-# fixed in 78.1.1) lives in package_index.py, which pip's vendored copy does not
-# ship - only the pkg_resources subset of setuptools is vendored. The pins
-# cannot be raised independently of pip, and the latest pip (26.2) still carries
-# both - clears when a pip release re-vendors msgpack >= 1.2.1 and setuptools
-# >= 78.1.1.
+# msgpack==1.1.2, setuptools==70.3.0 and urllib3==2.7.0 (pip/_vendor/vendor.txt
+# - Trivy reads the pins as installed packages). GHSA-6v7p-g79w-8964 (msgpack
+# Unpacker-reuse out-of-bounds read, fixed in 1.2.1) touches only pip's
+# deserialization of its own local HTTP cache. CVE-2025-47273 (setuptools
+# PackageIndex path traversal, fixed in 78.1.1) lives in package_index.py,
+# which pip's vendored copy does not ship - only the pkg_resources subset of
+# setuptools is vendored. CVE-2026-97687 (HTTPS-proxy TLS configuration
+# override) and CVE-2026-97689 (chunk-parser memory DoS), both fixed in urllib3
+# 2.8.0, reach only pip's own index traffic; the worker configures no proxy.
+# The pins cannot be raised independently of pip, and the latest pip (26.2.1)
+# still carries all three - clears when a pip release re-vendors msgpack
+# >= 1.2.1, setuptools >= 78.1.1 and urllib3 >= 2.8.0.
 GHSA-6v7p-g79w-8964
 CVE-2025-47273
-
-# CVE-2026-56852 - golang.org/x/text v0.36.0 inside the golangci-lint binary:
-# DoS on invalid UTF-8 input to a lint binary running repo-controlled code
-# that can already execute arbitrary bash. The latest golangci-lint release
-# (v2.12.2) pins v0.36.0 and `go install pkg@version` cannot raise a module's
-# own dependency pins; clears when a golangci-lint release requires x/text
-# >= v0.39.0.
-CVE-2026-56852
-
-# --- util-linux 2.41-5 in the debian:trixie-slim base (bsdutils, libblkid1,
-# libmount1, libsmartcols1, libuuid1, mount, util-linux and friends); the fix
-# is 2.41.5-0+deb13u1. All four are in the SUID mount(8) program (TOCTOU and an
-# integer overflow) - the worker never invokes mount and runs as the
-# unprivileged user. The newest debian:trixie-slim tag (2026-08-05) still ships
-# 2.41-5, so no digest refresh clears this yet - clears when a trixie-slim
-# digest carries deb13u1.
-CVE-2026-53612
-CVE-2026-53613
-CVE-2026-53614
-CVE-2026-53615
-
-# --- golang.org/x/mod inside the gh (v0.38.0), gofumpt (v0.38.0) and
-# golangci-lint (v0.35.0) binaries; the fix is v0.40.0. Both CVEs are
-# sumdb-related module-content forgery (CVE-2026-56864: malicious GOSUMDB
-# serves arbitrary module content; CVE-2026-56865: malicious GOPROXY forges
-# up to two sumdb entries). These tools run repo-controlled code that can
-# already execute arbitrary bash, so they add no marginal attack surface. The
-# latest releases (gh v2.97.0, gofumpt v0.11.0, golangci-lint v2.12.2) pin the
-# affected versions and `go install pkg@version` cannot raise a module's own
-# dependency pins - clears when those releases require x/mod >= v0.40.0. Same
-# entries as contextmatrix-agent.
-CVE-2026-56864
-CVE-2026-56865
-
-# --- The bundled npm CLI ships tar 7.5.19
-# (/usr/lib/node_modules/npm/node_modules/tar); the fix is 7.5.21. DoS via a
-# crafted long-path tar archive - inside the npm CLI the only archives tar
-# reads are registry tarballs npm fetches itself on the single-tenant worker.
-# npm's own transitive dependency: 11.19.0 (the newest npm that supports
-# Node 25) and 12.0.2 both still bundle 7.5.19 - clears when an npm release
-# pulls in >= 7.5.21.
-CVE-2026-73566
+CVE-2026-97687
+CVE-2026-97689

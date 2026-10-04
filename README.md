@@ -73,7 +73,7 @@ free of any `contextmatrix-*` dependency.
 
 ## Requirements
 
-- Go 1.26+ to build.
+- Go 1.27+ to build.
 - Docker on the host running `serve` (it launches worker containers).
 - A reachable ContextMatrix instance (REST API + MCP endpoint). ContextMatrix
   provisions the per-session model, MCP API key, LLM endpoint, and git

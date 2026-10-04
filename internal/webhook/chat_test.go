@@ -477,7 +477,7 @@ func TestChatStart_HappyPath(t *testing.T) {
 	assert.True(t, strings.HasSuffix(runDirBind, ":/run/cm-chat:ro"))
 
 	// Extract the host run dir from the bind to verify files.
-	hostRunDir := strings.SplitN(runDirBind, ":", 2)[0]
+	hostRunDir, _, _ := strings.Cut(runDirBind, ":")
 
 	// resume.jsonl must have one line per turn.
 	resumeBytes, err := os.ReadFile(filepath.Join(hostRunDir, "resume.jsonl"))
@@ -532,7 +532,7 @@ func TestChatStart_NoResumeNoResumeFile(t *testing.T) {
 		}
 	}
 
-	hostRunDir := strings.SplitN(runDirBind, ":", 2)[0]
+	hostRunDir, _, _ := strings.Cut(runDirBind, ":")
 	_, err := os.Stat(filepath.Join(hostRunDir, "resume.jsonl"))
 	assert.True(t, os.IsNotExist(err), "resume.jsonl should not exist when Resume is nil")
 }
