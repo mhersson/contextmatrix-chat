@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -139,10 +139,10 @@ func TestIntegration_LaunchEchoAndExit(t *testing.T) {
 	require.True(t, ok, "run must be tracked after launch")
 
 	// Inspect: the container must carry the session labels.
-	info, err := exec.docker.ContainerInspect(ctx, run.ContainerID)
+	info, err := exec.docker.ContainerInspect(ctx, run.ContainerID, client.ContainerInspectOptions{})
 	require.NoError(t, err)
-	assert.Equal(t, "true", info.Config.Labels[labelChat])
-	assert.Equal(t, sessionID, info.Config.Labels[labelSession])
+	assert.Equal(t, "true", info.Container.Config.Labels[labelChat])
+	assert.Equal(t, sessionID, info.Container.Config.Labels[labelSession])
 
 	// Drive stdin: the container reads one line, echoes it, then exits 0.
 	_, err = run.Stdin.Write([]byte("hello\n"))
@@ -198,7 +198,7 @@ func TestIntegration_LaunchEchoAndExit(t *testing.T) {
 		return exec.tracker.Count() == 0
 	}, 5*time.Second, 50*time.Millisecond)
 
-	_, err = exec.docker.ContainerInspect(ctx, run.ContainerID)
+	_, err = exec.docker.ContainerInspect(ctx, run.ContainerID, client.ContainerInspectOptions{})
 	assert.Error(t, err, "container must be removed after exit")
 }
 
@@ -243,7 +243,9 @@ func TestIntegration_LongLivedContainerNotIdleReaped(t *testing.T) {
 	// Clean up: kill it explicitly so the test leaves no containers behind.
 	run, ok := exec.tracker.Get(sessionID)
 	require.True(t, ok)
-	require.NoError(t, exec.docker.ContainerKill(ctx, run.ContainerID, "SIGKILL"))
+
+	_, err := exec.docker.ContainerKill(ctx, run.ContainerID, client.ContainerKillOptions{Signal: "SIGKILL"})
+	require.NoError(t, err)
 
 	code := exits.wait(t, 10*time.Second)
 	assert.Equal(t, int64(137), code, "SIGKILL surfaces 137 via the wait path")
@@ -285,10 +287,10 @@ func TestIntegration_KillAndCleanupOrphans(t *testing.T) {
 	// CleanupOrphans is a no-op now (nothing labeled remains) but must not error.
 	require.NoError(t, exec.CleanupOrphans(ctx))
 
-	left, err := exec.docker.ContainerList(ctx, container.ListOptions{All: true})
+	left, err := exec.docker.ContainerList(ctx, client.ContainerListOptions{All: true})
 	require.NoError(t, err)
 
-	for _, c := range left {
+	for _, c := range left.Items {
 		assert.NotEqual(t, "true", c.Labels[labelChat], "no chat container should remain")
 	}
 }

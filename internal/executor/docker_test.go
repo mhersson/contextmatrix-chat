@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/docker/docker/api/types/image"
 	"github.com/mhersson/contextmatrix-backendkit/webhookcore"
+	"github.com/moby/moby/api/types/image"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -69,7 +69,7 @@ func TestContainerConfig_HostConfigResourcesAndHardening(t *testing.T) {
 	require.NotNil(t, host.Init)
 	assert.True(t, *host.Init, "docker-init must be PID 1 so orphaned children are reaped")
 
-	assert.Equal(t, []string{"ALL"}, []string(host.CapDrop))
+	assert.Equal(t, []string{"ALL"}, host.CapDrop)
 	assert.Equal(t, []string{"no-new-privileges"}, host.SecurityOpt)
 	assert.Equal(t, binds, host.Binds)
 }
