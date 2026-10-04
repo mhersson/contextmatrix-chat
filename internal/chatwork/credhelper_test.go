@@ -110,10 +110,10 @@ func TestGitCredentialGet_Success(t *testing.T) {
 }
 
 func TestGitCredentialGet_RetriesOn409ThenSucceeds(t *testing.T) {
-	var attempts int32
+	var attempts atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		n := atomic.AddInt32(&attempts, 1)
+		n := attempts.Add(1)
 		if n < 3 {
 			w.WriteHeader(http.StatusConflict)
 
@@ -133,15 +133,15 @@ func TestGitCredentialGet_RetriesOn409ThenSucceeds(t *testing.T) {
 
 	err := gitCredentialGetWithClient(context.Background(), stdin, &stdout, client, nil)
 	require.NoError(t, err)
-	assert.Equal(t, int32(3), atomic.LoadInt32(&attempts), "the 409-not-yet-live retry must be bounded, not unbounded")
+	assert.Equal(t, int32(3), attempts.Load(), "the 409-not-yet-live retry must be bounded, not unbounded")
 	assert.Contains(t, stdout.String(), "password=ghs_afterretry")
 }
 
 func TestGitCredentialGet_FailsAfterMaxRetriesOn409(t *testing.T) {
-	var attempts int32
+	var attempts atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&attempts, 1)
+		attempts.Add(1)
 		w.WriteHeader(http.StatusConflict)
 	}))
 	defer srv.Close()
@@ -155,15 +155,15 @@ func TestGitCredentialGet_FailsAfterMaxRetriesOn409(t *testing.T) {
 
 	err := gitCredentialGetWithClient(context.Background(), stdin, &stdout, client, nil)
 	require.Error(t, err)
-	assert.Equal(t, int32(client.maxAttempts), atomic.LoadInt32(&attempts))
+	assert.Equal(t, int32(client.maxAttempts), attempts.Load())
 	assert.Empty(t, stdout.String(), "no stdout on failure - git surfaces its own auth error")
 }
 
 func TestGitCredentialGet_NonRetryableErrorFailsImmediately(t *testing.T) {
-	var attempts int32
+	var attempts atomic.Int32
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&attempts, 1)
+		attempts.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
@@ -177,7 +177,7 @@ func TestGitCredentialGet_NonRetryableErrorFailsImmediately(t *testing.T) {
 
 	err := gitCredentialGetWithClient(context.Background(), stdin, &stdout, client, nil)
 	require.Error(t, err)
-	assert.Equal(t, int32(1), atomic.LoadInt32(&attempts), "a non-409 error must not be retried")
+	assert.Equal(t, int32(1), attempts.Load(), "a non-409 error must not be retried")
 	assert.Empty(t, stdout.String())
 }
 

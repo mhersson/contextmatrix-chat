@@ -128,12 +128,10 @@ func containerConfig(spec LaunchSpec) (*container.Config, *container.HostConfig)
 		// children, and zombies count against the pids cgroup - without a
 		// reaper one abandoned subprocess tree pins the container at its
 		// pids limit and every later fork fails.
-		Init: &initProcess,
-		Resources: container.Resources{
-			Memory:    spec.MemoryBytes,
-			PidsLimit: &pidsLimit,
-		},
-		Binds: spec.Binds,
+		Init:      &initProcess,
+		Memory:    spec.MemoryBytes,
+		PidsLimit: &pidsLimit,
+		Binds:     spec.Binds,
 	}
 
 	return cfg, host

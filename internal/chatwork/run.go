@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -353,9 +354,9 @@ func dirFromURL(u string) string {
 	u = strings.TrimSuffix(u, ".git")
 	parts := strings.Split(u, "/")
 
-	for i := len(parts) - 1; i >= 0; i-- {
-		if parts[i] != "" {
-			return parts[i]
+	for _, part := range slices.Backward(parts) {
+		if part != "" {
+			return part
 		}
 	}
 
