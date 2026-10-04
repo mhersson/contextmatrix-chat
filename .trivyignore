@@ -31,11 +31,3 @@ GHSA-6v7p-g79w-8964
 CVE-2025-47273
 CVE-2026-97687
 CVE-2026-97689
-
-# CVE-2026-103111 - libpcre2-8-0 10.46-1~deb13u2 in the debian:trixie-slim
-# base; the fix is 10.46-1~deb13u3. Out-of-bounds write on a crafted regular
-# expression - inside the worker, repo-controlled code already executes
-# arbitrary bash, so a malicious pattern adds no marginal attack surface. The
-# newest debian:trixie-slim digest (2026-10-04) still ships deb13u2 - clears
-# when a trixie-slim digest carries deb13u3.
-CVE-2026-103111
