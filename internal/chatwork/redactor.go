@@ -45,7 +45,7 @@ type redactorWatcher struct {
 
 // newRedactorWatcher builds the initial redactor. mcpKey, llmKey, and
 // gitCredentialsToken are captured once - CM_MCP_API_KEY, LLM_API_KEY, and
-// CM_GIT_CREDENTIALS_TOKEN are static per-session values delivered via
+// CM_GIT_CREDENTIALS_TOKEN are static values delivered via per-session
 // container env. fetchedPath, when non-empty, is polled for worker-fetched
 // git tokens (see fetchedTokensPath) - a missing or unreadable fetchedPath is
 // not an error, just "nothing fetched yet".

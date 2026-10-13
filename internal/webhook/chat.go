@@ -120,12 +120,12 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	env := []string{
 		"CM_CHAT_SESSION=" + p.SessionID,
 		"CM_MCP_URL=" + s.mcpURL,
-		// CM_MCP_API_KEY is per-session and delivered via container env as a
-		// documented tradeoff: the value is visible to docker inspect and
-		// /proc/<pid>/environ. Moving it off env would require a per-session
-		// read-only secrets file the worker reads from disk. Registered with
-		// the host-side log-bridge redactor below like the other per-session
-		// secrets.
+		// CM_MCP_API_KEY is ContextMatrix's instance-wide MCP key (not a
+		// per-session one), delivered via container env as a documented
+		// tradeoff: visible to docker inspect and /proc/<pid>/environ, so
+		// exposure is not limited to one session. Moving it off env would
+		// require a read-only secrets file the worker reads from disk.
+		// Registered per session with the host-side log-bridge redactor below.
 		"CM_MCP_API_KEY=" + p.MCPAPIKey,
 		"CM_MODEL=" + p.Model,
 		"CMX_TOOL_OUTPUT_MAX_BYTES=" + strconv.Itoa(s.toolOutputMaxBytes),

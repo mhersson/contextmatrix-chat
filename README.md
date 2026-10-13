@@ -32,8 +32,9 @@ the task backend. It talks to ContextMatrix over four channels:
 - **Image inventory** (CM → chat) - HMAC-signed `GET /images` backing
   ContextMatrix's worker-image settings dropdown.
 
-The model and the per-session MCP key are chosen by ContextMatrix and arrive in
-the chat-start payload - the chat backend does not select models.
+The model is chosen per session by ContextMatrix, and ContextMatrix's
+instance-wide MCP API key rides along; both arrive in the chat-start payload -
+the chat backend does not select models.
 
 ## Architecture
 
@@ -76,8 +77,8 @@ free of any `contextmatrix-*` dependency.
 - Go 1.27+ to build.
 - Docker on the host running `serve` (it launches worker containers).
 - A reachable ContextMatrix instance (REST API + MCP endpoint). ContextMatrix
-  provisions the per-session model, MCP API key, LLM endpoint, and git
-  credentials in the chat-start payload - git credentials are then fetched
+  provisions the per-session model, LLM endpoint, and git credentials, plus its
+  instance-wide MCP API key, in the chat-start payload - git credentials are then fetched
   fresh per repo, per operation, from CM's worker git-credentials endpoint,
   not staged upfront. There is no local credential fallback.
 - A shared HMAC secret (at least 32 characters), configured on both this service

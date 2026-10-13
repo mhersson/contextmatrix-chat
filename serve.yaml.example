@@ -35,9 +35,9 @@ contextmatrix_url: http://localhost:8080
 # CMX_API_KEY
 api_key: ""
 
-# Note: the per-session MCP API key and the model are NOT configured here -
-# ContextMatrix supplies both in the chat-start payload (forwarded to the
-# worker as CM_MCP_API_KEY and CM_MODEL).
+# Note: ContextMatrix's instance-wide MCP API key and the per-session model are
+# NOT configured here - ContextMatrix supplies both in the chat-start payload
+# (forwarded to the worker as CM_MCP_API_KEY and CM_MODEL).
 
 # --- Serving ------------------------------------------------------------------
 
