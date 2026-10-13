@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,6 +69,21 @@ func defaultServeConfigPath() string {
 	return filepath.Join(dir, "contextmatrix-chat", "serve.yaml")
 }
 
+// workerUID is the container user the worker runs as (see executor).
+const workerUID = 1000
+
+// warnIfNotWorkerUID warns when serve's host UID differs from the worker's:
+// the 0700/0600 secrets bind mount is owned by serve's UID and the worker
+// cannot read it otherwise. goos and uid are parameters so tests can drive it.
+func warnIfNotWorkerUID(logger *slog.Logger, goos string, uid int) {
+	if goos != "linux" || uid == workerUID {
+		return
+	}
+
+	logger.Warn("serve is not running as host UID 1000; workers run as container UID 1000 and may be unable to read the session secrets mount (see README)",
+		"uid", uid)
+}
+
 func runServe(ctx context.Context, configPath string) error {
 	cfg, err := config.LoadService(configPath)
 	if err != nil {
@@ -80,6 +96,8 @@ func runServe(ctx context.Context, configPath string) error {
 
 	logger := newServeLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
+
+	warnIfNotWorkerUID(logger, runtime.GOOS, os.Getuid())
 
 	mx := metrics.New()
 

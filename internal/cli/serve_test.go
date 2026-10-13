@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
@@ -170,4 +171,33 @@ func TestBuildAdminServer_CustomBindAddr(t *testing.T) {
 	admin := buildAdminServer(cfg, srv, metrics.New(), logger)
 	require.NotNil(t, admin)
 	assert.Equal(t, "0.0.0.0:9094", admin.Addr)
+}
+
+func TestWarnIfNotWorkerUID(t *testing.T) {
+	tests := []struct {
+		name     string
+		goos     string
+		uid      int
+		wantWarn bool
+	}{
+		{"linux non-1000 warns", "linux", 501, true},
+		{"linux root warns", "linux", 0, true},
+		{"linux 1000 is quiet", "linux", 1000, false},
+		{"non-linux is quiet", "darwin", 501, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+
+			logger := slog.New(slog.NewTextHandler(&buf, nil))
+			warnIfNotWorkerUID(logger, tt.goos, tt.uid)
+
+			if tt.wantWarn {
+				assert.Contains(t, buf.String(), "level=WARN")
+			} else {
+				assert.Empty(t, buf.String())
+			}
+		})
+	}
 }

@@ -75,7 +75,8 @@ free of any `contextmatrix-*` dependency.
 ## Requirements
 
 - Go 1.27+ to build.
-- Docker on the host running `serve` (it launches worker containers).
+- Docker on the host running `serve` (it launches worker containers). On
+  Linux, `serve` must run as host UID 1000 (see below).
 - A reachable ContextMatrix instance (REST API + MCP endpoint). ContextMatrix
   provisions the per-session model, LLM endpoint, and git credentials, plus its
   instance-wide MCP API key, in the chat-start payload - git credentials are then fetched
@@ -83,6 +84,17 @@ free of any `contextmatrix-*` dependency.
   not staged upfront. There is no local credential fallback.
 - A shared HMAC secret (at least 32 characters), configured on both this service
   and ContextMatrix.
+
+### Host UID 1000
+
+Worker containers run as container UID 1000. `serve` stages each session's
+secrets in a 0700 directory holding a 0600 env file owned by `serve`'s own UID,
+and bind-mounts it into the worker. With a standard (non-rootless) Docker
+daemon, the worker can read the mount only when `serve` also runs as host UID
+1000. Under rootless Docker, container UID 1000 maps to a subuid rather than
+host UID 1000, so the worker cannot read the files either. In both cases every
+session exits 1 at startup. `serve` logs a warning on Linux when its UID is not
+1000.
 
 ## Running as a ContextMatrix backend
 
