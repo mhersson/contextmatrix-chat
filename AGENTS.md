@@ -107,9 +107,9 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
    first user turn. A `/clear` frame ends the epoch, resets history to nil,
    and re-orients the next epoch from the same primer - the host sends only
    `/clear`. Resume seeds history from `resume.jsonl` when `CM_CHAT_RESUME=1`.
-4. **Compaction is on** (harness): older turns drop at `compaction.threshold`
+4. **Compaction is on** (harness): older messages drop at `compaction.threshold`
    (default 0.85) of the model's context window; `keep_recent_turns` (default 6)
-   are kept verbatim.
+   messages are kept verbatim.
 5. **Model and MCP key come from ContextMatrix** in the chat-start payload
    (`CM_MODEL`, `CM_MCP_API_KEY`). Chat never selects models or stages the MCP
    key.

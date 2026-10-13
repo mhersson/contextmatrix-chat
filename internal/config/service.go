@@ -23,8 +23,9 @@ const envPrefix = "CMX_"
 const defaultSecretsDir = "/var/run/cm-chat/secrets" //nolint:gosec // path, not a credential
 
 // CompactionConfig controls in-context compaction. When the conversation
-// reaches Threshold of the model's context window, older turns are dropped and
-// only the most recent KeepRecentTurns turns are retained verbatim.
+// reaches Threshold of the model's context window, older messages are dropped and
+// only the most recent KeepRecentTurns messages are retained verbatim (a tool
+// call adds one message per call on top of the assistant message).
 type CompactionConfig struct {
 	Threshold       float64 `koanf:"threshold"`
 	KeepRecentTurns int     `koanf:"keep_recent_turns"`
