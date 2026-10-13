@@ -12,9 +12,9 @@ import (
 )
 
 // TestRedactorWatcherMasksPayloadDeliveredLLMKey verifies that the LLM API key
-// delivered via the per-session container env (a CM-provisioned llm_endpoint,
-// protocol v0.5.0) is masked from construction - the harness redactor set
-// must cover it so the key never reaches tool output, events, or logs.
+// delivered via the per-session container env (a CM-provisioned llm_endpoint)
+// is masked from construction - the harness redactor set must cover it so the
+// key never reaches tool output or events.
 func TestRedactorWatcherMasksPayloadDeliveredLLMKey(t *testing.T) {
 	t.Parallel()
 
@@ -52,10 +52,9 @@ func TestRedactorWatcherStopsOnContextCancel(t *testing.T) {
 }
 
 // TestRedactorWatcherMasksGitCredentialsBearer verifies that the
-// CM-provisioned git-credentials bearer (protocol v0.5.2,
-// CM_GIT_CREDENTIALS_TOKEN) is masked from construction - it is a static,
-// known-at-startup value like the LLM key and MCP key, not something that
-// needs to wait for a poll tick.
+// CM-provisioned git-credentials bearer (CM_GIT_CREDENTIALS_TOKEN) is masked
+// from construction - it is a static, known-at-startup value like the LLM key
+// and MCP key, not something that needs to wait for a poll tick.
 func TestRedactorWatcherMasksGitCredentialsBearer(t *testing.T) {
 	t.Parallel()
 

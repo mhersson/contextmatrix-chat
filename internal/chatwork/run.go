@@ -40,10 +40,10 @@ const (
 // frame ends the current epoch and starts a fresh one with no history.
 func Run(ctx context.Context) error {
 	// 1. CM-provisioned LLM endpoint: handleChatStart sets LLM_API_KEY/
-	// LLM_BASE_URL/LLM_TYPE as per-session container env (protocol v0.5.0),
-	// the same delivery mechanism as CM_CHAT_REPO_URL. All three are always
-	// set for a launched session - an empty value is a real provisioned
-	// answer (e.g. base_url meaning "the type's canonical default").
+	// LLM_BASE_URL/LLM_TYPE as per-session container env, the same delivery
+	// mechanism as CM_CHAT_REPO_URL. All three are always set for a launched
+	// session - an empty value is a real provisioned answer (e.g. base_url
+	// meaning "the type's canonical default").
 	llmKey := os.Getenv("LLM_API_KEY")
 	llmBaseURL := os.Getenv("LLM_BASE_URL")
 	llmType := os.Getenv("LLM_TYPE")
@@ -60,8 +60,7 @@ func Run(ctx context.Context) error {
 
 	gitCredentialsToken := os.Getenv("CM_GIT_CREDENTIALS_TOKEN")
 
-	// 2. Configure git credential auth (CM_GIT_CREDENTIALS_TOKEN, protocol
-	// v0.5.2).
+	// 2. Configure git credential auth (CM_GIT_CREDENTIALS_TOKEN).
 	selfPath, err := configureGitAuth(ctx, gitCredentialsToken)
 	if err != nil {
 		return err
@@ -285,11 +284,10 @@ func epochLoop(
 // configured.
 //
 // gh wrapper selection: selfPath non-empty means CM provisioned git
-// credentials this session (protocol v0.5.2) - install the v2 wrapper, which
-// fetches a fresh per-repo credential from CM on every gh invocation via
-// selfPath's hidden "gh-wrapper" subcommand. An empty selfPath (no provisioned
-// git credentials) leaves gh unwrapped - a footgun the model discovers itself
-// if it tries to use it.
+// credentials this session - install the v2 wrapper, which fetches a fresh
+// per-repo credential from CM on every gh invocation via selfPath's hidden
+// "gh-wrapper" subcommand. An empty selfPath (no provisioned git credentials)
+// leaves gh unwrapped - a footgun the model discovers if it tries to use it.
 func buildToolRegistry(ctx context.Context, selfPath, sessionID string, mcpBase http.RoundTripper) (*tools.Registry, *mcpbridge.Bridge, error) {
 	mcpURL := os.Getenv("CM_MCP_URL")
 	mcpAPIKey := os.Getenv("CM_MCP_API_KEY")

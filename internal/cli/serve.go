@@ -93,9 +93,9 @@ func runServe(ctx context.Context, configPath string) error {
 	bridge := logbridge.NewBridge(logbridge.BridgeConfig{Hub: hub, SurfaceRunState: true})
 
 	// The redactor registry is the single source of truth for the log-bridge
-	// redaction set: every live session's CM-provisioned secrets (LLM key,
-	// git-credentials bearer - registered at chat-start, forgotten on
-	// container exit). Worker stderr and unparsable stdout are bridged to
+	// redaction set: every live session's container secrets (see
+	// webhook.SessionSecretRegistry), registered at chat-start and forgotten
+	// on container exit. Worker stderr and unparsable stdout are bridged to
 	// /logs with only this redactor applied, so every live secret must be in
 	// the union.
 	redactorRegistry := logbridge.NewRedactorRegistry(bridge)
@@ -323,8 +323,8 @@ func composeMCPURL(base string) string {
 // composeGitCredentialsURL builds CM's worker git-credentials endpoint URL:
 // <base>/api/worker/git-credentials, with any trailing slash on base trimmed.
 // Forwarded to the worker as CM_GIT_CREDENTIALS_URL alongside the chat-start
-// payload's GitCredentialsToken (protocol v0.5.2) so the worker can fetch
-// fresh, per-repo git credentials on demand.
+// payload's GitCredentialsToken so the worker can fetch fresh, per-repo git
+// credentials on demand.
 func composeGitCredentialsURL(base string) string {
 	return strings.TrimRight(base, "/") + "/api/worker/git-credentials"
 }

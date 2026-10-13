@@ -177,12 +177,11 @@ func (f *fakeExecutor) Launched() []executor.LaunchSpec {
 }
 
 // fakeSessionSecrets records AddSessionKey/RemoveSessionKey calls so chat/start
-// and cleanup tests can assert the handler registers payload secrets (the LLM
-// key, the git-credentials bearer) and forgets them. It satisfies
-// SessionSecretRegistry. added holds every key registered per session, not
-// just the last one - a session can carry both a provisioned LLM key and a
-// provisioned git-credentials bearer simultaneously, and a naive single-value
-// map would silently let the second AddSessionKey call clobber the first.
+// and cleanup tests can assert the handler registers payload secrets and
+// forgets them. It satisfies SessionSecretRegistry. added holds every key
+// registered per session, not just the last one - a session registers several
+// secrets, and a naive single-value map would let a later AddSessionKey call
+// clobber an earlier one.
 type fakeSessionSecrets struct {
 	mu      sync.Mutex
 	added   map[string][]string
@@ -881,7 +880,7 @@ func TestChatStart_NoSkillsWhenResolverFails(t *testing.T) {
 	require.Len(t, launched, 1, "the worker launches without the Skill tool")
 }
 
-// ---- LLM endpoint (protocol v0.5.0) ------------------------------------------
+// ---- LLM endpoint ------------------------------------------------------------
 
 // TestChatStart_LLMEndpointFromPayload verifies that the CM-provisioned
 // llm_endpoint on the chat-start payload is delivered to the worker as
@@ -1052,7 +1051,8 @@ func TestChatStart_LaunchFailureUnregistersLLMKey(t *testing.T) {
 }
 
 // TestDropSession_UnregistersLLMKey verifies the container-exit cleanup path
-// forgets the session's registered LLM key so the redaction set stays bounded.
+// asks the registry to forget the session's secrets so the redaction set stays
+// bounded.
 func TestDropSession_UnregistersLLMKey(t *testing.T) {
 	tracker := executor.NewTracker(10)
 	fe := &fakeExecutor{tracker: tracker}
@@ -1177,7 +1177,7 @@ func TestChatStart_FailClosedWithoutProvisionedCredentials(t *testing.T) {
 	})
 }
 
-// ---- git credentials (protocol v0.5.2, ChatStartPayload.GitCredentialsToken) -
+// ---- git credentials (ChatStartPayload.GitCredentialsToken) ------------------
 
 // TestChatStart_GitCredentialsTokenFromPayload verifies that the CM-provisioned
 // GitCredentialsToken is delivered to the worker as CM_GIT_CREDENTIALS_URL/
@@ -1214,11 +1214,9 @@ func TestChatStart_GitCredentialsTokenFromPayload(t *testing.T) {
 	assert.Equal(t, "sess-abc123.deadbeef", envMap["CM_GIT_CREDENTIALS_TOKEN"])
 }
 
-// TestChatStart_GitCredentialsAndLLMKeyBothRegistered is the regression guard
-// for the registry's single-value-per-session clobber: a session commonly
-// carries BOTH a provisioned LLM key and a provisioned git-credentials bearer
-// (both are independent multi-user-mode features), and registering the
-// second must not silently un-redact the first.
+// TestChatStart_GitCredentialsAndLLMKeyBothRegistered guards that chat/start
+// registers both the provisioned LLM key and the provisioned git-credentials
+// bearer for the session, so neither is left out of the redaction set.
 func TestChatStart_GitCredentialsAndLLMKeyBothRegistered(t *testing.T) {
 	tracker := executor.NewTracker(10)
 	fe := &fakeExecutor{tracker: tracker}

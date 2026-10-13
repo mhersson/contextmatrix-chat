@@ -28,13 +28,12 @@ type SkillsResolver interface {
 	Resolve(ctx context.Context) (string, error)
 }
 
-// SessionSecretRegistry records and forgets a session's CM-provisioned secrets
-// (the LLM key, protocol v0.5.0; the git-credentials bearer, protocol v0.5.2 -
-// a session may register either, both, or neither) so the host-side log-bridge
-// redactor masks them in bridged worker stderr and unparsable stdout (the only
-// masking those surfaces get). handleChatStart registers each key before the
-// container starts; DropSession (and the launch-failure path) forgets all of
-// a session's keys in one call so the set stays bounded.
+// SessionSecretRegistry records and forgets the secrets a session's container
+// receives (git-credentials bearer, MCP key, LLM key, and any worker_extra_env
+// LLM_API_KEY override) so the host-side log-bridge redactor masks them in
+// bridged worker stderr and unparsable stdout, the only masking those surfaces
+// get. handleChatStart registers them before the container starts; DropSession
+// and the launch-failure path forget them all in one call.
 // *logbridge.RedactorRegistry satisfies it.
 type SessionSecretRegistry interface {
 	AddSessionKey(sessionID, key string)
@@ -106,9 +105,9 @@ type Config struct {
 	// the dir to bind read-only into each worker. nil disables task-skills.
 	SkillsResolver SkillsResolver
 
-	// SessionSecrets records each session's CM-provisioned secrets (LLM key,
-	// git-credentials bearer) so the host-side log-bridge redactor masks them
-	// in bridged worker logs. nil disables per-session registration (bare test
+	// SessionSecrets records each session's container secrets (see
+	// SessionSecretRegistry) so the host-side log-bridge redactor masks them in
+	// bridged worker logs. nil disables per-session registration (bare test
 	// servers leave it unset).
 	SessionSecrets SessionSecretRegistry
 
@@ -153,9 +152,9 @@ type Server struct {
 	executor executor.Executor
 	tracker  *executor.Tracker
 
-	// sessionSecrets registers/unregisters per-session CM-provisioned secrets
-	// (LLM key, git-credentials bearer) with the host-side log-bridge redactor.
-	// nil in minimal test servers.
+	// sessionSecrets is the host-side log-bridge redactor registry for each
+	// session's container secrets (see SessionSecretRegistry). nil in minimal
+	// test servers.
 	sessionSecrets SessionSecretRegistry
 
 	// chat config (populated from ChatConfig at NewServer time)
@@ -183,8 +182,7 @@ type Server struct {
 	// executor documents Run.Stdin as single-writer; webhook handlers run on
 	// independent HTTP goroutines, so a per-session mutex keeps frame bytes from
 	// interleaving on the wire. Entries are reclaimed by DropSession once the
-	// session's container exits; see that method's doc for why the earlier
-	// retain-forever design is no longer needed.
+	// session's container exits.
 	stdinMu sync.Map // map[string]*sync.Mutex
 
 	// llmOverrideWarnOnce guards the "worker_extra_env overrides CM-provisioned
@@ -263,21 +261,18 @@ func (s *Server) stdinLock(sessionID string) *sync.Mutex {
 }
 
 // DropSession removes the per-session stdin mutex and forgets the session's
-// CM-provisioned secrets (the LLM key, the git-credentials bearer - a session
-// may register either, both, or neither) from the log-bridge redactor once the
-// session's container has exited (wired into the executor OnExit hook). After
-// the container is gone no writer can hold the lock, so the delete/recreate
-// race the retained-entry design guarded against no longer applies, and both
-// the mutex map and the redaction set stop growing without bound over the
-// process lifetime.
+// container secrets (see SessionSecretRegistry) once its container has exited
+// (wired into the executor OnExit hook), keeping both bounded. OnExit runs
+// before the tracker releases the session, so a racing send or end may recreate
+// the mutex for a dead stdin; it lingers until the session is reopened and
+// exits again.
 func (s *Server) DropSession(sessionID string) {
 	s.stdinMu.Delete(sessionID)
 
-	// Forget the session's CM-provisioned secrets now the container has
-	// exited: no more of its log lines can arrive, so they never need masking
-	// again, and dropping them keeps the redaction set bounded over the
-	// process lifetime. A single RemoveSessionKey call forgets every secret
-	// registered under this session ID (see logbridge.RedactorRegistry).
+	// A single RemoveSessionKey call forgets every secret registered under this
+	// session ID (see logbridge.RedactorRegistry). OnExit does not wait for the
+	// executor's output pump, so a last line it bridges after this may go
+	// unmasked.
 	if s.sessionSecrets != nil {
 		s.sessionSecrets.RemoveSessionKey(sessionID)
 	}
