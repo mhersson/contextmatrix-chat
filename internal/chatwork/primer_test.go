@@ -6,6 +6,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestChatPrimer_HasSessionPlaceholder asserts that the raw embed contains the
+// {{SESSION_ID}} placeholder that renderPrimer depends on. If this test fails
+// the primer has been edited to remove or change the token, and renderPrimer
 // will silently leave it unsubstituted.
 func TestChatPrimer_HasSessionPlaceholder(t *testing.T) {
 	t.Parallel()
