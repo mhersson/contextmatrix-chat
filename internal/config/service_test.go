@@ -465,3 +465,32 @@ func TestServiceMetricsToken_FromEnv(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "scrape-token", cfg.MetricsToken)
 }
+
+func TestLoadService_RejectsUnknownFileKeys(t *testing.T) {
+	clearServiceEnv(t)
+
+	path := filepath.Join(t.TempDir(), "serve.yaml")
+	content := "max_concurent: 4\nport: 9000\ncompaction:\n  treshold: 0.5\n  threshold: 0.7\nworker_extra_env:\n  ANY_KEY: ok\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	_, err := LoadService(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "compaction.treshold, max_concurent")
+	assert.NotContains(t, err.Error(), "worker_extra_env")
+	assert.NotContains(t, err.Error(), "port")
+}
+
+func TestLoadService_UnknownEnvKeyStaysLenient(t *testing.T) {
+	clearServiceEnv(t)
+	t.Setenv("CMX_NOT_A_REAL_KEY", "x")
+
+	_, err := LoadService(filepath.Join(t.TempDir(), "nope.yaml"))
+	require.NoError(t, err)
+}
+
+func TestLoadService_ServeYAMLExampleLoadsCleanly(t *testing.T) {
+	clearServiceEnv(t)
+
+	_, err := LoadService(filepath.Join("..", "..", "serve.yaml.example"))
+	require.NoError(t, err)
+}

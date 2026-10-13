@@ -77,3 +77,14 @@ func TestConfigValidate(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing.yaml")
 }
+
+func TestConfigValidate_RejectsUnknownKey(t *testing.T) {
+	clearCMXEnv(t)
+
+	path := filepath.Join(t.TempDir(), "typo.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("max_concurent: 4\n"), 0o600))
+
+	_, err := runConfig(t, "validate", path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max_concurent")
+}
