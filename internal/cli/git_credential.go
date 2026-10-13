@@ -10,8 +10,7 @@ import (
 // speaking git's credential-helper key=value protocol on stdin/stdout. Never
 // invoked by a human - chatwork.ConfigureGitCredentialHelperV2 registers a
 // tiny shell script that execs this subcommand as the GLOBAL git
-// credential.helper when CM provisions per-session git credentials (protocol
-// v0.5.2).
+// credential.helper when CM provisions per-session git credentials.
 func newGitCredentialCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "git-credential <get|store|erase>",

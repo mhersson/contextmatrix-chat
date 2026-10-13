@@ -18,7 +18,7 @@ import (
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
 )
 
-// ---- CM-provisioned per-repo credentials (protocol v0.5.2) -------------------
+// ---- CM-provisioned per-repo credentials -------------------------------------
 //
 // The worker has no upfront git token at all, only a bearer for CM's
 // GET /api/worker/git-credentials?host=&path= endpoint, which mints the

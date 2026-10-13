@@ -301,8 +301,8 @@ func (e *DockerExecutor) pump(sessionID string, r io.Reader, log *slog.Logger) {
 // waitAndCleanup blocks on ContainerWait with no deadline - chat containers are
 // long-lived and run until /chat/end closes stdin so the work process exits
 // naturally. It then force-removes the container, observes its duration by
-// outcome, clears the tracker entry, closes the attach connection, and fires
-// onExit.
+// outcome, fires onExit, clears the tracker entry, and closes the attach
+// connection on return.
 func (e *DockerExecutor) waitAndCleanup(
 	sessionID, containerID string,
 	startedAt time.Time,

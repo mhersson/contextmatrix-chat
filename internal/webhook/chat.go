@@ -70,10 +70,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fail-closed: a session with no CM-provisioned git-credentials bearer
-	// (protocol v0.5.2, ChatStartPayload.GitCredentialsToken) has no way to
-	// authenticate any git operation for its whole lifetime. Reject before any
-	// side effects (run dir, container) rather than launching a session that
-	// can never clone or push.
+	// (ChatStartPayload.GitCredentialsToken) has no way to authenticate any git
+	// operation for its whole lifetime. Reject before any side effects (run
+	// dir, container) rather than launching a session that can never clone or
+	// push.
 	if p.GitCredentialsToken == "" {
 		s.logger.Warn("chat/start: no git credential source", "session_id", p.SessionID)
 		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal,
@@ -82,11 +82,11 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fail-closed: a session with no CM-provisioned llm_endpoint (protocol
-	// v0.5.0, ChatStartPayload.LLMEndpoint) has no way to authenticate any
-	// inference call for its whole lifetime. Reject before any side effects
-	// (run dir, container) rather than launching a session that starts but
-	// fails opaquely on the first turn. Mirrors the git credentials guard above.
+	// Fail-closed: a session with no CM-provisioned llm_endpoint
+	// (ChatStartPayload.LLMEndpoint) has no way to authenticate any inference
+	// call for its whole lifetime. Reject before any side effects (run dir,
+	// container) rather than launching a session that starts but fails
+	// opaquely on the first turn. Mirrors the git credentials guard above.
 	if p.LLMEndpoint == nil {
 		s.logger.Warn("chat/start: no llm credential source", "session_id", p.SessionID)
 		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal,
@@ -146,8 +146,8 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CM_CHAT_REPO_URL="+p.RepoURL)
 	}
 
-	// Git credentials: the CM-provisioned per-session bearer (protocol v0.5.2,
-	// ChatStartPayload.GitCredentialsToken) lets the worker fetch fresh,
+	// Git credentials: the CM-provisioned per-session bearer
+	// (ChatStartPayload.GitCredentialsToken) lets the worker fetch fresh,
 	// per-repo git credentials on demand from CM's
 	// GET /api/worker/git-credentials?host=&path= endpoint - the only design
 	// that works for a cross-project, long-lived chat session, since a single
@@ -293,8 +293,8 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.executor.Launch(r.Context(), spec); err != nil {
 		// Launch failed: no container will exit, so the OnExit → DropSession path
-		// that normally unregisters this session's key never fires. Forget it here
-		// so a failed start does not leak the key into the redaction set forever.
+		// that normally forgets this session's secrets never fires. Forget them
+		// here so a failed start does not leak them into the redaction set.
 		if s.sessionSecrets != nil {
 			s.sessionSecrets.RemoveSessionKey(p.SessionID)
 		}
