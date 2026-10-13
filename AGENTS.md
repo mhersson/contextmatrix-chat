@@ -17,10 +17,10 @@ come from the shared `contextmatrix-harness` module (version pinned in
 `go.mod`).
 
 The HTTP transport core (HMAC auth, replay cache, drain gate, SSE `/logs`,
-health/readiness/images probes, request metrics), the log bridge, the metrics
-bundle, the stdin frame codec, and the task-skills resolver come from the shared
-`contextmatrix-backendkit` module (version pinned in `go.mod`). The
-chat-specific lifecycle handlers, the container executor, and the MCP bridge
+health/readiness/images probes, request metrics), the /message dedup cache, the
+log bridge, the metrics bundle, the stdin frame codec, and the task-skills
+resolver come from the shared `contextmatrix-backendkit` module (version pinned
+in `go.mod`). The chat-specific lifecycle handlers, the container executor, and the MCP bridge
 live here; they mount onto and inject into the shared pieces.
 
 ## Package map
@@ -29,7 +29,7 @@ live here; they mount onto and inject into the shared pieces.
 cmd/contextmatrix-chat/   entrypoint; runs the cobra root command
 internal/cli/             cobra commands: serve, work (hidden), git-credential + gh-wrapper (hidden container-internal shims)
 internal/config/          layered service config (defaults < file < env, CMX_*) + Validate
-internal/webhook/         HTTP surface: /chat/start, /chat/end, /message lifecycle handlers + message dedup, mounted on backendkit/webhookcore.Core (HMAC auth, replay cache, drain gate, SSE /logs, /images, /health, /readyz)
+internal/webhook/         HTTP surface: /chat/start, /chat/end, /message lifecycle handlers, mounted on backendkit/webhookcore.Core (HMAC auth, replay cache, drain gate, SSE /logs, /images, /health, /readyz)
 internal/executor/        Docker container lifecycle; Tracker gates concurrency; DockerExecutor implements Executor
 internal/chatwork/        container work loop: provisioned credentials, git credential helper, optional clone, tool registry, embedded primer, resume, epoch loop
 internal/mcpbridge/       dials CM's /mcp, adapts each board tool to a harness tools.Tool
@@ -65,6 +65,10 @@ the other way instead: satisfy a harness interface from a consumer here.
   paths; container-side events go through the harness event stream.
 - Tests sit next to code (`handler.go` → `handler_test.go`), table-driven, with
   `t.Helper()` in helpers and `t.TempDir()` for scratch dirs.
+- Tests must exercise behavior. A test that only fails when someone rewords a
+  string, renames a heading, or edits prose is not a test - do not write it, and
+  delete it when found. Asserting exact text is legitimate only where the text is
+  a wire contract a consumer parses; if no code reads it, no test should pin it.
 - Spell names out: "chat", "agent" - no abbreviations in config keys,
   code, comments, or commit messages.
 
@@ -86,7 +90,10 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
 
 ### Documentation
 
-- Document the CURRENT STATE: what exists NOW and WHY, not how we got here.
+- Documentation must always be true: every statement matches the code at
+  HEAD, and a change that makes a doc line false updates it in the same
+  commit.
+- Document the current state - what exists now and why, not how it got here.
 - Comments explain only non-obvious decisions, constraints, safety invariants,
   or workarounds. Do not narrate what code does or record change history; git
   holds history. Keep comments to one or two tight lines unless a longer
@@ -107,9 +114,9 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
    first user turn. A `/clear` frame ends the epoch, resets history to nil,
    and re-orients the next epoch from the same primer - the host sends only
    `/clear`. Resume seeds history from `resume.jsonl` when `CM_CHAT_RESUME=1`.
-4. **Compaction is on** (harness): older turns drop at `compaction.threshold`
+4. **Compaction is on** (harness): older messages drop at `compaction.threshold`
    (default 0.85) of the model's context window; `keep_recent_turns` (default 6)
-   are kept verbatim.
+   messages are kept verbatim.
 5. **Model and MCP key come from ContextMatrix** in the chat-start payload
    (`CM_MODEL`, `CM_MCP_API_KEY`). Chat never selects models or stages the MCP
    key.
@@ -156,7 +163,9 @@ make lint      # golangci-lint run
 Also confirm `gofumpt -l .` is empty. Executor tests needing a real Docker
 daemon are gated by `CMX_TEST_DOCKER` and skip when it is unset.
 
-**NEVER commit without explicit user approval.** No exceptions.
+- **Never commit to `main`.** Work on a feature branch; tasks of a plan or
+  scope the user approved commit there without asking again. Never push
+  without explicit user approval.
 
 Commit messages: conventional (`type(scope): description`), short and
 imperative, with bullet points in the body for the what/why. NEVER reference a

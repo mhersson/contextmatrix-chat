@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,6 +69,18 @@ func defaultServeConfigPath() string {
 	return filepath.Join(dir, "contextmatrix-chat", "serve.yaml")
 }
 
+// warnIfNotWorkerUID warns when serve's host UID differs from the worker's:
+// the 0750 per-session run dir (resume.jsonl) is owned by serve's UID and the
+// worker cannot read it otherwise. goos and uid are parameters for tests.
+func warnIfNotWorkerUID(logger *slog.Logger, goos string, uid int) {
+	if goos != "linux" || uid == executor.WorkerUID {
+		return
+	}
+
+	logger.Warn("serve is not running as host UID 1000; workers run as container UID 1000 and may be unable to read the session run dir, so resumed chats would start fresh (see README)",
+		"uid", uid)
+}
+
 func runServe(ctx context.Context, configPath string) error {
 	cfg, err := config.LoadService(configPath)
 	if err != nil {
@@ -80,6 +93,8 @@ func runServe(ctx context.Context, configPath string) error {
 
 	logger := newServeLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
+
+	warnIfNotWorkerUID(logger, runtime.GOOS, os.Getuid())
 
 	mx := metrics.New()
 
@@ -131,7 +146,7 @@ func runServe(ctx context.Context, configPath string) error {
 	var draining atomic.Bool
 
 	replay := webhookcore.NewReplayCache(cfg.ReplaySkew, cfg.ReplayCacheSize)
-	dedup := webhook.NewDedupCache(cfg.MessageDedupTTL, cfg.MessageDedupCacheSize)
+	dedup := webhookcore.NewDedupCache(cfg.MessageDedupTTL, cfg.MessageDedupCacheSize)
 
 	base := cfg.ContainerContextMatrixURL
 	if base == "" {

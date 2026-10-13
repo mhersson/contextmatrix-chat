@@ -75,7 +75,8 @@ free of any `contextmatrix-*` dependency.
 ## Requirements
 
 - Go 1.27+ to build.
-- Docker on the host running `serve` (it launches worker containers).
+- Docker on the host running `serve` (it launches worker containers). On
+  Linux, `serve` must run as host UID 1000 (see below).
 - A reachable ContextMatrix instance (REST API + MCP endpoint). ContextMatrix
   provisions the per-session model, LLM endpoint, and git credentials, plus its
   instance-wide MCP API key, in the chat-start payload - git credentials are then fetched
@@ -83,6 +84,19 @@ free of any `contextmatrix-*` dependency.
   not staged upfront. There is no local credential fallback.
 - A shared HMAC secret (at least 32 characters), configured on both this service
   and ContextMatrix.
+
+### Host UID 1000
+
+Worker containers run as container UID 1000. `serve` creates each session's
+run directory with mode 0750 under `chat_run_dir`, writes `resume.jsonl` into
+it, and bind-mounts it read-only at `/run/cm-chat`; it also bind-mounts
+`ca_cert_file` when configured. Session secrets reach the worker as container
+environment, not files. When `serve` runs as another host UID or GID, or under
+rootless Docker (where container UID 1000 maps to a subuid), the worker cannot
+read the run directory. A resumed chat then logs "starting fresh" and silently
+loses its prior conversation, and a `ca_cert_file` the worker cannot read fails
+the session at startup. Fresh sessions otherwise run. `serve` logs a warning
+on Linux when its UID is not 1000.
 
 ## Running as a ContextMatrix backend
 
@@ -191,6 +205,9 @@ underscore (`CMX_COMPACTION__THRESHOLD`, `CMX_COMPACTION__KEEP_RECENT_TURNS`).
 `image_list_filters` and `worker_extra_env` are YAML-only - the `CMX_` layer
 cannot express multi-element lists or case-sensitive map keys.
 `serve.yaml.example` documents every field, its default, and its env override.
+Unknown keys in the config file are an error that names them (shown by
+`contextmatrix-chat config validate FILE`); the `CMX_*` env layer stays
+lenient.
 
 Required fields: `contextmatrix_url`, `api_key` (≥ 32 chars), `base_image`,
 `chat_run_dir`. Credentials are not configured here: ContextMatrix provisions

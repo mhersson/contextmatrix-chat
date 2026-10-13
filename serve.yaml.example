@@ -149,12 +149,13 @@ secrets_dir: /var/run/cm-chat/secrets
 # --- In-context compaction ----------------------------------------------------
 
 compaction:
-  # Fraction of the model's context window at which older turns are dropped.
+  # Fraction of the model's context window at which older messages are dropped.
   # Must be in (0, 1]. Default: 0.85.
   # CMX_COMPACTION__THRESHOLD
   threshold: 0.85
 
-  # Number of most-recent turns retained verbatim when compaction fires.
+  # Number of most-recent messages retained verbatim when compaction fires.
+  # A tool-using turn is one assistant message plus one per tool call.
   # Default: 6.
   # CMX_COMPACTION__KEEP_RECENT_TURNS
   keep_recent_turns: 6

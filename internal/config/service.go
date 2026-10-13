@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,8 +25,9 @@ const envPrefix = "CMX_"
 const defaultSecretsDir = "/var/run/cm-chat/secrets" //nolint:gosec // path, not a credential
 
 // CompactionConfig controls in-context compaction. When the conversation
-// reaches Threshold of the model's context window, older turns are dropped and
-// only the most recent KeepRecentTurns turns are retained verbatim.
+// reaches Threshold of the model's context window, older messages are dropped and
+// only the most recent KeepRecentTurns messages are retained verbatim (a tool
+// call adds one message per call on top of the assistant message).
 type CompactionConfig struct {
 	Threshold       float64 `koanf:"threshold"`
 	KeepRecentTurns int     `koanf:"keep_recent_turns"`
@@ -138,7 +141,8 @@ func DefaultsYAML() ([]byte, error) {
 
 // LoadService merges defaults < file (if it loads) < env (CMX_*). A
 // nonexistent path is not an error: the file layer is skipped and the result
-// is defaults+env, matching agent behavior.
+// is defaults+env, matching agent behavior. Unknown keys in the file layer are
+// an error so a typo cannot silently fall back to a default; env stays lenient.
 func LoadService(path string) (*ServiceConfig, error) {
 	k := koanf.New(".")
 
@@ -148,8 +152,19 @@ func LoadService(path string) (*ServiceConfig, error) {
 
 	if path != "" {
 		// A missing file is allowed (defaults+env only); other read/parse errors are not.
-		if err := k.Load(file.Provider(path), yaml.Parser()); err != nil && !isNotExist(err) {
-			return nil, fmt.Errorf("load service config file %q: %w", path, err)
+		fk := koanf.New(".")
+		if err := fk.Load(file.Provider(path), yaml.Parser()); err != nil {
+			if !isNotExist(err) {
+				return nil, fmt.Errorf("load service config file %q: %w", path, err)
+			}
+		} else {
+			if unknown := unknownKeys(fk.Keys()); len(unknown) > 0 {
+				return nil, fmt.Errorf("service config file %q: unknown keys: %s", path, strings.Join(unknown, ", "))
+			}
+
+			if err := k.Merge(fk); err != nil {
+				return nil, fmt.Errorf("merge service config file %q: %w", path, err)
+			}
 		}
 	}
 
@@ -170,6 +185,63 @@ func LoadService(path string) (*ServiceConfig, error) {
 	}
 
 	return raw.toConfig(), nil
+}
+
+// unknownKeys returns the sorted flattened file keys that are not koanf tags
+// of serviceRaw. Keys under a map-typed field are free-form and always accepted.
+func unknownKeys(keys []string) []string {
+	known := map[string]bool{}
+	freeForm := []string{}
+
+	var walk func(t reflect.Type, prefix string)
+
+	walk = func(t reflect.Type, prefix string) {
+		for i := range t.NumField() {
+			f := t.Field(i)
+
+			tag := f.Tag.Get("koanf")
+			if tag == "" {
+				continue
+			}
+
+			path := prefix + tag
+
+			switch f.Type.Kind() {
+			case reflect.Struct:
+				known[path] = true
+
+				walk(f.Type, path+".")
+			case reflect.Map:
+				known[path] = true
+
+				freeForm = append(freeForm, path+".")
+			default:
+				known[path] = true
+			}
+		}
+	}
+	walk(reflect.TypeFor[serviceRaw](), "")
+
+	var unknown []string
+
+outer:
+	for _, key := range keys {
+		if known[key] {
+			continue
+		}
+
+		for _, p := range freeForm {
+			if strings.HasPrefix(key, p) {
+				continue outer
+			}
+		}
+
+		unknown = append(unknown, key)
+	}
+
+	sort.Strings(unknown)
+
+	return unknown
 }
 
 // toConfig assembles the typed config from the wire form.

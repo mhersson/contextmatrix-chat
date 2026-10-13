@@ -126,7 +126,7 @@ type Config struct {
 	Hub *logbridge.Hub
 
 	Replay *webhookcore.ReplayCache
-	Dedup  *DedupCache
+	Dedup  *webhookcore.DedupCache
 
 	Draining *atomic.Bool
 
@@ -174,7 +174,7 @@ type Server struct {
 	caCertFile                string
 	gitCredentialsURL         string
 
-	dedup *DedupCache
+	dedup *webhookcore.DedupCache
 
 	logger *slog.Logger
 
@@ -223,7 +223,7 @@ func NewServer(cfg Config) *Server {
 
 	dedup := cfg.Dedup
 	if dedup == nil {
-		dedup = NewDedupCache(10*time.Minute, 4096)
+		dedup = webhookcore.NewDedupCache(10*time.Minute, 4096)
 	}
 
 	return &Server{

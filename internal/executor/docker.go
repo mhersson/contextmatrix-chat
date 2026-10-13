@@ -29,6 +29,10 @@ const (
 	labelSession = "contextmatrix.session"
 )
 
+// WorkerUID is the container user (and group) the worker runs as; serve warns
+// when the host UID differs.
+const WorkerUID = 1000
+
 // scannerBufferMax bounds the per-line buffer of the stdout/stderr pump so a
 // pathological container cannot pin the host heap with one unbounded line.
 const scannerBufferMax = 1 << 20 // 1 MiB
@@ -111,7 +115,7 @@ func containerConfig(spec LaunchSpec) (*container.Config, *container.HostConfig)
 		Env:         spec.Env,
 		Labels:      labels,
 		Cmd:         spec.Cmd,
-		User:        "1000:1000",
+		User:        fmt.Sprintf("%d:%d", WorkerUID, WorkerUID),
 		OpenStdin:   true,
 		AttachStdin: true,
 		StdinOnce:   false,
