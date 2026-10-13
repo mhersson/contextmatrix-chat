@@ -3,14 +3,19 @@ package chatwork
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/mhersson/contextmatrix-backendkit/frames"
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -225,4 +230,54 @@ func TestEpochLoop_RunError(t *testing.T) {
 
 	err := epochLoop(context.Background(), clearCh, inbox, cfg, "task", run)
 	assert.ErrorIs(t, err, want)
+}
+
+// TestBuildToolRegistrySendsChatSessionHeader pins the wiring from the session
+// ID into the MCP bridge: a regression to "" would silently disable the CM
+// session gate.
+func TestBuildToolRegistrySendsChatSessionHeader(t *testing.T) {
+	const sessionID = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+	var (
+		mu      sync.Mutex
+		headers []string
+	)
+
+	mcpSrv := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "0.0.1"}, nil)
+	mcpSrv.AddTool(&mcp.Tool{
+		Name:        "list_projects",
+		Description: "List all projects",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+	})
+
+	handler := mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server { return mcpSrv }, nil)
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+
+		headers = append(headers, r.Header.Get("X-CM-Chat-Session"))
+		mu.Unlock()
+		handler.ServeHTTP(w, r)
+	}))
+
+	defer hs.Close()
+
+	t.Setenv("CM_MCP_URL", hs.URL)
+	t.Setenv("CM_MCP_API_KEY", "")
+	t.Setenv("CMX_TASK_SKILLS_DIR", "")
+
+	_, bridge, err := buildToolRegistry(context.Background(), "", sessionID, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, bridge.Close())
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.NotEmpty(t, headers)
+
+	for _, h := range headers {
+		assert.Equal(t, sessionID, h)
+	}
 }

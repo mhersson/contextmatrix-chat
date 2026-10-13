@@ -123,7 +123,7 @@ func Run(ctx context.Context) error {
 	// run and is worth surfacing.
 	sessionID := os.Getenv("CM_CHAT_SESSION")
 	if sessionID == "" {
-		slog.Warn("CM_CHAT_SESSION is empty; session_id will be blank in the primer")
+		slog.Warn("CM_CHAT_SESSION is empty; session_id will be blank in the primer and the X-CM-Chat-Session header is not sent, so ContextMatrix skips its session check")
 	}
 
 	// 6. Tool registry: filesystem/shell tools + optional skill tool + MCP board
@@ -296,6 +296,12 @@ func buildToolRegistry(ctx context.Context, selfPath, sessionID string, mcpBase 
 
 	bridge, err := mcpbridge.Connect(ctx, mcpURL, mcpAPIKey, sessionID, mcpBase)
 	if err != nil {
+		// The MCP SDK drops the response body, so a 400 for a malformed
+		// header surfaces only as "Bad Request"; name the header value.
+		if sessionID != "" {
+			return nil, nil, fmt.Errorf("connect to mcp (X-CM-Chat-Session %q): %w", sessionID, err)
+		}
+
 		return nil, nil, fmt.Errorf("connect to mcp: %w", err)
 	}
 
