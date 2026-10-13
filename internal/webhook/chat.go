@@ -160,15 +160,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		"CM_GIT_CREDENTIALS_TOKEN="+p.GitCredentialsToken,
 	)
 
-	// Same documented tradeoff as CM_MCP_API_KEY/LLM_API_KEY above: the
-	// bearer rides plain container env. Register it with the host-side
-	// log-bridge redactor the same way as the provisioned LLM key - but
-	// note this covers ONLY the bearer. The actual git tokens the worker
-	// mints per operation from CM never transit the chat service (worker
-	// -> CM directly), so this registry cannot know them at all; in-worker
-	// redaction (chatwork/redactor.go's fetched-token tracking) is the only
-	// coverage for those. Accepted limitation, not a gap to close here.
-	// The MCP bearer rides the same surface, so it is registered here too.
+	// The git-credentials bearer and CM_MCP_API_KEY ride plain container env, so
+	// both go to the host-side log-bridge redactor. The git tokens the worker
+	// fetches come from CM directly, so only chatwork/redactor.go masks them,
+	// and nothing does on worker stderr (accepted limitation).
 	if s.sessionSecrets != nil {
 		s.sessionSecrets.AddSessionKey(p.SessionID, p.GitCredentialsToken)
 		s.sessionSecrets.AddSessionKey(p.SessionID, p.MCPAPIKey)
@@ -178,17 +173,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CM_CHAT_RESUME=1")
 	}
 
-	// CM-provisioned LLM endpoint (protocol v0.5.0, ChatStartPayload.LLMEndpoint):
-	// the three values are delivered via the same per-session env mechanism as
-	// CM_CHAT_REPO_URL and CM_MCP_API_KEY above. All three are written even when
-	// a field is its zero value (e.g. an empty base_url meaning "the type's
-	// canonical default") - that is a real provisioned answer, not an omission.
-	//
-	// Same documented tradeoff as CM_MCP_API_KEY: LLM_API_KEY rides plain
-	// container env (visible to docker inspect and /proc/<pid>/environ) because
-	// it is per-session. Moving it off env would require a per-session read-only
-	// secrets file. The worker's redactor watcher (newRedactorWatcher's llmKey
-	// param) still masks it from tool output, events, and logs.
+	// CM-provisioned LLM endpoint: all three values are written even when zero,
+	// since an empty base_url means the type's default, not an omission.
+	// LLM_API_KEY has the same plain-env exposure as CM_MCP_API_KEY; the
+	// in-worker redactor masks it from tool output and events.
 	env = append(env,
 		"LLM_API_KEY="+p.LLMEndpoint.APIKey,
 		"LLM_BASE_URL="+p.LLMEndpoint.BaseURL,
