@@ -270,9 +270,9 @@ func (s *Server) DropSession(sessionID string) {
 	s.stdinMu.Delete(sessionID)
 
 	// A single RemoveSessionKey call forgets every secret registered under this
-	// session ID (see logbridge.RedactorRegistry). OnExit does not wait for the
-	// executor's output pump, so a last line it bridges after this may go
-	// unmasked.
+	// session ID (see logbridge.RedactorRegistry). The executor drains its
+	// output pump before OnExit, so a line can be bridged after this only when
+	// the stream outlives the drain bound, which the executor logs.
 	if s.sessionSecrets != nil {
 		s.sessionSecrets.RemoveSessionKey(sessionID)
 	}

@@ -33,6 +33,10 @@ const (
 // pathological container cannot pin the host heap with one unbounded line.
 const scannerBufferMax = 1 << 20 // 1 MiB
 
+// pumpDrainTimeout bounds how long teardown waits for the output pump to bridge
+// the last of a stream that did not end with the container.
+const pumpDrainTimeout = 5 * time.Second
+
 // Image pull policies.
 const (
 	PullNever        = "never"
@@ -149,6 +153,10 @@ type DockerExecutor struct {
 	onExit func(sessionID string, exitCode int64)
 	onLog  func(sessionID string, line []byte, stderr bool)
 
+	// drainAfter arms the bound on waiting for the output pump; time.After
+	// outside tests.
+	drainAfter func(time.Duration) <-chan time.Time
+
 	logger  *slog.Logger
 	metrics *metrics.Metrics
 }
@@ -182,6 +190,7 @@ func NewDockerExecutor(cfg Config) *DockerExecutor {
 		resolver:   net.DefaultResolver,
 		onExit:     cfg.OnExit,
 		onLog:      cfg.OnLog,
+		drainAfter: time.After,
 		logger:     logger,
 		metrics:    cfg.Metrics,
 	}
@@ -261,14 +270,20 @@ func (e *DockerExecutor) Launch(ctx context.Context, spec LaunchSpec) error {
 		return fmt.Errorf("start container: %w", err)
 	}
 
-	go e.pump(spec.SessionID, attach.Reader, log)
+	pumpDone := make(chan struct{})
+
+	go func() {
+		defer close(pumpDone)
+
+		e.pump(spec.SessionID, attach.Reader, log)
+	}()
 	// waitAndCleanup deliberately runs on a detached context: the container's
 	// supervision must outlive the request ctx that triggered Launch, otherwise
 	// a returned webhook handler would cancel a still-running container's wait
 	// and cleanup. Chat containers are long-lived; there is no per-container
 	// deadline - the container runs until /chat/end closes stdin.
 	//nolint:gosec // G118: detached ctx is intentional; container outlives the request
-	go e.waitAndCleanup(spec.SessionID, resp.ID, run.StartedAt, attach, log)
+	go e.waitAndCleanup(spec.SessionID, resp.ID, run.StartedAt, attach, pumpDone, log)
 
 	log.Info("container launched", "container_id", truncateID(resp.ID), "name", name)
 
@@ -301,12 +316,13 @@ func (e *DockerExecutor) pump(sessionID string, r io.Reader, log *slog.Logger) {
 // waitAndCleanup blocks on ContainerWait with no deadline - chat containers are
 // long-lived and run until /chat/end closes stdin so the work process exits
 // naturally. It then force-removes the container, observes its duration by
-// outcome, fires onExit, clears the tracker entry, and closes the attach
-// connection on return.
+// outcome, waits up to pumpDrainTimeout for the output pump to finish, fires
+// onExit, clears the tracker entry, and closes the attach connection on return.
 func (e *DockerExecutor) waitAndCleanup(
 	sessionID, containerID string,
 	startedAt time.Time,
 	attach client.ContainerAttachResult,
+	pumpDone <-chan struct{},
 	log *slog.Logger,
 ) {
 	defer attach.Close()
@@ -343,6 +359,15 @@ func (e *DockerExecutor) waitAndCleanup(
 	}
 
 	log.Info("container exited", "exit_code", exitCode)
+
+	// onExit drops the session's secrets from the log-bridge redactor, so every
+	// line still in the attach stream must be bridged first.
+	select {
+	case <-pumpDone:
+	case <-e.drainAfter(pumpDrainTimeout):
+		log.Warn("output pump still running at the drain bound; later lines may be bridged unmasked",
+			"bound", pumpDrainTimeout)
+	}
 
 	// Run onExit (chatExit's run-dir teardown) BEFORE releasing the tracker slot.
 	// While the session is still tracked, a concurrent same-session /chat/start
