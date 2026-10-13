@@ -29,34 +29,51 @@ type Bridge struct {
 	dial    func(ctx context.Context) (*mcp.ClientSession, error)
 }
 
-// bearerTransport injects Authorization: Bearer on every outbound request.
-type bearerTransport struct {
-	apiKey string
-	base   http.RoundTripper
+// chatSessionHeader carries the chat session ID so CM can gate session-scoped
+// tools on it.
+const chatSessionHeader = "X-CM-Chat-Session"
+
+// headerTransport sets a fixed header set on a clone of every outbound request.
+type headerTransport struct {
+	headers map[string]string
+	base    http.RoundTripper
 }
 
-func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	r := req.Clone(req.Context())
-	r.Header.Set("Authorization", "Bearer "+t.apiKey)
+	for k, v := range t.headers {
+		r.Header.Set(k, v)
+	}
 
 	return t.base.RoundTrip(r)
 }
 
 // Connect dials mcpURL, authenticates with apiKey when non-empty, lists tools,
-// and returns a ready Bridge. base is the outbound RoundTripper carrying every
-// MCP request; a nil base uses http.DefaultTransport. A non-nil base lets the
-// caller inject a CA-augmented transport (see the worker's ca_cert_file
-// support); when apiKey is set it is wrapped by bearerTransport so the CA trust
-// and the bearer header compose on the same connection. An error from Connect or
-// ListTools is fatal.
-func Connect(ctx context.Context, mcpURL, apiKey string, base http.RoundTripper) (*Bridge, error) {
+// and returns a ready Bridge. A non-empty chatSessionID is sent verbatim as
+// X-CM-Chat-Session on every request, including reconnects, because CM gates
+// session-scoped tools such as chat_rehydration_complete on it; empty omits the
+// header. base is the outbound RoundTripper carrying every MCP request; a nil
+// base uses http.DefaultTransport. A non-nil base lets the caller inject a
+// CA-augmented transport (see the worker's ca_cert_file support); the headers
+// are applied on top of it so CA trust and headers compose on the same
+// connection. An error from Connect or ListTools is fatal.
+func Connect(ctx context.Context, mcpURL, apiKey, chatSessionID string, base http.RoundTripper) (*Bridge, error) {
 	if base == nil {
 		base = http.DefaultTransport
 	}
 
-	rt := base
+	headers := map[string]string{}
 	if apiKey != "" {
-		rt = &bearerTransport{apiKey: apiKey, base: base}
+		headers["Authorization"] = "Bearer " + apiKey
+	}
+
+	if chatSessionID != "" {
+		headers[chatSessionHeader] = chatSessionID
+	}
+
+	rt := base
+	if len(headers) > 0 {
+		rt = &headerTransport{headers: headers, base: base}
 	}
 
 	httpClient := &http.Client{Transport: rt}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -54,7 +55,7 @@ func TestBridgeBoardToolNames(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -67,7 +68,7 @@ func TestBridgeExecute(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -86,7 +87,7 @@ func TestBridgeSchema(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -138,7 +139,7 @@ func TestBridgeBearerHeader(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, apiKey, nil)
+	b, err := mcpbridge.Connect(ctx, hs.URL, apiKey, "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -163,7 +164,7 @@ func TestBridgeUsesBaseTransport(t *testing.T) {
 		})
 
 		ctx := context.Background()
-		b, err := mcpbridge.Connect(ctx, hs.URL, "", base)
+		b, err := mcpbridge.Connect(ctx, hs.URL, "", "", base)
 		require.NoError(t, err)
 
 		defer b.Close()
@@ -207,7 +208,7 @@ func TestBridgeUsesBaseTransport(t *testing.T) {
 		})
 
 		ctx := context.Background()
-		b, err := mcpbridge.Connect(ctx, hs.URL, "super-secret", base)
+		b, err := mcpbridge.Connect(ctx, hs.URL, "super-secret", "", base)
 		require.NoError(t, err)
 
 		defer b.Close()
@@ -242,7 +243,7 @@ func TestBridgeExecuteErrorNoImages(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -274,7 +275,7 @@ func TestBridgeExecuteSurfacesImages(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -297,7 +298,7 @@ func TestBridgeExecuteReconnectsAfterSessionPoisoned(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -338,7 +339,7 @@ func TestBridgeExecuteDoesNotReconnectOnToolError(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -382,7 +383,7 @@ func TestBridgeExecuteCoercesStringScalars(t *testing.T) {
 	defer hs.Close()
 
 	ctx := context.Background()
-	b, err := mcpbridge.Connect(ctx, hs.URL, "", nil)
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", "", nil)
 	require.NoError(t, err)
 
 	defer b.Close()
@@ -401,4 +402,147 @@ func TestBridgeExecuteCoercesStringScalars(t *testing.T) {
 	assert.Equal(t, true, gotFlag)                // "true" coerced to a JSON boolean
 	assert.InEpsilon(t, float64(5), gotLim, 1e-9) // "5" coerced to a JSON number
 	assert.Equal(t, "keep", gotName)              // string-typed arg left untouched
+}
+
+// headerRecorder captures the request headers the MCP server sees, guarded for
+// the server goroutines that write them.
+type headerRecorder struct {
+	mu      sync.Mutex
+	session []string
+	auth    []string
+}
+
+func (h *headerRecorder) record(r *http.Request) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.auth = append(h.auth, r.Header.Get("Authorization"))
+	// Join keeps an empty-valued header distinguishable from an absent one.
+	h.session = append(h.session, strings.Join(r.Header.Values("X-CM-Chat-Session"), ","))
+
+	if _, ok := r.Header["X-Cm-Chat-Session"]; !ok {
+		h.session[len(h.session)-1] = "<absent>"
+	}
+}
+
+func (h *headerRecorder) snapshot() (session, auth []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	return append([]string(nil), h.session...), append([]string(nil), h.auth...)
+}
+
+func newRecordingServer(t *testing.T, rec *headerRecorder) *httptest.Server {
+	t.Helper()
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-server", Version: "0.0.1"}, nil)
+	server.AddTool(&mcp.Tool{
+		Name:        toolName,
+		InputSchema: json.RawMessage(`{"type":"object","properties":{}}`),
+	}, func(_ context.Context, _ *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: toolResult}}}, nil
+	})
+
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(_ *http.Request) *mcp.Server { return server }, nil)
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.record(r)
+		mcpHandler.ServeHTTP(w, r)
+	}))
+}
+
+const chatSessionID = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func TestBridgeChatSessionHeader(t *testing.T) {
+	tests := []struct {
+		name      string
+		apiKey    string
+		sessionID string
+		viaBase   bool
+		wantSess  string
+		wantAuth  string
+	}{
+		{name: "session only", sessionID: chatSessionID, wantSess: chatSessionID},
+		{name: "session and bearer", apiKey: "super-secret", sessionID: chatSessionID, wantSess: chatSessionID, wantAuth: "Bearer super-secret"},
+		{name: "session over base transport", apiKey: "super-secret", sessionID: chatSessionID, viaBase: true, wantSess: chatSessionID, wantAuth: "Bearer super-secret"},
+		{name: "bearer only", apiKey: "super-secret", wantSess: "<absent>", wantAuth: "Bearer super-secret"},
+		{name: "neither", wantSess: "<absent>"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &headerRecorder{}
+			hs := newRecordingServer(t, rec)
+
+			defer hs.Close()
+
+			var (
+				base      http.RoundTripper
+				baseCalls atomic.Int32
+			)
+
+			if tt.viaBase {
+				base = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+					baseCalls.Add(1)
+
+					return http.DefaultTransport.RoundTrip(req)
+				})
+			}
+
+			ctx := context.Background()
+			b, err := mcpbridge.Connect(ctx, hs.URL, tt.apiKey, tt.sessionID, base)
+			require.NoError(t, err)
+
+			defer b.Close()
+
+			ts := b.Tools()
+			require.Len(t, ts, 1)
+
+			_, err = ts[0].Execute(ctx, map[string]any{})
+			require.NoError(t, err)
+
+			session, auth := rec.snapshot()
+			require.NotEmpty(t, session)
+
+			for i := range session {
+				assert.Equal(t, tt.wantSess, session[i], "request %d session header", i)
+				assert.Equal(t, tt.wantAuth, auth[i], "request %d authorization", i)
+			}
+
+			if tt.viaBase {
+				assert.Positive(t, baseCalls.Load(), "base transport must carry the requests")
+			}
+		})
+	}
+}
+
+func TestBridgeChatSessionHeaderSurvivesReconnect(t *testing.T) {
+	rec := &headerRecorder{}
+	hs := newRecordingServer(t, rec)
+
+	defer hs.Close()
+
+	ctx := context.Background()
+	b, err := mcpbridge.Connect(ctx, hs.URL, "", chatSessionID, nil)
+	require.NoError(t, err)
+
+	defer b.Close()
+
+	ts := b.Tools()
+	require.Len(t, ts, 1)
+
+	before := b.SessionForTest()
+
+	b.CloseSessionForTest()
+
+	_, err = ts[0].Execute(ctx, map[string]any{})
+	require.NoError(t, err)
+	require.NotSame(t, before, b.SessionForTest(), "the call must have reconnected")
+
+	session, _ := rec.snapshot()
+	require.NotEmpty(t, session)
+
+	for i, got := range session {
+		assert.Equal(t, chatSessionID, got, "request %d session header", i)
+	}
 }

@@ -940,9 +940,9 @@ func TestChatStart_LLMEndpointEmptyBaseURLStillSet(t *testing.T) {
 	assert.Empty(t, baseURL)
 }
 
-// TestChatStart_RegistersMCPKeyForRedaction verifies the per-session MCP
-// bearer is registered with the host-side log-bridge redactor: it rides plain
-// container env like the other per-session secrets, so worker stderr is the
+// TestChatStart_RegistersMCPKeyForRedaction verifies the instance-wide MCP
+// bearer is registered per session with the host-side log-bridge redactor: it
+// rides plain container env like the other secrets, so worker stderr is the
 // one surface where only this registry can mask it.
 func TestChatStart_RegistersMCPKeyForRedaction(t *testing.T) {
 	tracker := executor.NewTracker(10)
@@ -965,7 +965,7 @@ func TestChatStart_RegistersMCPKeyForRedaction(t *testing.T) {
 
 	payload := provisioned(protocol.ChatStartPayload{
 		SessionID: testSession,
-		MCPAPIKey: "mcp-session-key-123456",
+		MCPAPIKey: "mcp-instance-key-123456",
 	})
 	body := mustJSON(t, payload)
 	w := httptest.NewRecorder()
@@ -973,8 +973,8 @@ func TestChatStart_RegistersMCPKeyForRedaction(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
 
 	keys := fss.addedKeys(testSession)
-	assert.Contains(t, keys, "mcp-session-key-123456",
-		"chat/start must register the per-session MCP bearer for redaction")
+	assert.Contains(t, keys, "mcp-instance-key-123456",
+		"chat/start must register the instance-wide MCP bearer for redaction")
 }
 
 // TestChatStart_RegistersWorkerExtraEnvLLMKeyForRedaction covers the operator

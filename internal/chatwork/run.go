@@ -117,7 +117,16 @@ func Run(ctx context.Context) error {
 		ctxWindow = entry.ContextLength
 	}
 
-	// 5. Tool registry: filesystem/shell tools + optional skill tool + MCP board
+	// 5. Session ID is provisioned by the host as container env, always
+	// set for a launched session. The MCP bridge sends it on every request and
+	// the primer interpolates it; a blank value means a local or misconfigured
+	// run and is worth surfacing.
+	sessionID := os.Getenv("CM_CHAT_SESSION")
+	if sessionID == "" {
+		slog.Warn("CM_CHAT_SESSION is empty; session_id will be blank in the primer and the X-CM-Chat-Session header is not sent, so ContextMatrix skips its session check")
+	}
+
+	// 6. Tool registry: filesystem/shell tools + optional skill tool + MCP board
 	// tools. Share the CA transport (when configured) so board tool calls trust
 	// the same extra CA as the LLM client.
 	var mcpBase http.RoundTripper
@@ -125,20 +134,12 @@ func Run(ctx context.Context) error {
 		mcpBase = caHTTPClient.Transport
 	}
 
-	reg, bridge, err := buildToolRegistry(ctx, selfPath, mcpBase)
+	reg, bridge, err := buildToolRegistry(ctx, selfPath, sessionID, mcpBase)
 	if err != nil {
 		return err
 	}
 
 	defer func() { _ = bridge.Close() }()
-
-	// 6. Session ID is provisioned by the host as container env, always
-	// set for a launched session. Read it now for primer interpolation; a
-	// blank value means a local or misconfigured run and is worth surfacing.
-	sessionID := os.Getenv("CM_CHAT_SESSION")
-	if sessionID == "" {
-		slog.Warn("CM_CHAT_SESSION is empty; session_id will be blank in the primer")
-	}
 
 	// 7. History: seed from a prior session when CM_CHAT_RESUME == "1".
 	var history []llm.Message
@@ -278,9 +279,10 @@ func epochLoop(
 
 // buildToolRegistry assembles the model-facing tool registry: filesystem/shell
 // tools rooted at /workspace, the optional skill tool, and the MCP board tools
-// from the Connect bridge. mcpBase is the outbound RoundTripper for the MCP
-// bridge (nil uses http.DefaultTransport); it carries the extra CA trust when
-// ca_cert_file is configured.
+// from the Connect bridge. sessionID is sent to CM as X-CM-Chat-Session.
+// mcpBase is the outbound RoundTripper for the MCP bridge (nil uses
+// http.DefaultTransport); it carries the extra CA trust when ca_cert_file is
+// configured.
 //
 // gh wrapper selection: selfPath non-empty means CM provisioned git
 // credentials this session (protocol v0.5.2) - install the v2 wrapper, which
@@ -288,12 +290,18 @@ func epochLoop(
 // selfPath's hidden "gh-wrapper" subcommand. An empty selfPath (no provisioned
 // git credentials) leaves gh unwrapped - a footgun the model discovers itself
 // if it tries to use it.
-func buildToolRegistry(ctx context.Context, selfPath string, mcpBase http.RoundTripper) (*tools.Registry, *mcpbridge.Bridge, error) {
+func buildToolRegistry(ctx context.Context, selfPath, sessionID string, mcpBase http.RoundTripper) (*tools.Registry, *mcpbridge.Bridge, error) {
 	mcpURL := os.Getenv("CM_MCP_URL")
 	mcpAPIKey := os.Getenv("CM_MCP_API_KEY")
 
-	bridge, err := mcpbridge.Connect(ctx, mcpURL, mcpAPIKey, mcpBase)
+	bridge, err := mcpbridge.Connect(ctx, mcpURL, mcpAPIKey, sessionID, mcpBase)
 	if err != nil {
+		// The MCP SDK drops the response body, so a 400 for a malformed
+		// header surfaces only as "Bad Request"; name the header value.
+		if sessionID != "" {
+			return nil, nil, fmt.Errorf("connect to mcp (X-CM-Chat-Session %q): %w", sessionID, err)
+		}
+
 		return nil, nil, fmt.Errorf("connect to mcp: %w", err)
 	}
 
