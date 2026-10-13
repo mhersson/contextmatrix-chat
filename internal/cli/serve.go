@@ -73,14 +73,14 @@ func defaultServeConfigPath() string {
 const workerUID = 1000
 
 // warnIfNotWorkerUID warns when serve's host UID differs from the worker's:
-// the 0700/0600 secrets bind mount is owned by serve's UID and the worker
-// cannot read it otherwise. goos and uid are parameters so tests can drive it.
+// the 0750 per-session run dir (resume.jsonl) is owned by serve's UID and the
+// worker cannot read it otherwise. goos and uid are parameters for tests.
 func warnIfNotWorkerUID(logger *slog.Logger, goos string, uid int) {
 	if goos != "linux" || uid == workerUID {
 		return
 	}
 
-	logger.Warn("serve is not running as host UID 1000; workers run as container UID 1000 and may be unable to read the session secrets mount (see README)",
+	logger.Warn("serve is not running as host UID 1000; workers run as container UID 1000 and may be unable to read the session run dir, so resumed chats would start fresh (see README)",
 		"uid", uid)
 }
 
