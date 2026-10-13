@@ -69,14 +69,11 @@ func defaultServeConfigPath() string {
 	return filepath.Join(dir, "contextmatrix-chat", "serve.yaml")
 }
 
-// workerUID is the container user the worker runs as (see executor).
-const workerUID = 1000
-
 // warnIfNotWorkerUID warns when serve's host UID differs from the worker's:
 // the 0750 per-session run dir (resume.jsonl) is owned by serve's UID and the
 // worker cannot read it otherwise. goos and uid are parameters for tests.
 func warnIfNotWorkerUID(logger *slog.Logger, goos string, uid int) {
-	if goos != "linux" || uid == workerUID {
+	if goos != "linux" || uid == executor.WorkerUID {
 		return
 	}
 
