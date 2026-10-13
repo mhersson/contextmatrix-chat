@@ -198,6 +198,10 @@ func Run(ctx context.Context) error {
 		Reasoning:          reasoningRaw(os.Getenv("CMX_REASONING_EFFORT")),
 	}
 
+	// Resumed history opens with the model's welcome; the fallback resends it
+	// user-first to a gateway that rejects an assistant-first conversation.
+	chatLLM := newRoleOrderFallback(client)
+
 	run := func(ctx context.Context, epochTask string) (bool, error) {
 		epochCtx, cancel := context.WithCancel(ctx)
 
@@ -212,7 +216,7 @@ func Run(ctx context.Context) error {
 			}
 		}()
 
-		res, err := harness.Run(epochCtx, client, reg, emit, epochTask, cfg)
+		res, err := harness.Run(epochCtx, chatLLM, reg, emit, epochTask, cfg)
 
 		cancel()
 
