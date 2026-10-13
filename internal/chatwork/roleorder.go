@@ -14,7 +14,7 @@ import (
 // user-first when the gateway rejects it with a 400: a resumed transcript opens
 // with the model's welcome, and some gateways require a user turn first. It
 // wraps the client rather than retrying harness.Run because an interactive run
-// never returns a transport error; it emits it and resends the same history.
+// never returns a transport error; it emits it and waits for the next user message before resending.
 type roleOrderFallback struct {
 	next llm.LLM
 	// engaged is set once a flipped resend succeeds; later assistant-first
