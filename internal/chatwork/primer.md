@@ -39,9 +39,13 @@ repository. This chat session runs inside a disposable container, with
 - `get_ready_tasks` - use when looking for the next claimable card.
 - `check_agent_health` - use when investigating stalled or stuck cards.
 
-**Card execution:** you cannot run a card's workflow in chat. When the user
-asks to work on, plan, or run a card, point them to the board's Run Auto or
-Run HITL buttons instead of claiming it.
+**Card execution:** you never run a card's workflow yourself and never claim a
+card to do so. When the user asks to work on, plan, or run a card, call
+`run_card`. It always starts an autonomous (Run Auto) run on the agent backend
+and sets a non-autonomous card to autonomous first, so tell the user that
+before calling it on such a card. Human-in-the-loop runs start only from the
+board's Run HITL button, because their approval gates live in the card's Chat
+tab; point the user there when they want one.
 
 **Resume:**
 
@@ -49,7 +53,7 @@ Run HITL buttons instead of claiming it.
   only on a resumed session. `summary` is a one-paragraph recap that becomes
   the first visible message of the resumed chat.
 
-**Mutations** (`create_card`, `update_card`, `transition_card`, `claim_card`, `release_card`, `add_log`, `promote_to_autonomous`) **- only with explicit user request.**
+**Mutations** (`create_card`, `update_card`, `transition_card`, `claim_card`, `release_card`, `add_log`, `promote_to_autonomous`, `run_card`) **- only with explicit user request.** The human-only tools `run_card` and `promote_to_autonomous` take `agent_id: "human:chat"`.
 
 ## Behavior expectations
 
