@@ -8,8 +8,8 @@ require (
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/providers/structs v1.0.1
 	github.com/knadh/koanf/v2 v2.3.8
-	github.com/mhersson/contextmatrix-backendkit v0.6.0
-	github.com/mhersson/contextmatrix-harness v0.24.0
+	github.com/mhersson/contextmatrix-backendkit v0.7.0
+	github.com/mhersson/contextmatrix-harness v0.25.0
 	github.com/mhersson/contextmatrix-protocol v0.21.0
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.2
