@@ -105,17 +105,19 @@ on Linux when its UID is not 1000.
 
    ```bash
    make docker-worker           # tags contextmatrix-chat-worker:dev (full)
-   make docker-worker-variants  # go-node / python / rust variants
+   make docker-worker-variants  # go-node / python / rust / jvm-node variants
    ```
 
    The default (`full`) image carries the baseline CLIs (`git`, `gh`, `rg`,
    `fd`, `node`) plus the **Go, Python, and Rust** toolchains - Go with
    `golangci-lint`/`gofumpt`, Python via `uv`/`uvx` (a managed CPython) with
    `ty`/`ruff`, and Rust via `rustup`/`cargo` with `clippy`/`rustfmt`. Slimmer
-   single-language variants (`go-node`, `python`, `rust`) are also published.
-   Toolchain versions are pinned and SHA256-verified.
+   single-language variants (`go-node`, `python`, `rust`) are also published,
+   along with `jvm-node` for Kotlin/Java + Node projects (JDK 21 as `java`,
+   Maven, Node 24, `yarn`; not part of `full`). Toolchain versions are pinned and
+   checksum-verified.
 
-   Any other ecosystem (a JVM, Ruby, .NET) **needs an image carrying that
+   Any other ecosystem (Ruby, .NET) **needs an image carrying that
    toolchain** - build one `FROM` a published variant (see the agent repo's
    [`docs/custom-images.md`](https://github.com/mhersson/contextmatrix-agent/blob/main/docs/custom-images.md)
    pattern) and point a project at it via the chat worker image in
