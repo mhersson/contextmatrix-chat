@@ -126,6 +126,9 @@ on Linux when its UID is not 1000.
    For a real deployment, publish a digest-pinned image and reference it from
    `base_image`.
 
+   Every image these targets build carries the label
+   `org.opencontainers.image.revision`, set to the commit it was built from.
+
 2. **Write the service config.**
 
    ```bash

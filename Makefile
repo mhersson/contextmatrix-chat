@@ -1,5 +1,7 @@
 .PHONY: build test test-race fmt lint docker-worker docker-worker-variants
 
+GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
+
 # Pinned worker toolchain versions. Override on the command line
 # if a newer version has been vetted, e.g.
 #   make docker-worker GO_VERSION=1.27.3
@@ -41,6 +43,8 @@ WORKER_BUILD_ARGS = \
 	--build-arg MAVEN_VERSION=$(MAVEN_VERSION) \
 	--build-arg MAVEN_SHA512=$(MAVEN_SHA512)
 
+WORKER_LABELS = --label org.opencontainers.image.revision=$(GIT_COMMIT)
+
 build:
 	go build ./...
 	go build -trimpath -o contextmatrix-chat ./cmd/contextmatrix-chat
@@ -59,6 +63,7 @@ docker-worker: ## Build the default (full) worker image
 		-f docker/Dockerfile.worker \
 		--target full \
 		$(WORKER_BUILD_ARGS) \
+		$(WORKER_LABELS) \
 		-t contextmatrix-chat-worker:dev \
 		.
 docker-worker-variants: ## Build the slim worker variants (go-node, python, rust, jvm-node)
@@ -67,6 +72,7 @@ docker-worker-variants: ## Build the slim worker variants (go-node, python, rust
 			-f docker/Dockerfile.worker \
 			--target $$target \
 			$(WORKER_BUILD_ARGS) \
+			$(WORKER_LABELS) \
 			-t contextmatrix-chat-worker:$$target \
 			. || exit 1; \
 	done
