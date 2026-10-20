@@ -17,3 +17,6 @@ serve.yaml.example
 *.test
 .envrc
 transcripts
+
+# Merge history for serve only; worker images carry no history.
+internal/buildinfo/history/merges.log

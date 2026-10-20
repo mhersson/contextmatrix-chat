@@ -35,6 +35,7 @@ internal/chatwork/        container work loop: provisioned credentials, git cred
 internal/mcpbridge/       dials CM's /mcp, adapts each board tool to a harness tools.Tool
 internal/secrets/         KEY=value env-file read/write (atomic write+rename); stages the worker's provisioned git-credentials config
 internal/metrics/         chat's Prometheus metric set: the shared backendkit bundle (namespaced cm_chat) plus the endpoint allowlist
+internal/buildinfo/       build stamp (ldflags version, commit, build time) and the embedded merge history serve reports on /health
 docker/Dockerfile.worker  worker image; entrypoint `contextmatrix-chat work`
 ```
 

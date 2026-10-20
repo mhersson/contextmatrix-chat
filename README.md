@@ -22,7 +22,7 @@ ContextMatrix splits its execution backends:
 - **ChatBackend** - interactive chat sessions (this service).
 
 The chat backend is selected and configured operator-side and runs alongside
-the task backend. It talks to ContextMatrix over four channels:
+the task backend. It talks to ContextMatrix over five channels:
 
 - **Chat lifecycle webhooks** (CM → chat) - HMAC-signed `POST /chat/start`,
   `POST /message`, `POST /chat/end`.
@@ -32,6 +32,14 @@ the task backend. It talks to ContextMatrix over four channels:
   MCP endpoint.
 - **Image inventory** (CM → chat) - HMAC-signed `GET /images` backing
   ContextMatrix's worker-image settings dropdown.
+- **Health** (CM → chat) - open `GET /health` returns `ok`,
+  `running_containers`, `max_concurrent`, `build` (`version`: the exact tag,
+  left out when HEAD was on none; `commit` and `build_time`, left out of an
+  unstamped build; `changes`: the last 20 merged PRs, newest first, without
+  Dependabot and ci/docs/chore/build/test/refactor/style PRs)
+  and `worker_image_revision` (the `org.opencontainers.image.revision` label of
+  `base_image`, left out when the image or label cannot be read).
+  ContextMatrix shows them in its About popup.
 
 The model is chosen per session by ContextMatrix, and ContextMatrix's
 instance-wide MCP API key rides along; both arrive in the chat-start payload -
@@ -125,6 +133,12 @@ on Linux when its UID is not 1000.
 
    For a real deployment, publish a digest-pinned image and reference it from
    `base_image`.
+
+   Every image these targets build carries the label
+   `org.opencontainers.image.revision`, set to the commit it was built from.
+   Serve reports that label for `base_image` on `/health`, so ContextMatrix
+   can show when the worker image was built from a different commit than
+   serve.
 
 2. **Write the service config.**
 
@@ -224,13 +238,19 @@ clones it on the host, and mounts it read-only into each worker at
 ## Development
 
 ```bash
-make build          # go build ./... + the binary
+make build          # go build ./... + the stamped binary
+make install        # go install the stamped binary
 make test           # go test ./...
 make test-race      # CGO_ENABLED=1 go test -race ./...
 make lint           # golangci-lint run
 make fmt            # gofumpt -w .
 make docker-worker  # build the worker image
 ```
+
+`make build` and `make install` stamp the tag (when HEAD is exactly on one),
+the commit, the build time and the last 100 first-parent merges into the
+binary. A build without git history (a source tarball, a shallow clone)
+reports an empty change list.
 
 CI gates on `go test`, `go test -race`, `golangci-lint`, `go build`,
 `govulncheck`, a Dockerfile `hadolint` pass, and a Trivy scan of the worker

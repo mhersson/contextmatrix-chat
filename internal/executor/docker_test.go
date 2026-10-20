@@ -2,10 +2,15 @@ package executor
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/mhersson/contextmatrix-backendkit/webhookcore"
+	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -214,4 +219,62 @@ func TestImageSummaries_SkipsDanglingAndMapsFields(t *testing.T) {
 	}, got[0])
 	assert.Equal(t, []string{"other:latest"}, got[1].Tags)
 	assert.Equal(t, int64(42), got[1].SizeBytes)
+}
+
+// inspectDocker is a client.APIClient that answers ImageInspect with a canned
+// result and records the ref it was asked for.
+type inspectDocker struct {
+	client.APIClient
+
+	gotRef string
+	res    client.ImageInspectResult
+	err    error
+}
+
+func (d *inspectDocker) ImageInspect(_ context.Context, ref string, _ ...client.ImageInspectOption) (client.ImageInspectResult, error) {
+	d.gotRef = ref
+
+	return d.res, d.err
+}
+
+func TestImageLabels(t *testing.T) {
+	errBoom := errors.New("boom")
+	labels := map[string]string{webhookcore.ImageRevisionLabel: "0123abc"}
+
+	tests := []struct {
+		name    string
+		ref     string
+		res     client.ImageInspectResult
+		err     error
+		want    map[string]string
+		wantErr error
+	}{
+		{
+			name: "labels",
+			ref:  "contextmatrix-chat-worker@sha256:abc",
+			res: client.ImageInspectResult{InspectResponse: image.InspectResponse{
+				Config: &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{Labels: labels}},
+			}},
+			want: labels,
+		},
+		{name: "nil config", ref: "contextmatrix-chat-worker:dev"},
+		{name: "inspect error", ref: "contextmatrix-chat-worker:dev", err: errBoom, wantErr: errBoom},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &inspectDocker{res: tt.res, err: tt.err}
+			e := NewDockerExecutor(Config{Docker: fake})
+
+			got, err := e.ImageLabels(context.Background(), tt.ref)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.ref, fake.gotRef, "the ref is inspected exactly as configured")
+		})
+	}
 }

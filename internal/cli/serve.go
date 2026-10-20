@@ -25,6 +25,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 
+	"github.com/mhersson/contextmatrix-chat/internal/buildinfo"
 	"github.com/mhersson/contextmatrix-chat/internal/config"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	"github.com/mhersson/contextmatrix-chat/internal/metrics"
@@ -199,6 +200,9 @@ func runServe(ctx context.Context, configPath string) error {
 		Draining: &draining,
 		Logger:   logger,
 		Metrics:  mx,
+
+		Build:               buildinfo.Info(),
+		WorkerImageRevision: webhookcore.ImageRevisionHook(exec, cfg.BaseImage),
 	})
 
 	// The replay janitor sweeps expired entries on the cache's own interval.
