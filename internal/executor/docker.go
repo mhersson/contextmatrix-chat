@@ -469,6 +469,23 @@ func (e *DockerExecutor) ListImages(ctx context.Context) ([]webhookcore.ImageSum
 	return imageSummaries(summaries.Items), nil
 }
 
+// ImageLabels returns ref's labels from the local image store. It backs the
+// /health worker-image revision; the caller bounds it.
+func (e *DockerExecutor) ImageLabels(ctx context.Context, ref string) (map[string]string, error) {
+	res, err := e.docker.ImageInspect(ctx, ref)
+	if err != nil {
+		e.logger.Debug("image inspect failed", "image", ref, "error", err)
+
+		return nil, fmt.Errorf("image inspect: %w", err)
+	}
+
+	if res.Config == nil {
+		return nil, nil
+	}
+
+	return res.Config.Labels, nil
+}
+
 // imageSummaries maps Docker image summaries to webhookcore.ImageSummary,
 // dropping dangling images and the "<none>:<none>" placeholder tag Docker
 // reports for them.

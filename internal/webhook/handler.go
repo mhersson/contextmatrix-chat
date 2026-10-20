@@ -19,6 +19,7 @@ import (
 	"github.com/mhersson/contextmatrix-backendkit/webhookcore"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	"github.com/mhersson/contextmatrix-chat/internal/metrics"
+	protocol "github.com/mhersson/contextmatrix-protocol"
 )
 
 // SkillsResolver fetches the task-skills pointer from CM, clones it once, and
@@ -123,6 +124,13 @@ type Config struct {
 	// Chat carries the static per-process chat backend settings.
 	Chat ChatConfig
 
+	// Build is this serve's build, reported on /health.
+	Build protocol.BuildInfo
+
+	// WorkerImageRevision reads the default worker image's revision label for
+	// /health. Nil leaves it out.
+	WorkerImageRevision func(ctx context.Context) string
+
 	Hub *logbridge.Hub
 
 	Replay *webhookcore.ReplayCache
@@ -219,6 +227,9 @@ func NewServer(cfg Config) *Server {
 		MaxConcurrent:     cfg.Chat.MaxConcurrent,
 		Images:            cfg.Images,
 		ImageListFilters:  cfg.ImageListFilters,
+
+		Build:               cfg.Build,
+		WorkerImageRevision: cfg.WorkerImageRevision,
 	}
 
 	dedup := cfg.Dedup

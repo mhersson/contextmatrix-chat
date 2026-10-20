@@ -22,7 +22,7 @@ ContextMatrix splits its execution backends:
 - **ChatBackend** - interactive chat sessions (this service).
 
 The chat backend is selected and configured operator-side and runs alongside
-the task backend. It talks to ContextMatrix over four channels:
+the task backend. It talks to ContextMatrix over five channels:
 
 - **Chat lifecycle webhooks** (CM → chat) - HMAC-signed `POST /chat/start`,
   `POST /message`, `POST /chat/end`.
@@ -32,6 +32,13 @@ the task backend. It talks to ContextMatrix over four channels:
   MCP endpoint.
 - **Image inventory** (CM → chat) - HMAC-signed `GET /images` backing
   ContextMatrix's worker-image settings dropdown.
+- **Health** (CM → chat) - open `GET /health` returns `ok`,
+  `running_containers`, `max_concurrent`, `build` (`version`: the exact tag or
+  empty, `commit`, `build_time`, `changes`: the last 20 merged PRs, newest
+  first, without Dependabot and ci/docs/chore/build/test/refactor/style PRs)
+  and `worker_image_revision` (the `org.opencontainers.image.revision` label of
+  `base_image`, left out when the image or label cannot be read).
+  ContextMatrix shows them in its About popup.
 
 The model is chosen per session by ContextMatrix, and ContextMatrix's
 instance-wide MCP API key rides along; both arrive in the chat-start payload -
@@ -128,6 +135,8 @@ on Linux when its UID is not 1000.
 
    Every image these targets build carries the label
    `org.opencontainers.image.revision`, set to the commit it was built from.
+   Serve reports that label for `base_image` on `/health`, so ContextMatrix
+   can show when the worker image is older than serve.
 
 2. **Write the service config.**
 

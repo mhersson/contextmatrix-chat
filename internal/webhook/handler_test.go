@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mhersson/contextmatrix-backendkit/logbridge"
+	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	protocol "github.com/mhersson/contextmatrix-protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,6 +55,67 @@ func TestReadyz_OKAndDraining(t *testing.T) {
 	srv.Routes().ServeHTTP(w2, r2)
 	require.Equal(t, http.StatusServiceUnavailable, w2.Code)
 	assert.Contains(t, w2.Body.String(), "draining")
+}
+
+const testSHA = "0123456789abcdef0123456789abcdef01234567"
+
+func getHealth(t *testing.T, srv *Server) *httptest.ResponseRecorder {
+	t.Helper()
+
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	return w
+}
+
+func TestHealth_ReportsBuildAndWorkerImageRevision(t *testing.T) {
+	build := protocol.BuildInfo{
+		Commit:    testSHA,
+		BuildTime: "2026-10-21T08:00:00Z",
+		Changes: []protocol.Change{{
+			Number: 100, Kind: protocol.ChangeKindFeat, Title: "add jvm-node worker variant",
+			MergedAt: "2026-10-15T10:03:00Z",
+		}},
+	}
+	srv := NewServer(Config{
+		Tracker:             executor.NewTracker(1),
+		Build:               build,
+		WorkerImageRevision: func(context.Context) string { return testSHA },
+	})
+
+	var hr protocol.HealthResponse
+	require.NoError(t, json.Unmarshal(getHealth(t, srv).Body.Bytes(), &hr))
+
+	require.NotNil(t, hr.Build)
+	assert.Equal(t, build, *hr.Build)
+	assert.Equal(t, testSHA, hr.WorkerImageRevision)
+}
+
+func TestHealth_LeavesOutAnUnknownWorkerImageRevision(t *testing.T) {
+	tests := []struct {
+		name string
+		hook func(context.Context) string
+	}{
+		{"no hook", nil},
+		{"image not found", func(context.Context) string { return "" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := NewServer(Config{
+				Tracker:             executor.NewTracker(1),
+				Build:               protocol.BuildInfo{Commit: testSHA},
+				WorkerImageRevision: tt.hook,
+			})
+
+			var body map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(getHealth(t, srv).Body.Bytes(), &body))
+
+			assert.NotContains(t, body, "worker_image_revision")
+			assert.Contains(t, body, "build")
+		})
+	}
 }
 
 func TestDropSessionReclaimsStdinLock(t *testing.T) {
