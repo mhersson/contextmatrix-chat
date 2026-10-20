@@ -4,3 +4,6 @@
 
 # Local point-in-time artifacts - never committed.
 transcripts/
+
+# Merge history the Makefile writes for internal/buildinfo.
+/internal/buildinfo/history/merges.log

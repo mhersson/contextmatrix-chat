@@ -1,6 +1,11 @@
-.PHONY: build test test-race fmt lint docker-worker docker-worker-variants
+.PHONY: build install history test test-race fmt lint docker-worker docker-worker-variants
 
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
+VERSION    ?= $(shell git describe --tags --exact-match 2>/dev/null)
+BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+BUILDINFO  := github.com/mhersson/contextmatrix-chat/internal/buildinfo
+LDFLAGS    := -X $(BUILDINFO).version=$(VERSION) -X $(BUILDINFO).commit=$(GIT_COMMIT) -X $(BUILDINFO).buildTime=$(BUILD_TIME)
+HISTORY    := internal/buildinfo/history/merges.log
 
 # Pinned worker toolchain versions. Override on the command line
 # if a newer version has been vetted, e.g.
@@ -45,11 +50,13 @@ WORKER_BUILD_ARGS = \
 
 WORKER_LABELS = --label org.opencontainers.image.revision=$(GIT_COMMIT)
 
-build:
+history:
+	git log --no-show-signature --first-parent --merges -n 100 --format=%cI%x1f%s%x1f%b%x1e > $(HISTORY) 2>/dev/null || : > $(HISTORY)
+build: history
 	go build ./...
-	go build -trimpath -o contextmatrix-chat ./cmd/contextmatrix-chat
-install:
-	go install ./cmd/contextmatrix-chat
+	go build -trimpath -ldflags "$(LDFLAGS)" -o contextmatrix-chat ./cmd/contextmatrix-chat
+install: history
+	go install -ldflags "$(LDFLAGS)" ./cmd/contextmatrix-chat
 test:
 	go test ./...
 test-race:

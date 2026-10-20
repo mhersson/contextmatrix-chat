@@ -227,13 +227,19 @@ clones it on the host, and mounts it read-only into each worker at
 ## Development
 
 ```bash
-make build          # go build ./... + the binary
+make build          # go build ./... + the stamped binary
+make install        # go install the stamped binary
 make test           # go test ./...
 make test-race      # CGO_ENABLED=1 go test -race ./...
 make lint           # golangci-lint run
 make fmt            # gofumpt -w .
 make docker-worker  # build the worker image
 ```
+
+`make build` and `make install` stamp the tag (when HEAD is exactly on one),
+the commit, the build time and the last 100 first-parent merges into the
+binary. A build without git history (a source tarball, a shallow clone)
+reports an empty change list.
 
 CI gates on `go test`, `go test -race`, `golangci-lint`, `go build`,
 `govulncheck`, a Dockerfile `hadolint` pass, and a Trivy scan of the worker
