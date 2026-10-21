@@ -24,7 +24,7 @@ CVE-2026-19534
 # setuptools is vendored. CVE-2026-97687 (HTTPS-proxy TLS configuration
 # override) and CVE-2026-97689 (chunk-parser memory DoS), both fixed in urllib3
 # 2.8.0, reach only pip's own index traffic; the worker configures no proxy.
-# The pins cannot be raised independently of pip, and the latest pip (26.2.1)
+# The pins cannot be raised independently of pip, and the latest pip (26.2.2)
 # still carries all three - clears when a pip release re-vendors msgpack
 # >= 1.2.1, setuptools >= 78.1.1 and urllib3 >= 2.8.0.
 GHSA-6v7p-g79w-8964
