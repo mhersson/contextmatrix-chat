@@ -179,27 +179,12 @@ func runServe(ctx context.Context, configPath string) error {
 		Images:           exec,
 		ImageListFilters: cfg.ImageListFilters,
 		Hub:              hub,
-		Chat: webhook.ChatConfig{
-			Image:                     cfg.BaseImage,
-			MCPURL:                    composeMCPURL(base),
-			ChatRunDirBase:            cfg.ChatRunDir,
-			MemoryBytes:               cfg.ContainerMemoryBytes,
-			PidsLimit:                 cfg.ContainerPidsLimit,
-			MaxConcurrent:             cfg.MaxConcurrent,
-			ToolOutputMaxBytes:        cfg.ToolOutputMaxBytes,
-			CompactionThreshold:       cfg.Compaction.Threshold,
-			CompactionKeepRecentTurns: cfg.Compaction.KeepRecentTurns,
-			BashTimeoutMaxSeconds:     cfg.BashTimeoutMaxSeconds,
-			WorkerExtraEnv:            cfg.WorkerExtraEnv,
-			ReasoningEffort:           cfg.ReasoningEffort,
-			CACertFile:                cfg.CACertFile,
-			GitCredentialsURL:         composeGitCredentialsURL(base),
-		},
-		Replay:   replay,
-		Dedup:    dedup,
-		Draining: &draining,
-		Logger:   logger,
-		Metrics:  mx,
+		Chat:             chatConfig(cfg, base),
+		Replay:           replay,
+		Dedup:            dedup,
+		Draining:         &draining,
+		Logger:           logger,
+		Metrics:          mx,
 
 		Build:               buildinfo.Info(),
 		WorkerImageRevision: webhookcore.ImageRevisionHook(exec, cfg.BaseImage),
@@ -448,4 +433,25 @@ func startRunningContainersGauge(tracker *executor.Tracker, mx *metrics.Metrics)
 	var once sync.Once
 
 	return func() { once.Do(func() { close(stop) }) }
+}
+
+// chatConfig maps the serve config onto the chat-start settings.
+func chatConfig(cfg *config.ServiceConfig, base string) webhook.ChatConfig {
+	return webhook.ChatConfig{
+		Image:                     cfg.BaseImage,
+		MCPURL:                    composeMCPURL(base),
+		ChatRunDirBase:            cfg.ChatRunDir,
+		MemoryBytes:               cfg.ContainerMemoryBytes,
+		PidsLimit:                 cfg.ContainerPidsLimit,
+		MaxConcurrent:             cfg.MaxConcurrent,
+		ToolOutputMaxBytes:        cfg.ToolOutputMaxBytes,
+		CompactionThreshold:       cfg.Compaction.Threshold,
+		CompactionKeepRecentTurns: cfg.Compaction.KeepRecentTurns,
+		BashTimeoutMaxSeconds:     cfg.BashTimeoutMaxSeconds,
+		WorkerExtraEnv:            cfg.WorkerExtraEnv,
+		ReasoningEffort:           cfg.ReasoningEffort,
+		ReplayReasoning:           cfg.ReplayReasoning,
+		CACertFile:                cfg.CACertFile,
+		GitCredentialsURL:         composeGitCredentialsURL(base),
+	}
 }

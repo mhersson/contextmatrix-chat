@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1703,4 +1704,44 @@ func envToMap(env []string) map[string]string {
 	}
 
 	return m
+}
+
+func TestChatStart_ReplayReasoningEnv(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		t.Run(fmt.Sprintf("replay=%t", on), func(t *testing.T) {
+			t.Parallel()
+
+			tracker := executor.NewTracker(10)
+			fe := &fakeExecutor{tracker: tracker}
+
+			srv := NewServer(Config{
+				APIKey:   testAPIKey,
+				Executor: fe,
+				Tracker:  tracker,
+				Chat: ChatConfig{
+					Image:           testImage,
+					MCPURL:          testMCPURL,
+					ChatRunDirBase:  t.TempDir(),
+					MaxConcurrent:   10,
+					ReplayReasoning: on,
+				},
+				Logger: discardLogger(),
+			})
+
+			body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, Model: "z-ai/glm-5.3-flash"}))
+			w := httptest.NewRecorder()
+			srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+			require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+
+			launched := fe.Launched()
+			require.Len(t, launched, 1)
+
+			v, has := envToMap(launched[0].Env)["CMX_REPLAY_REASONING"]
+			assert.Equal(t, on, has)
+
+			if on {
+				assert.Equal(t, "true", v)
+			}
+		})
+	}
 }

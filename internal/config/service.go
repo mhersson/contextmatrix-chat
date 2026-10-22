@@ -54,15 +54,18 @@ type ServiceConfig struct {
 	CACertFile                string
 	WorkerExtraEnv            map[string]string
 	ReasoningEffort           string
-	ReplaySkew                time.Duration
-	ReplayCacheSize           int
-	MessageDedupTTL           time.Duration
-	MessageDedupCacheSize     int
-	BashTimeoutMaxSeconds     int
-	ToolOutputMaxBytes        int
-	LogLevel                  string
-	Compaction                CompactionConfig
-	ChatRunDir                string
+	// ReplayReasoning sends each reply's reasoning back with every later
+	// request of its epoch.
+	ReplayReasoning       bool
+	ReplaySkew            time.Duration
+	ReplayCacheSize       int
+	MessageDedupTTL       time.Duration
+	MessageDedupCacheSize int
+	BashTimeoutMaxSeconds int
+	ToolOutputMaxBytes    int
+	LogLevel              string
+	Compaction            CompactionConfig
+	ChatRunDir            string
 }
 
 // serviceRaw is the koanf-unmarshalled wire shape. Duration fields are split:
@@ -87,6 +90,7 @@ type serviceRaw struct {
 	CACertFile                string            `koanf:"ca_cert_file"`
 	WorkerExtraEnv            map[string]string `koanf:"worker_extra_env"`
 	ReasoningEffort           string            `koanf:"reasoning_effort"`
+	ReplayReasoning           bool              `koanf:"replay_reasoning"`
 	ReplaySkewSeconds         int               `koanf:"webhook_replay_skew_seconds"`
 	ReplayCacheSize           int               `koanf:"webhook_replay_cache_size"`
 	MessageDedupTTLSeconds    int               `koanf:"message_dedup_ttl_seconds"`
@@ -110,6 +114,7 @@ func serviceDefaults() serviceRaw {
 		SecretsDir:             defaultSecretsDir,
 		ReplaySkewSeconds:      330,
 		ReplayCacheSize:        10000,
+		ReplayReasoning:        true,
 		MessageDedupTTLSeconds: 600,
 		MessageDedupCacheSize:  1000,
 		BashTimeoutMaxSeconds:  600,
@@ -271,6 +276,7 @@ func (r serviceRaw) toConfig() *ServiceConfig {
 		CACertFile:                r.CACertFile,
 		WorkerExtraEnv:            r.WorkerExtraEnv,
 		ReasoningEffort:           r.ReasoningEffort,
+		ReplayReasoning:           r.ReplayReasoning,
 		ReplaySkew:                time.Duration(r.ReplaySkewSeconds) * time.Second,
 		ReplayCacheSize:           r.ReplayCacheSize,
 		MessageDedupTTL:           time.Duration(r.MessageDedupTTLSeconds) * time.Second,

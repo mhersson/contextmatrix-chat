@@ -201,3 +201,13 @@ func TestWarnIfNotWorkerUID(t *testing.T) {
 		})
 	}
 }
+
+func TestChatConfig_CarriesReplayReasoning(t *testing.T) {
+	t.Parallel()
+
+	got := chatConfig(&config.ServiceConfig{ReasoningEffort: "high", ReplayReasoning: true}, "http://cm:8080")
+
+	assert.Equal(t, "high", got.ReasoningEffort)
+	assert.True(t, got.ReplayReasoning)
+	assert.Equal(t, "http://cm:8080/mcp", got.MCPURL)
+}
