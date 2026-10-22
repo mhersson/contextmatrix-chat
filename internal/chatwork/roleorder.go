@@ -11,10 +11,12 @@ import (
 )
 
 // roleOrderFallback is an llm.LLM that resends an assistant-first request
-// user-first when the gateway rejects it with a 400: a resumed transcript opens
-// with the model's welcome, and some gateways require a user turn first. It
-// wraps the client rather than retrying harness.Run because an interactive run
-// never returns a transport error; it emits it and waits for the next user message before resending.
+// user-first when the gateway rejects it with a 400, unless the request carries
+// reasoning details: the harness resends that one without them. A resumed
+// transcript opens with the model's welcome, and some gateways require a user
+// turn first. It wraps the client rather than retrying harness.Run because an
+// interactive run never returns a transport error; it emits it and waits for
+// the next user message before resending.
 type roleOrderFallback struct {
 	next llm.LLM
 	// engaged is set once a flipped resend succeeds; later assistant-first
@@ -55,6 +57,13 @@ func (f *roleOrderFallback) send(req llm.Request, call func(llm.Request) (llm.Re
 
 	resp, err := call(req)
 	if err == nil || !strings.Contains(err.Error(), "llm endpoint status 400") {
+		return resp, err
+	}
+
+	// Details exist only after a reply, and before the flip engages that reply
+	// went out assistant-first, so this 400 is not about role order. If it is,
+	// the harness's resend without the details still reaches the flip below.
+	if slices.ContainsFunc(req.Messages, llm.Message.HasReasoningDetails) {
 		return resp, err
 	}
 

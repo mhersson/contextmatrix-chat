@@ -327,3 +327,46 @@ func TestRoleOrderFallbackSendResendsUserFirst(t *testing.T) {
 	assert.Equal(t, "welcome", gw.calls[1].messages[1].Content)
 	assert.Equal(t, "assistant", msgs[1].Role, "the caller's messages are never mutated")
 }
+
+func TestRoleOrderFallbackLeavesAReasoningRefusalToTheHarness(t *testing.T) {
+	t.Parallel()
+
+	detailed := []llm.Message{
+		{Role: "assistant", Content: "welcome"},
+		{Role: "user", Content: "earlier question"},
+		{Role: "assistant", Content: "earlier answer", ReasoningDetails: json.RawMessage(replayDetails)},
+	}
+	without := slices.Clone(detailed)
+	without[2].ReasoningDetails = nil
+
+	methods := map[string]func(f *roleOrderFallback, msgs []llm.Message) (llm.Response, error){
+		"Send": func(f *roleOrderFallback, msgs []llm.Message) (llm.Response, error) {
+			return f.Send(context.Background(), llm.Request{Messages: msgs})
+		},
+		"SendStream": func(f *roleOrderFallback, msgs []llm.Message) (llm.Response, error) {
+			return f.SendStream(context.Background(), llm.Request{Messages: msgs}, func(llm.Delta) {})
+		},
+	}
+
+	for name, send := range methods {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			gw := &scriptedGateway{reply: func(gatewayCall) (llm.Response, error) {
+				return llm.Response{}, errRoleOrder
+			}}
+			f := newRoleOrderFallback(gw)
+
+			_, err := send(f, detailed)
+			require.Equal(t, errRoleOrder, err, "the refusal is returned unchanged")
+			require.Len(t, gw.calls, 1, "no flipped retry for a request carrying reasoning details")
+			assert.Equal(t, "assistant", firstNonSystemRole(gw.calls[0].messages))
+
+			_, err = send(f, without)
+			require.ErrorIs(t, err, errRoleOrder)
+			require.Len(t, gw.calls, 3, "without details the flipped retry still happens")
+			assert.Equal(t, "assistant", firstNonSystemRole(gw.calls[1].messages))
+			assert.Equal(t, "user", firstNonSystemRole(gw.calls[2].messages))
+		})
+	}
+}

@@ -160,12 +160,7 @@ func Run(ctx context.Context) error {
 
 	go redWatcher.watch(ctx)
 
-	// 9. Compaction and tool-output config from env, with documented defaults.
-	threshold := envFloatDefault("CMX_COMPACTION_THRESHOLD", defaultCompactionThreshold)
-	keepRecent := envIntDefault("CMX_COMPACTION_KEEP_RECENT_TURNS", defaultKeepRecentTurns)
-	toolOutputMaxBytes := envIntDefault("CMX_TOOL_OUTPUT_MAX_BYTES", 131072)
-
-	// 10. Inbox: channel-backed; Pump reads stdin frames in a goroutine and
+	// 9. Inbox: channel-backed; Pump reads stdin frames in a goroutine and
 	// closes the inbox on EOF so harness.Run exits when the host closes stdin.
 	// clearCh carries /clear signals from the frame reader to the epoch loop.
 	in := newChatInbox()
@@ -173,29 +168,22 @@ func Run(ctx context.Context) error {
 	clearCh := make(chan struct{}, 1)
 	go in.Pump(os.Stdin, clearCh)
 
-	// 11. Emitter: board tool_call lines are filtered from the transcript
+	// 10. Emitter: board tool_call lines are filtered from the transcript
 	// (noise reduction - the MCP bridge tools, named mcp__*). All other events
 	// reach stdout for the serve-side log bridge.
 	filteredWriter := newBoardFilterWriter(os.Stdout, bridge.BoardToolNames())
 	emit := events.NewEmitter(io.Discard, filteredWriter)
 
-	// 12. Epoch loop: one harness.Run per epoch; /clear resets history and
+	// 11. Epoch loop: one harness.Run per epoch; /clear resets history and
 	// restarts with the rendered primer as the new task. Every epoch's first
 	// user turn is the rendered primer - the host sends only /clear, never
 	// orientation text.
-	cfg := harness.Config{
-		Model:              model,
-		ContextWindow:      ctxWindow,
-		Interactive:        true,
-		MaxTurns:           0,
-		MaxCostUSD:         0,
-		ToolOutputMaxBytes: toolOutputMaxBytes,
-		Compaction:         &harness.Compaction{Threshold: threshold, KeepRecentTurns: keepRecent},
-		History:            history,
-		Inbox:              in,
-		RedactToolOutput:   redWatcher.Apply,
-		SystemPrompt:       chatSystemPrompt,
-		Reasoning:          reasoningRaw(os.Getenv("CMX_REASONING_EFFORT")),
+	cfg := harnessConfig(model, ctxWindow, history, in, redWatcher.Apply)
+
+	if cfg.ReplayReasoning {
+		slog.Info("reasoning replay: on")
+	} else {
+		slog.Info("reasoning replay: off")
 	}
 
 	// Resumed history opens with the model's welcome; the fallback resends it
@@ -234,6 +222,30 @@ func Run(ctx context.Context) error {
 	}
 
 	return epochLoop(ctx, clearCh, in, &cfg, renderPrimer(sessionID), run)
+}
+
+// harnessConfig builds the harness config once per session. The CMX_* values
+// come from serve; CMX_REPLAY_REASONING=true is serve forwarding replay_reasoning.
+func harnessConfig(model string, contextWindow int, history []llm.Message, inbox harness.Inbox, redact func(string) string) harness.Config {
+	threshold := envFloatDefault("CMX_COMPACTION_THRESHOLD", defaultCompactionThreshold)
+	keepRecent := envIntDefault("CMX_COMPACTION_KEEP_RECENT_TURNS", defaultKeepRecentTurns)
+	toolOutputMaxBytes := envIntDefault("CMX_TOOL_OUTPUT_MAX_BYTES", 131072)
+
+	return harness.Config{
+		Model:              model,
+		ContextWindow:      contextWindow,
+		Interactive:        true,
+		MaxTurns:           0,
+		MaxCostUSD:         0,
+		ToolOutputMaxBytes: toolOutputMaxBytes,
+		Compaction:         &harness.Compaction{Threshold: threshold, KeepRecentTurns: keepRecent},
+		History:            history,
+		Inbox:              inbox,
+		RedactToolOutput:   redact,
+		SystemPrompt:       chatSystemPrompt,
+		Reasoning:          reasoningRaw(os.Getenv("CMX_REASONING_EFFORT")),
+		ReplayReasoning:    os.Getenv("CMX_REPLAY_REASONING") == "true",
+	}
 }
 
 // epochLoop drives the per-epoch harness.Run lifecycle. run is called once per
@@ -452,7 +464,8 @@ func dialectFromType(s string) llm.Dialect {
 }
 
 // reasoningRaw converts a reasoning effort string to a json.RawMessage for
-// harness.Config.Reasoning. An empty effort returns nil (reasoning disabled).
+// harness.Config.Reasoning. An empty effort returns nil: no effort is sent and
+// the model reasons at its own default.
 func reasoningRaw(effort string) json.RawMessage {
 	if effort == "" {
 		return nil
