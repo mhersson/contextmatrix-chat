@@ -72,6 +72,8 @@ type ChatConfig struct {
 	// ReasoningEffort is the static reasoning effort forwarded as
 	// CMX_REASONING_EFFORT to every worker container. Empty disables it.
 	ReasoningEffort string
+	// ReplayReasoning is forwarded to every worker as CMX_REPLAY_REASONING=true.
+	ReplayReasoning bool
 	// CACertFile is an optional host path to a PEM of extra CA certificate(s).
 	// When set, handleChatStart bind-mounts it read-only into each worker at
 	// caCertMountPath and points the worker's TLS (harness LLM client, MCP
@@ -179,6 +181,7 @@ type Server struct {
 	bashTimeoutMaxSeconds     int
 	workerExtraEnv            map[string]string
 	reasoningEffort           string
+	replayReasoning           bool
 	caCertFile                string
 	gitCredentialsURL         string
 
@@ -255,6 +258,7 @@ func NewServer(cfg Config) *Server {
 		bashTimeoutMaxSeconds:     cfg.Chat.BashTimeoutMaxSeconds,
 		workerExtraEnv:            cfg.Chat.WorkerExtraEnv,
 		reasoningEffort:           cfg.Chat.ReasoningEffort,
+		replayReasoning:           cfg.Chat.ReplayReasoning,
 		caCertFile:                cfg.Chat.CACertFile,
 		gitCredentialsURL:         cfg.Chat.GitCredentialsURL,
 		dedup:                     dedup,

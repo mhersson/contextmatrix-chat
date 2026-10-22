@@ -20,7 +20,7 @@ func TestDefaultsYAML(t *testing.T) {
 	for _, key := range []string{
 		"contextmatrix_url:", "container_contextmatrix_url:", "api_key:", "port: 9093",
 		"base_image:", "image_pull_policy: if-not-present", "secrets_dir:", "chat_run_dir:",
-		"compaction:", "threshold: 0.85", "keep_recent_turns: 6",
+		"compaction:", "threshold: 0.85", "keep_recent_turns: 6", "replay_reasoning: true",
 	} {
 		assert.Contains(t, text, key)
 	}

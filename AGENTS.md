@@ -118,13 +118,19 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
 4. **Compaction is on** (harness): older messages drop at `compaction.threshold`
    (default 0.85) of the model's context window; `keep_recent_turns` (default 6)
    messages are kept verbatim.
-5. **Model and MCP key come from ContextMatrix** in the chat-start payload
+5. **Reasoning replay is on by default** (`replay_reasoning`; set it false to
+   turn it off). serve forwards `CMX_REPLAY_REASONING=true` to every worker, and
+   the harness sends each reply's reasoning back with later requests of that
+   epoch; on an OpenRouter-type endpoint it pins them to the provider that
+   served the newest reasoning. It never outlives the epoch: `/clear` resets
+   history and resume history is text-only.
+6. **Model and MCP key come from ContextMatrix** in the chat-start payload
    (`CM_MODEL`, `CM_MCP_API_KEY`). Chat never selects models or stages the MCP
    key.
-6. **Board operations go over MCP, never raw HTTP.** The worker dials
+7. **Board operations go over MCP, never raw HTTP.** The worker dials
    `<container_contextmatrix_url>/mcp`, lists board tools, and offers them to
    the model alongside the filesystem/shell tools rooted at `/workspace`.
-7. **Git credentials are fetched per-repo, per-operation from CM**
+8. **Git credentials are fetched per-repo, per-operation from CM**
    (`CM_GIT_CREDENTIALS_TOKEN`, always provisioned - chat/start fails closed
    without it). At boot, `Run` stages the credentials URL/token into a 0600
    scratch file and registers the global v2 git credential helper and `gh`
@@ -135,14 +141,14 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
    projects/hosts. A fetch failure logs one stderr note (never a credential)
    and continues. Minted tokens are recorded to a scratch file the redactor
    polls, so they stay masked.
-8. **task-skills come from ContextMatrix** (single source of truth): serve
+9. **task-skills come from ContextMatrix** (single source of truth): serve
    fetches a `{git_remote_url, ref}` pointer, clones it on the host, and
    bind-mounts the clone read-only at `/run/cm-skills`. Chat carries no
    task-skills config.
-9. **Webhooks are HMAC-authenticated, replay-protected, and deduplicated.**
-   `/message` is idempotent by `message_id`: a retry returns a cached ack
-   without re-writing the frame to stdin.
-10. **Session IDs are path-validated** before touching the filesystem (no empty,
+10. **Webhooks are HMAC-authenticated, replay-protected, and deduplicated.**
+    `/message` is idempotent by `message_id`: a retry returns a cached ack
+    without re-writing the frame to stdin.
+11. **Session IDs are path-validated** before touching the filesystem (no empty,
     no separators, no `..`) so per-session run-dir cleanup cannot escape its
     base.
 

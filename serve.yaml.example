@@ -196,8 +196,25 @@ tool_output_max_bytes: 131072
 
 # Static reasoning effort applied to every chat session (low | medium | high).
 # Forwarded as CMX_REASONING_EFFORT to every worker container. Leave empty (the
-# default) to send nothing - reasoning is off. Footgun: this is sent to every
-# selected model; the endpoint must accept reasoning_effort on all served models,
-# or leave empty.
+# default) to send no effort: each model reasons at its own default, and a model
+# that always reasons still does. Reasoning replay does not depend on this
+# setting. Footgun: this is sent to every selected model; the endpoint must
+# accept reasoning_effort on all served models, or leave empty.
 # CMX_REASONING_EFFORT
 # reasoning_effort: ""
+
+# Reasoning replay: each reply's reasoning goes back with later requests of the
+# same chat epoch, so the model continues from its own thinking instead of
+# working it out again. Both LLM endpoint types get it; an OpenRouter-type
+# endpoint is also pinned to the provider that served the newest reasoning, and
+# reasoning from any other provider is dropped. A /clear or a resumed session
+# starts without it: resume history is text-only. Replayed reasoning bills as
+# input and fills the context window sooner, so compaction fires earlier. A
+# request carrying reasoning that the endpoint rejects with a 400 is resent once
+# without it, and the chat transcript shows a replay_dropped line; if those
+# recur, turn this off. With a router model id, a later request may reach a
+# model that ignores or rejects the earlier reasoning.
+# Forwarded as CMX_REPLAY_REASONING=true to every worker container.
+# Default: true.
+# CMX_REPLAY_REASONING
+replay_reasoning: true

@@ -138,6 +138,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CMX_REASONING_EFFORT="+s.reasoningEffort)
 	}
 
+	if s.replayReasoning {
+		env = append(env, "CMX_REPLAY_REASONING=true")
+	}
+
 	if p.Project != "" {
 		env = append(env, "CM_CHAT_PROJECT="+p.Project)
 	}

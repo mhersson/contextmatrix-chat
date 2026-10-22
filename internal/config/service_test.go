@@ -416,7 +416,7 @@ func clearServiceEnv(t *testing.T) {
 		"CMX_API_KEY", "CMX_BASE_IMAGE", "CMX_MAX_CONCURRENT",
 		"CMX_ADMIN_PORT", "CMX_ADMIN_BIND_ADDR", "CMX_METRICS_TOKEN",
 		"CMX_COMPACTION__THRESHOLD", "CMX_COMPACTION__KEEP_RECENT_TURNS",
-		"CMX_CHAT_RUN_DIR", "CMX_CA_CERT_FILE",
+		"CMX_CHAT_RUN_DIR", "CMX_CA_CERT_FILE", "CMX_REPLAY_REASONING",
 	} {
 		if _, ok := os.LookupEnv(e); ok {
 			t.Setenv(e, "")
@@ -493,4 +493,24 @@ func TestLoadService_ServeYAMLExampleLoadsCleanly(t *testing.T) {
 
 	_, err := LoadService(filepath.Join("..", "..", "serve.yaml.example"))
 	require.NoError(t, err)
+}
+
+func TestLoadService_ReplayReasoning(t *testing.T) {
+	clearServiceEnv(t)
+
+	cfg, err := LoadService(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
+	require.NoError(t, err)
+	assert.True(t, cfg.ReplayReasoning, "on by default")
+
+	path := writeServeYAML(t, "replay_reasoning: false\n")
+
+	cfg, err = LoadService(path)
+	require.NoError(t, err)
+	assert.False(t, cfg.ReplayReasoning, "the file overrides the default")
+
+	t.Setenv("CMX_REPLAY_REASONING", "true")
+
+	cfg, err = LoadService(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.ReplayReasoning, "env wins over the file")
 }
