@@ -28,8 +28,8 @@ the task backend. It talks to ContextMatrix over five channels:
   `POST /message`, `POST /chat/end`.
 - **Log stream** (chat → CM) - Server-Sent Events at `GET /logs?session_id=…`.
 - **Board operations** (worker → CM, over **MCP**) - the in-session model reads
-  and writes cards, and starts autonomous card runs, through ContextMatrix's
-  MCP endpoint.
+  and writes cards, starts autonomous card runs, and hands a need over to the
+  architect, through ContextMatrix's MCP endpoint.
 - **Image inventory** (CM → chat) - HMAC-signed `GET /images` backing
   ContextMatrix's worker-image settings dropdown.
 - **Health** (CM → chat) - open `GET /health` returns `ok`,
