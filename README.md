@@ -117,8 +117,8 @@ on Linux when its UID is not 1000.
    ```
 
    The default (`full`) image carries the baseline CLIs (`git`, `gh`, `rg`,
-   `fd`, `shellcheck`, `shfmt`, `kubectl`, `kustomize`, `yq`, `task`, `node`)
-   plus the **Go, Python, and Rust** toolchains - Go with
+   `fd`, `shellcheck`, `shfmt`, `kubectl`, `kustomize`, `yq`, `task`, `zip`,
+   `unzip`, `node`) plus the **Go, Python, and Rust** toolchains - Go with
    `golangci-lint`/`gofumpt`, Python via `uv`/`uvx` (a managed CPython) with
    `ty`/`ruff`, and Rust via `rustup`/`cargo` with `clippy`/`rustfmt`. Slimmer single-language variants
    (`go-node`, `python`, `rust`) are also published, along with `jvm-node` for
