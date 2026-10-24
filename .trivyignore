@@ -8,11 +8,16 @@
 # are brace-expansion DoS via crafted brace patterns (5.0.11 fixes); the
 # single-tenant worker only expands globs npm generates itself.
 # CVE-2026-19534 is an undici DoS via an unrequested WebSocket subprotocol
-# (6.28.1 fixes); npm never opens WebSockets. npm 12.2.0, the latest release,
-# still bundles both - clears when an npm release pulls in the fixed versions.
+# (6.28.1 fixes); npm never opens WebSockets. CVE-2026-109869 is an undici DoS
+# via an unhandled stream error in npm's own registry client (6.29.1 fixes);
+# the worst case is one failed npm command on the single-tenant worker.
+# The worker pins npm 12.2.0. The latest release, 12.2.1, bundles
+# brace-expansion 5.0.12 and undici 6.29.0, so moving to it clears the first
+# three; CVE-2026-109869 clears when an npm release bundles undici >= 6.29.1.
 CVE-2026-102276
 CVE-2026-102278
 CVE-2026-19534
+CVE-2026-109869
 
 # --- The uv-managed CPython (/opt/python) bundles pip, whose _vendor tree pins
 # msgpack==1.1.2, setuptools==70.3.0 and urllib3==2.7.0 (pip/_vendor/vendor.txt
