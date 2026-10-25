@@ -11,9 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mhersson/contextmatrix-backendkit/llmproxy"
 	"github.com/mhersson/contextmatrix-backendkit/logbridge"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
+	"github.com/mhersson/contextmatrix-chat/internal/metrics"
 	protocol "github.com/mhersson/contextmatrix-protocol"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -198,4 +201,32 @@ func TestAdminAuth_BearerTokenFromConfig(t *testing.T) {
 
 	assert.True(t, ran)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// ---- LLM proxy mount ----------------------------------------------------------
+
+func TestRoutes_LLMProxyOutsideAuthAndDrain(t *testing.T) {
+	proxy := newTestLLMProxy(t)
+	draining := &atomic.Bool{}
+	draining.Store(true)
+
+	srv := NewServer(Config{APIKey: testAPIKey, LLMProxy: proxy, Draining: draining})
+
+	upstream, _ := newUpstream(t)
+	token, err := proxy.Register(testSession, protocol.LLMEndpoint{Type: "openai", BaseURL: upstream.URL, APIKey: "k"})
+	require.NoError(t, err)
+
+	w := llmRequest(srv, http.MethodPost, "/llm/chat/completions", token)
+	assert.Equal(t, http.StatusTeapot, w.Code, "a live token must reach upstream while draining without HMAC")
+}
+
+func TestRoutes_LLMProxyMetricsLabel(t *testing.T) {
+	mx := metrics.New(llmproxy.Paths(LLMProxyPrefix)...)
+	srv := NewServer(Config{APIKey: testAPIKey, LLMProxy: newTestLLMProxy(t), Metrics: mx})
+
+	w := llmRequest(srv, http.MethodGet, "/llm/models", "unknown-token")
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+
+	assert.InDelta(t, 1, testutil.ToFloat64(mx.WebhookRequestsTotal.WithLabelValues("llm/models", "401", "error")), 0)
+	assert.InDelta(t, 0, testutil.ToFloat64(mx.WebhookRequestsTotal.WithLabelValues("other", "401", "error")), 0)
 }

@@ -95,6 +95,16 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fail-closed: without the proxy the only alternative is handing the worker
+	// the real key. Checked before any side effect.
+	if s.llmProxy == nil {
+		s.logger.Error("chat/start: llm proxy not configured", "session_id", p.SessionID)
+		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal,
+			"llm proxy not configured")
+
+		return
+	}
+
 	// Create the per-session run directory. The container mounts it at
 	// /run/cm-chat; the entrypoint reads resume.jsonl from there.
 	runDir := filepath.Join(s.chatRunDirBase, p.SessionID)
@@ -115,6 +125,17 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 			return
 		}
+	}
+
+	// The worker gets a per-session stand-in token for serve's LLM proxy, never
+	// the real key. Registered before any redaction key so a failure leaves
+	// nothing to undo; the error is not logged because it may quote the endpoint.
+	llmToken, err := s.llmProxy.Register(p.SessionID, *p.LLMEndpoint)
+	if err != nil {
+		s.logger.Error("chat/start: llm proxy register failed", "session_id", p.SessionID)
+		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal, "internal error")
+
+		return
 	}
 
 	env := []string{
@@ -177,24 +198,20 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CM_CHAT_RESUME=1")
 	}
 
-	// CM-provisioned LLM endpoint: all three values are written even when zero,
-	// since an empty base_url means the type's default, not an omission.
-	// LLM_API_KEY has the same plain-env exposure as CM_MCP_API_KEY; the
-	// in-worker redactor masks it from tool output and events.
+	// The worker's LLM_* point at serve's proxy; the real key stays host-side.
+	// The type is still passed through so the harness picks the right wire format.
 	env = append(env,
-		"LLM_API_KEY="+p.LLMEndpoint.APIKey,
-		"LLM_BASE_URL="+p.LLMEndpoint.BaseURL,
+		"LLM_API_KEY="+llmToken,
+		"LLM_BASE_URL="+s.llmBaseURL,
 		"LLM_TYPE="+p.LLMEndpoint.Type,
 	)
 
-	// Arm the host-side log-bridge redactor with this session's provisioned
-	// key BEFORE the container starts, so a key that surfaces on worker stderr
-	// or an unparsable stdout line (e.g. a panic stack trace) is masked before
-	// it reaches the /logs stream. The in-worker redactor covers tool output
-	// and events but never sees worker stderr - that surface is bridged
-	// host-side and this is its only masking. Unregistered on container exit
-	// (DropSession) so the set stays bounded; an empty key is ignored.
+	// Arm the host-side log-bridge redactor BEFORE the container starts so a
+	// secret surfacing on worker stderr or an unparsable stdout line is masked
+	// before it reaches /logs. The real key never enters the container but is
+	// still masked defensively. Forgotten on container exit (DropSession).
 	if s.sessionSecrets != nil {
+		s.sessionSecrets.AddSessionKey(p.SessionID, llmToken)
 		s.sessionSecrets.AddSessionKey(p.SessionID, p.LLMEndpoint.APIKey)
 	}
 
@@ -302,6 +319,8 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		if s.sessionSecrets != nil {
 			s.sessionSecrets.RemoveSessionKey(p.SessionID)
 		}
+
+		s.llmProxy.Revoke(p.SessionID)
 
 		if errors.Is(err, executor.ErrCapacity) {
 			webhookcore.WriteError(w, http.StatusTooManyRequests, protocol.CodeLimitReached, "concurrency limit reached")

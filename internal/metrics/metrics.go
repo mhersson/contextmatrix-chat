@@ -11,6 +11,8 @@
 package metrics
 
 import (
+	"slices"
+
 	backendkitmetrics "github.com/mhersson/contextmatrix-backendkit/metrics"
 )
 
@@ -43,7 +45,10 @@ var endpointAllowlist = []string{
 }
 
 // New registers the chat metric set under the cm_chat namespace on a fresh
-// registry and returns the bundle.
-func New() *Metrics {
-	return backendkitmetrics.New("cm_chat", endpointAllowlist)
+// registry and returns the bundle. extra paths join the endpoint allowlist
+// (a copy, so callers never alias the package slice).
+func New(extra ...string) *Metrics {
+	allow := append(slices.Clone(endpointAllowlist), extra...)
+
+	return backendkitmetrics.New("cm_chat", allow)
 }

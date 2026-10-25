@@ -99,13 +99,52 @@ free of any `contextmatrix-*` dependency.
 Worker containers run as container UID 1000. `serve` creates each session's
 run directory with mode 0750 under `chat_run_dir`, writes `resume.jsonl` into
 it, and bind-mounts it read-only at `/run/cm-chat`; it also bind-mounts
-`ca_cert_file` when configured. Session secrets reach the worker as container
-environment, not files. When `serve` runs as another host UID or GID, or under
+`ca_cert_file` when configured. Session secrets (the MCP key, the git-credentials
+bearer, and the LLM proxy token below) reach the worker as container environment,
+not files. When `serve` runs as another host UID or GID, or under
 rootless Docker (where container UID 1000 maps to a subuid), the worker cannot
 read the run directory. A resumed chat then logs "starting fresh" and silently
 loses its prior conversation, and a `ca_cert_file` the worker cannot read fails
 the session at startup. Fresh sessions otherwise run. `serve` logs a warning
 on Linux when its UID is not 1000.
+
+## Worker credentials
+
+The real LLM key never enters a worker container. `serve` registers the
+session's LLM endpoint with an in-process proxy and gives the worker a
+stand-in token plus the proxy URL.
+
+```
+ CM ──trigger (real key)──▶ serve (host)
+                            ┌──────────────────────────────┐
+                            │ keeps REAL KEY in memory     │
+                            │ proxy: token T → REAL KEY    │
+                            └──▲─────────────────┬─────────┘
+            gives the container│only token T     │ Authorization: REAL KEY
+            + proxy URL        │                 ▼
+                  ┌────────────┼── worker ─┐   LLM gateway / OpenRouter
+                  │ LLM_API_KEY = T (stand-in)
+                  │ LLM_BASE_URL = http://host.docker.internal:<port>/llm
+                  │ worker ──Authorization: T──▶ proxy on serve
+                  │ bad dependency: reads T   │
+                  └───────────┬───────────────┘
+                              │ sends T out
+                              ▼
+            T at the gateway   → rejected (the gateway has never seen T)
+            T at serve's proxy → reachable only inside the trusted network,
+                                 and dead once the run ends
+```
+
+- At chat/start the endpoint is registered under the session ID and the worker
+  gets `LLM_API_KEY=<token>` and `LLM_BASE_URL=<container_serve_url>/llm`.
+- `serve` swaps the token for the real key on each upstream call, and revokes
+  the token when the container exits or the launch fails.
+- A resumed session gets a fresh token; the old one stays dead.
+
+Limits:
+
+- An `LLM_*` entry in `worker_extra_env` bypasses the proxy and puts that value in the container.
+- An HTTP proxy set in `worker_extra_env` needs the serve host (`host.docker.internal` by default) in `NO_PROXY`.
 
 ## Running as a ContextMatrix backend
 
