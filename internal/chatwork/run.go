@@ -154,7 +154,7 @@ func Run(ctx context.Context) error {
 	// by a watcher so a fresh per-repo git token the credential-helper/
 	// gh-wrapper subcommands fetch mid-session (see fetchedTokensPath) is
 	// picked up without restarting the worker.
-	redWatcher := newRedactorWatcher(os.Getenv("CM_MCP_API_KEY"), llmKey, gitCredentialsToken, fetchedTokensPath())
+	redWatcher := newSessionRedactor(llmKey, gitCredentialsToken)
 
 	go redWatcher.watch(ctx)
 

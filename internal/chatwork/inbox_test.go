@@ -107,6 +107,14 @@ func TestReleaseClearOpensHoldForNextEpoch(t *testing.T) {
 	in.onClear() // drops the stale message, holds the inbox
 	in.push(harness.UserMessage{Content: "post-clear"})
 
+	require.Empty(t, in.Drain(), "the dying epoch must not see a post-clear message")
+
+	shortCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	_, err := in.Wait(shortCtx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
 	closed := in.releaseClear()
 	assert.False(t, closed, "an open inbox must start the next epoch")
 
