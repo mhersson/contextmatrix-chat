@@ -145,10 +145,20 @@ func TestGracefulShutdown(t *testing.T) {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	gracefulShutdown(httpSrv, nil, exec, tracker, &draining, logger)
+	runDirBase := t.TempDir()
+	for _, id := range []string{"s1", "s2"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(runDirBase, id), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(runDirBase, id, "resume.jsonl"), []byte("{}"), 0o600))
+	}
+
+	gracefulShutdown(httpSrv, nil, exec, tracker, runDirBase, &draining, logger)
 
 	assert.True(t, draining.Load(), "draining flag must be set after shutdown")
 	assert.Len(t, exec.kills, 2, "Kill must be called once per tracked session")
+
+	for _, id := range []string{"s1", "s2"} {
+		assert.NoDirExists(t, filepath.Join(runDirBase, id), "a killed session's run dir must be removed")
+	}
 }
 
 func TestBuildAdminServer_DisabledWhenZero(t *testing.T) {

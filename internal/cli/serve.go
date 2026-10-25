@@ -164,12 +164,6 @@ func runServe(ctx context.Context, configPath string) error {
 		base = cfg.ContextMatrixURL
 	}
 
-	// Pre-retirement deployments staged local credentials at
-	// <secrets_dir>/shared/env - in PAT mode a long-lived token. The refresher
-	// that owned that file is gone; remove the residue best-effort so it does
-	// not linger on a persistent secrets_dir.
-	_ = os.RemoveAll(filepath.Join(cfg.SecretsDir, "shared"))
-
 	// Task-skills resolver: fetches the {git_remote_url, ref} pointer from CM and
 	// shallow-clones it once into a host cache dir that handleChatStart binds
 	// read-only into each worker at /run/cm-skills. CM is the single source of
@@ -253,7 +247,7 @@ func runServe(ctx context.Context, configPath string) error {
 		logger.Info("context cancelled, shutting down")
 	}
 
-	gracefulShutdown(httpServer, adminSrv, exec, tracker, &draining, logger)
+	gracefulShutdown(httpServer, adminSrv, exec, tracker, cfg.ChatRunDir, &draining, logger)
 	logger.Info("chat service stopped")
 
 	return nil
@@ -270,6 +264,7 @@ func gracefulShutdown(
 	adminServer *http.Server,
 	exec executor.Executor,
 	tracker *executor.Tracker,
+	chatRunDirBase string,
 	draining *atomic.Bool,
 	logger *slog.Logger,
 ) {
@@ -304,6 +299,14 @@ func gracefulShutdown(
 		}
 
 		killCancel()
+
+		// The exit hook may not run before the process stops; the run dir holds
+		// transcript text, so remove it here.
+		runDir := filepath.Join(chatRunDirBase, run.SessionID)
+		if err := os.RemoveAll(runDir); err != nil {
+			logger.Warn("failed to remove run dir on shutdown",
+				"session_id", run.SessionID, "dir", runDir, "error", err)
+		}
 	}
 }
 
