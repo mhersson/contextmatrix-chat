@@ -243,6 +243,7 @@ func TestRunGHWrapper_GitHubComNoGHHost(t *testing.T) {
 func TestRunGHWrapper_NoOriginRemote_ExecsUnauthenticated(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GH_ENTERPRISE_TOKEN", "")
 
 	dir := gitRepoWithOrigin(t, "")
 
@@ -277,17 +278,11 @@ func TestRunGHWrapper_NoOriginRemote_ExecsUnauthenticated(t *testing.T) {
 
 	envMap := envToSliceMap(gotEnv)
 	assert.Empty(t, envMap["GH_TOKEN"])
-	assert.NotContains(t, envMap, "GH_ENTERPRISE_TOKEN")
+	assert.Empty(t, envMap["GH_ENTERPRISE_TOKEN"])
 }
 
-// TestRunGHWrapper_FetchFailure_StillExecsWithoutToken is the discriminating
-// regression test for the review finding: RunGHWrapper used to return before
-// ever calling execFunc when the credential fetch failed, breaking every
-// repo-less gh call (gh --version, gh auth status, gh api /user, gh repo
-// list, gh repo create) in provisioned mode. It must now still exec gh - with
-// no injected token - and log exactly one concise stderr note that carries
-// no token, bearer, or URL query value. On the pre-fix code, execFunc is
-// never invoked and this test fails.
+// TestRunGHWrapper_FetchFailure_StillExecsWithoutToken verifies a failed fetch
+// still execs gh with no token and logs one note that carries no secret.
 func TestRunGHWrapper_FetchFailure_StillExecsWithoutToken(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 
