@@ -534,6 +534,13 @@ func TestValidate_ContainerServeURL(t *testing.T) {
 		{name: "loopback v4", url: "http://127.0.0.1:9093", wantErr: true},
 		{name: "loopback v6", url: "http://[::1]:9093", wantErr: true},
 		{name: "unparsable", url: "://bad", wantErr: true},
+		{name: "query", url: "http://h.example:9093?x=1", wantErr: true},
+		{name: "bare question mark", url: "http://h.example:9093?", wantErr: true},
+		{name: "slash question mark", url: "http://h.example:9093/?", wantErr: true},
+		{name: "fragment", url: "http://h.example:9093#frag", wantErr: true},
+		{name: "slash hash", url: "http://h.example:9093/#", wantErr: true},
+		{name: "unspecified v4", url: "http://0.0.0.0:9093", wantErr: true},
+		{name: "unspecified v6", url: "http://[::]:9093", wantErr: true},
 	}
 
 	for _, tt := range tests {

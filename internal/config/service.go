@@ -422,6 +422,14 @@ func normalizeContainerServeURL(raw string) (string, error) {
 		return "", fmt.Errorf("container_serve_url must not have a path, got %q", u.Path)
 	}
 
+	if strings.ContainsAny(raw, "?#") {
+		return "", fmt.Errorf("container_serve_url must not carry a query or fragment, got %q", raw)
+	}
+
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return "", fmt.Errorf("container_serve_url must not be an unspecified address, got %q: workers would reach themselves", host)
+	}
+
 	if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()) {
 		return "", fmt.Errorf("container_serve_url must not be a loopback address: workers cannot reach it, got %q", host)
 	}

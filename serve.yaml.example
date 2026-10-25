@@ -30,7 +30,8 @@ contextmatrix_url: http://localhost:8080
 # container_contextmatrix_url: http://172.17.0.1:8080
 
 # URL of this service as seen from inside worker containers. Must be http or
-# https with a non-loopback host and no path; a trailing slash is trimmed.
+# https with a host that is neither loopback nor unspecified (0.0.0.0, ::) and
+# no path, query or fragment; a trailing slash is trimmed.
 # When unset, workers use http://host.docker.internal:<port>, with <port> the
 # webhook port below. Workers send their LLM calls to <this URL>/llm, so they
 # must be able to reach that port (a host firewall must allow it).
