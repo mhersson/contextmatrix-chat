@@ -96,8 +96,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Install govulncheck at the version the Makefile pins.
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+        run: |
+          set -euo pipefail
+          VERSION=$(grep '^GOVULNCHECK_VERSION' Makefile | head -1 | awk '{print $NF}')
+          go install "golang.org/x/vuln/cmd/govulncheck@${VERSION}"
 
       # Fails only on symbol-level findings (the code calls the vulnerable
       # symbol) that also have an upstream fix. A JSON stream without a config
