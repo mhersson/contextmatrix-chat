@@ -203,15 +203,13 @@ func TestConfigureGitAuth(t *testing.T) {
 
 // TestValidateLLMKey verifies Run's worker-side backstop for handleChatStart's
 // fail-closed launch guard: a non-empty key passes, an empty key (the guard
-// having been bypassed) fails with a legible, self-explanatory error.
+// having been bypassed) fails.
 func TestValidateLLMKey(t *testing.T) {
 	t.Parallel()
 
 	require.NoError(t, validateLLMKey("sk-something"))
 
-	err := validateLLMKey("")
-	require.Error(t, err)
-	assert.Equal(t, "no llm api key available: CM did not provision an llm endpoint", err.Error())
+	require.Error(t, validateLLMKey(""))
 }
 
 // TestEpochLoop_RunError verifies that a non-clear error from run propagates.

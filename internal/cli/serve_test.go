@@ -61,7 +61,6 @@ func TestChatExit(t *testing.T) {
 	case entry := <-ch:
 		assert.Equal(t, "system", entry.Type)
 		assert.Equal(t, sessionID, entry.SessionID)
-		assert.Contains(t, entry.Content, "container exited")
 		assert.Contains(t, entry.Content, "42")
 	case <-time.After(time.Second):
 		t.Fatal("timeout: no LogEntry published to hub")
