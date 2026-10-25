@@ -248,17 +248,16 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	// Operator-supplied extra env is appended after the system vars so that
 	// explicit operator entries take precedence over CM_*/CMX_* defaults for
-	// any duplicate keys. This is also the operator's escape hatch OVER the
-	// CM-provisioned per-session LLM_* credentials above: because worker_extra_env
-	// is appended last and Docker takes the last value for a duplicate key, an
-	// LLM_API_KEY/LLM_BASE_URL/LLM_TYPE set here overrides what CM provisioned for
-	// this session. Intentional, but surfaced below for operator visibility.
+	// any duplicate keys. An LLM_* key here replaces the per-session proxy token
+	// and URL set above (Docker keeps the last duplicate). An LLM_API_KEY with
+	// LLM_BASE_URL bypasses the proxy; LLM_API_KEY alone is rejected by it.
+	// Intentional, but surfaced below for operator visibility.
 	for k, v := range s.workerExtraEnv {
 		env = append(env, k+"="+v)
 	}
 
 	// Warn when worker_extra_env sets an LLM_* key, since that operator value
-	// silently overrides the session's CM-provisioned credential. Log the env
+	// silently replaces the session's proxy token and URL. Log the env
 	// NAME(s) only - never the value - and once per process, so a long-lived
 	// server with a static worker_extra_env does not spam its log every session.
 	if names := llmExtraEnvKeys(s.workerExtraEnv); len(names) > 0 {

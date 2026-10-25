@@ -40,12 +40,14 @@ type LLMProxy interface {
 	Revoke(runKey string)
 }
 
-// SessionSecretRegistry records and forgets the secrets a session's container
-// receives (git-credentials bearer, MCP key, LLM proxy token, the real LLM key,
-// and any worker_extra_env LLM_API_KEY override) so the host-side log-bridge redactor masks them in
-// bridged worker stderr and unparsable stdout, the only masking those surfaces
-// get. handleChatStart registers them before the container starts; DropSession
-// and the launch-failure path forget them all in one call.
+// SessionSecretRegistry records and forgets a session's secrets so the
+// host-side log-bridge redactor masks them in bridged worker stderr and
+// unparsable stdout, the only masking those surfaces get. The secrets are the
+// git-credentials bearer, MCP key and LLM proxy token the container receives,
+// the real LLM key serve holds for it (the container never gets it), and any
+// worker_extra_env LLM_API_KEY override. handleChatStart registers them before
+// the container starts; DropSession and the launch-failure path forget them
+// all in one call.
 // *logbridge.RedactorRegistry satisfies it.
 type SessionSecretRegistry interface {
 	AddSessionKey(sessionID, key string)
