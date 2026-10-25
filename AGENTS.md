@@ -165,7 +165,7 @@ per-card budget ceilings, HITL gates, git autosquash / force-push.
 Run before every commit - all must be clean:
 
 ```bash
-make fmt       # gofumpt -w . (CI flags any gofmt-vs-gofumpt difference)
+make fmt       # gofumpt -w ./cmd ./internal (CI flags any gofmt-vs-gofumpt difference)
 make build     # go build ./...
 make test      # go test ./...  (also: make test-race)
 make lint      # golangci-lint run

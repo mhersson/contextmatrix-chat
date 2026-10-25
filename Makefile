@@ -76,7 +76,7 @@ test:
 test-race:
 	CGO_ENABLED=1 go test -race ./...
 fmt:
-	gofumpt -w .
+	gofumpt -w ./cmd ./internal
 lint:
 	golangci-lint run
 docker-worker: ## Build the default (full) worker image
