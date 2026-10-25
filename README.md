@@ -289,7 +289,7 @@ make install        # go install the stamped binary
 make test           # go test ./...
 make test-race      # CGO_ENABLED=1 go test -race ./...
 make lint           # golangci-lint run
-make fmt            # gofumpt -w .
+make fmt            # gofumpt -w ./cmd ./internal
 make docker-worker  # build the worker image
 ```
 

@@ -20,7 +20,8 @@ The HTTP transport core (HMAC auth, replay cache, drain gate, SSE `/logs`,
 health/readiness/images probes, request metrics), the /message dedup cache, the
 log bridge, the metrics bundle, the stdin frame codec, the task-skills
 resolver, and the per-session LLM proxy come from the shared
-`contextmatrix-backendkit` module (version pinned in `go.mod`). The chat-specific lifecycle handlers, the container executor, and the MCP bridge
+`contextmatrix-backendkit` module (version pinned in `go.mod`). The
+chat-specific lifecycle handlers, the container executor, and the MCP bridge
 live here; they mount onto and inject into the shared pieces.
 
 ## Package map
@@ -143,8 +144,8 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
    `(host, path)` and mints a fresh token, so one session can span multiple
    projects/hosts. A fetch failure logs one stderr note (never a credential)
    and continues; the `gh` wrapper in a directory with no origin remote makes
-   no fetch, and gh runs unauthenticated. Minted tokens are recorded to a scratch file the
-   redactor polls, so they stay masked.
+   no fetch, and gh runs unauthenticated. Minted tokens are recorded to a
+   scratch file the redactor polls, so they stay masked.
 9. **task-skills come from ContextMatrix** (single source of truth): serve
    fetches a `{git_remote_url, ref}` pointer, clones it on the host, and
    bind-mounts the clone read-only at `/run/cm-skills`. Chat carries no

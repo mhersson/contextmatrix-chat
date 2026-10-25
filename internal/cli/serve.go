@@ -253,12 +253,14 @@ func runServe(ctx context.Context, configPath string) error {
 	return nil
 }
 
-// gracefulShutdown drains the HTTP listener and kills every tracked container.
+// gracefulShutdown drains the HTTP listener, kills every tracked container and
+// removes its run dir.
 // No status callback is made - the chat backend has no ContextMatrix reporter.
 //  1. flip draining so /readyz returns 503 and mutating routes refuse new work
 //  2. Shutdown the HTTP server with a bounded budget
 //  3. Shutdown the admin server if enabled
-//  4. for each tracked run: Kill the container (ignore ErrNotFound)
+//  4. for each tracked run: Kill the container (ignore ErrNotFound) and remove
+//     its run dir
 func gracefulShutdown(
 	httpServer *http.Server,
 	adminServer *http.Server,

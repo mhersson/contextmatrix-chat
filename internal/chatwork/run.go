@@ -160,7 +160,7 @@ func Run(ctx context.Context) error {
 	go redWatcher.watch(ctx)
 
 	// 9. Inbox: channel-backed; Pump reads stdin frames in a goroutine and
-	// closes the inbox on EOF so harness.Run exits when the host closes stdin.
+	// closes the inbox on EOF. /chat/end ends a session by stopping the container.
 	// clearCh carries /clear signals from the frame reader to the epoch loop.
 	in := newChatInbox()
 
