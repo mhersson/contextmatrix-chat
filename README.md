@@ -169,7 +169,8 @@ Limits:
    `ty`/`ruff`, and Rust via `rustup`/`cargo` with `clippy`/`rustfmt`. Slimmer single-language variants
    (`go-node`, `python`, `rust`) are also published, along with `jvm-node` for
    Kotlin/Java + Node projects (JDK 21 as `java`, Maven, Node 24, `yarn`; not
-   part of `full`). Toolchain versions are pinned and checksum-verified.
+   part of `full`). Debian packages come from Debian's signed repositories and
+   every other tool is pinned and SHA256-verified.
 
    Any other ecosystem (Ruby, .NET) **needs an image carrying that
    toolchain** - build one `FROM` a published variant (see the agent repo's

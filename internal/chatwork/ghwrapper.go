@@ -13,10 +13,9 @@ import (
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
 )
 
-// realGHPath is the apt-installed gh binary in the worker image
-// (docker/Dockerfile.worker installs it from GitHub's apt source). The shim
-// execs it by absolute path so it never recurses into itself.
-const realGHPath = "/usr/bin/gh"
+// realGHPath is the gh release binary docker/Dockerfile.worker installs. The
+// shim execs it by absolute path so it never recurses into itself.
+const realGHPath = "/usr/local/bin/gh"
 
 // installGHWrapperV2 writes a `gh` shim to a fresh dir and returns that dir
 // for prepending to the bash tool's PATH. The shim delegates the per-call

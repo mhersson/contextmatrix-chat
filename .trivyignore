@@ -21,7 +21,7 @@ CVE-2026-78667
 CVE-2026-78669
 CVE-2026-97031
 
-# --- The bundled npm CLI (/usr/lib/node_modules/npm/node_modules) ships undici
+# --- The bundled npm CLI (/usr/local/lib/node_modules/npm/node_modules) ships undici
 # 6.29.0. CVE-2026-109869 is an undici DoS via an unhandled stream error in
 # npm's own registry client (6.29.1 fixes); the worst case is one failed npm
 # command on the single-tenant worker. npm 12.2.1, the worker's pin and the
