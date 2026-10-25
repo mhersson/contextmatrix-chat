@@ -1191,6 +1191,58 @@ func TestChatStart_LaunchFailureUnregistersLLMKey(t *testing.T) {
 		"a failed launch must unregister the session key")
 }
 
+// TestChatStart_RunDirLifecycle verifies the run dir (resume.jsonl holds
+// transcript text) is removed when no container launches and kept when one
+// does, since the container mounts it and the exit hook removes it later.
+func TestChatStart_RunDirLifecycle(t *testing.T) {
+	cases := []struct {
+		name      string
+		launchErr error
+		wantCode  int
+		wantDir   bool
+	}{
+		{"launched keeps dir", nil, http.StatusAccepted, true},
+		{"launch failure removes dir", errors.New("boom"), http.StatusBadGateway, false},
+		{"capacity refusal removes dir", executor.ErrCapacity, http.StatusTooManyRequests, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tracker := executor.NewTracker(10)
+			fe := &fakeExecutor{tracker: tracker, launchErr: tc.launchErr}
+			base := t.TempDir()
+
+			srv := NewServer(Config{
+				LLMProxy: newTestLLMProxy(t),
+				APIKey:   testAPIKey,
+				Executor: fe,
+				Tracker:  tracker,
+				Chat: ChatConfig{
+					Image:          testImage,
+					MCPURL:         testMCPURL,
+					ChatRunDirBase: base,
+					MaxConcurrent:  10,
+				},
+				Logger: discardLogger(),
+			})
+
+			payload := protocol.ChatStartPayload{
+				SessionID: testSession,
+				Resume:    &protocol.ChatResumeContext{Turns: []protocol.ChatResumeTurn{{Seq: 1, Role: "user", Content: "secret transcript"}}},
+			}
+			w := httptest.NewRecorder()
+			srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", mustJSON(t, provisioned(payload))))
+			require.Equal(t, tc.wantCode, w.Code, "body: %s", w.Body.String())
+
+			if tc.wantDir {
+				assert.DirExists(t, filepath.Join(base, testSession))
+			} else {
+				assert.NoDirExists(t, filepath.Join(base, testSession))
+			}
+		})
+	}
+}
+
 // TestDropSession_UnregistersLLMKey verifies the container-exit cleanup path
 // asks the registry to forget the session's secrets so the redaction set stays
 // bounded.

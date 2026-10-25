@@ -115,6 +115,20 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// resume.jsonl holds transcript text, so any return that launches no
+	// container removes the run dir; chatExit removes it once one exits.
+	launched := false
+
+	defer func() {
+		if launched {
+			return
+		}
+
+		if err := os.RemoveAll(runDir); err != nil {
+			s.logger.Warn("chat/start: remove run dir failed", "session_id", p.SessionID, "error", err)
+		}
+	}()
+
 	// Write resume.jsonl only when a resume context was supplied. Each turn is
 	// one JSON line so the entrypoint can stream it with bufio.Scanner.
 	if p.Resume != nil {
@@ -332,6 +346,8 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
+
+	launched = true
 
 	containerID := ""
 	if run, ok := s.tracker.Get(p.SessionID); ok {
