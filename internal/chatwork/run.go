@@ -39,11 +39,9 @@ const (
 // drives the epoch loop to completion. Each epoch is one harness.Run; a /clear
 // frame ends the current epoch and starts a fresh one with no history.
 func Run(ctx context.Context) error {
-	// 1. CM-provisioned LLM endpoint: handleChatStart sets LLM_API_KEY/
-	// LLM_BASE_URL/LLM_TYPE as per-session container env, the same delivery
-	// mechanism as CM_CHAT_REPO_URL. All three are always set for a launched
-	// session - an empty value is a real provisioned answer (e.g. base_url
-	// meaning "the type's canonical default").
+	// 1. handleChatStart sets LLM_API_KEY/LLM_BASE_URL/LLM_TYPE as per-session
+	// container env: LLM_BASE_URL is serve's proxy URL and LLM_API_KEY a
+	// per-session proxy token, not the real key.
 	llmKey := os.Getenv("LLM_API_KEY")
 	llmBaseURL := os.Getenv("LLM_BASE_URL")
 	llmType := os.Getenv("LLM_TYPE")

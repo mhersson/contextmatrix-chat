@@ -530,6 +530,7 @@ func TestValidate_ContainerServeURL(t *testing.T) {
 		{name: "empty host", url: "http://", wantErr: true},
 		{name: "path", url: "http://h:1/llm", wantErr: true},
 		{name: "localhost", url: "http://localhost:9093", wantErr: true},
+		{name: "localhost upper case", url: "http://LOCALHOST:9093", wantErr: true},
 		{name: "loopback v4", url: "http://127.0.0.1:9093", wantErr: true},
 		{name: "loopback v6", url: "http://[::1]:9093", wantErr: true},
 		{name: "unparsable", url: "://bad", wantErr: true},

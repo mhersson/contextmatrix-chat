@@ -209,6 +209,14 @@ func TestWarnIfNotWorkerUID(t *testing.T) {
 	}
 }
 
+func TestChatConfig_LLMBaseURL(t *testing.T) {
+	t.Parallel()
+
+	got := chatConfig(&config.ServiceConfig{Port: 9093}, "http://cm:8080")
+
+	assert.Equal(t, "http://host.docker.internal:9093/llm", got.LLMBaseURL)
+}
+
 func TestChatConfig_CarriesReplayReasoning(t *testing.T) {
 	t.Parallel()
 

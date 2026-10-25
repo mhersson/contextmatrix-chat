@@ -32,7 +32,8 @@ contextmatrix_url: http://localhost:8080
 # URL of this service as seen from inside worker containers. Must be http or
 # https with a non-loopback host and no path; a trailing slash is trimmed.
 # When unset, workers use http://host.docker.internal:<port>, with <port> the
-# webhook port above. Workers send their LLM calls to <this URL>/llm.
+# webhook port below. Workers send their LLM calls to <this URL>/llm, so they
+# must be able to reach that port (a host firewall must allow it).
 # CMX_CONTAINER_SERVE_URL
 # container_serve_url: http://172.17.0.1:9093
 
@@ -126,12 +127,14 @@ secrets_dir: /var/run/cm-chat/secrets
 # Additional environment variables injected verbatim into every worker
 # container, after the CM_*/CMX_* system vars (so an explicit entry overrides a
 # system default for any duplicate key). Useful for operator-specific
-# passthrough. Limits: an LLM_* entry here bypasses the LLM proxy and puts that
-# value in the container; an HTTP proxy here needs the serve host
-# (host.docker.internal by default) in NO_PROXY.
+# passthrough. Limits: overriding LLM_API_KEY needs LLM_BASE_URL as well; the
+# pair bypasses the LLM proxy and puts that key in the container. An HTTP proxy
+# here needs the serve host (host.docker.internal by default) in NO_PROXY, and
+# does not govern LLM calls: those leave from serve, so serve's own
+# HTTP(S)_PROXY / NO_PROXY environment applies (set it on its service unit).
 # worker_extra_env:
 #   HTTP_PROXY: http://proxy.example.com:3128
-#   NO_PROXY: localhost,127.0.0.1
+#   NO_PROXY: localhost,127.0.0.1,host.docker.internal
 
 # Optional host path to a PEM file of extra CA certificate(s) - e.g. the CA of a
 # TLS-inspecting egress proxy. Container-only: when set, the file is bind-mounted

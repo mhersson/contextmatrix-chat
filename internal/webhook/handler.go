@@ -41,8 +41,8 @@ type LLMProxy interface {
 }
 
 // SessionSecretRegistry records and forgets the secrets a session's container
-// receives (git-credentials bearer, MCP key, LLM proxy token, and any worker_extra_env
-// LLM_* override) so the host-side log-bridge redactor masks them in
+// receives (git-credentials bearer, MCP key, LLM proxy token, the real LLM key,
+// and any worker_extra_env LLM_API_KEY override) so the host-side log-bridge redactor masks them in
 // bridged worker stderr and unparsable stdout, the only masking those surfaces
 // get. handleChatStart registers them before the container starts; DropSession
 // and the launch-failure path forget them all in one call.
@@ -336,7 +336,7 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /readyz", s.RecordMetrics(s.HandleReadyz))
 
 	// The proxy authenticates by per-session token, so it sits outside Auth
-	// (workers hold no HMAC key) and DrainGate (live sessions finish their turn).
+	// (workers hold no HMAC key) and DrainGate (an in-flight call finishes within the shutdown budget).
 	if s.llmProxy != nil {
 		mux.HandleFunc(LLMProxyPrefix+"/", s.RecordMetrics(s.llmProxy.ServeHTTP))
 	}

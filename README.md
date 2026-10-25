@@ -91,6 +91,8 @@ free of any `contextmatrix-*` dependency.
   instance-wide MCP API key, in the chat-start payload - git credentials are then fetched
   fresh per repo, per operation, from CM's worker git-credentials endpoint,
   not staged upfront. There is no local credential fallback.
+- Upstream LLM calls leave from `serve`, so its own `HTTP(S)_PROXY` / `NO_PROXY` environment governs them; an egress proxy set only in `worker_extra_env` no longer reaches LLM traffic, so give serve's process (e.g. its service unit) the proxy env.
+- Workers must reach serve's webhook port at `container_serve_url` (by default `host.docker.internal:<port>`, the Docker host gateway); a host firewall must allow it.
 - A shared HMAC secret (at least 32 characters), configured on both this service
   and ContextMatrix.
 
@@ -143,7 +145,7 @@ stand-in token plus the proxy URL.
 
 Limits:
 
-- An `LLM_*` entry in `worker_extra_env` bypasses the proxy and puts that value in the container.
+- Overriding the key in `worker_extra_env` needs `LLM_BASE_URL` as well; the pair bypasses the proxy and puts that key in the container.
 - An HTTP proxy set in `worker_extra_env` needs the serve host (`host.docker.internal` by default) in `NO_PROXY`.
 
 ## Running as a ContextMatrix backend
