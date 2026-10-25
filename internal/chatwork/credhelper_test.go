@@ -115,7 +115,7 @@ func TestGitCredentialGet_RetriesOn409ThenSucceeds(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		n := attempts.Add(1)
 		if n < 3 {
-			w.WriteHeader(http.StatusConflict)
+			writeAPIError(w, http.StatusConflict, "WORKER_NOT_RUNNING")
 
 			return
 		}
@@ -142,7 +142,7 @@ func TestGitCredentialGet_FailsAfterMaxRetriesOn409(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		attempts.Add(1)
-		w.WriteHeader(http.StatusConflict)
+		writeAPIError(w, http.StatusConflict, "WORKER_NOT_RUNNING")
 	}))
 	defer srv.Close()
 
@@ -157,6 +157,36 @@ func TestGitCredentialGet_FailsAfterMaxRetriesOn409(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, int32(client.maxAttempts), attempts.Load())
 	assert.Empty(t, stdout.String(), "no stdout on failure - git surfaces its own auth error")
+}
+
+func writeAPIError(w http.ResponseWriter, status int, code string) {
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": "refused bearer", "code": code})
+}
+
+func TestGitCredentialGet_ValidationConflictFailsImmediately(t *testing.T) {
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		writeAPIError(w, http.StatusConflict, "VALIDATION_ERROR")
+	}))
+	defer srv.Close()
+
+	client := newGitCredentialClient(srv.URL, "bearer")
+	client.retryDelay = time.Millisecond
+
+	stdin := strings.NewReader("protocol=https\nhost=example.test\npath=owner/repo\n\n")
+
+	var stdout strings.Builder
+
+	err := gitCredentialGetWithClient(context.Background(), stdin, &stdout, client, nil)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errGitCredentialSessionNotLive)
+	assert.Equal(t, int32(1), attempts.Load(), "only WORKER_NOT_RUNNING is retried")
+	assert.Contains(t, err.Error(), "409 VALIDATION_ERROR")
+	assert.NotContains(t, err.Error(), "bearer", "a server echoing the bearer must be masked")
+	assert.Empty(t, stdout.String())
 }
 
 func TestGitCredentialGet_NonRetryableErrorFailsImmediately(t *testing.T) {

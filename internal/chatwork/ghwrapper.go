@@ -55,35 +55,38 @@ var execFunc = syscall.Exec
 // fresh credential, and execs the real gh binary with args, replacing this
 // process.
 //
+// Credentials are per repository, so a directory with no origin remote makes
+// no fetch (CM refuses an empty repository) and gh runs unauthenticated with
+// the ambient environment, silently: that is the designed outcome.
+//
 // The exec is decoupled from the fetch: a credential-fetch failure (config
 // unreadable, no provisioned config staged, or the HTTP fetch itself
 // failing) logs one concise stderr note - never the token, bearer, or URL
 // query values - and gh STILL execs, with the ambient environment and no
-// injected token. Exec'ing gh best-effort keeps repo-less gh calls
-// (gh --version, gh auth status, gh api /user, gh repo list, gh repo create)
-// working even when a credential can't be minted.
+// injected token. Exec'ing gh best-effort keeps gh --version and other calls
+// that need no repository working even when a credential can't be minted.
 func RunGHWrapper(ctx context.Context, dir string, args []string) error {
 	env := os.Environ()
 
-	fetchedEnv, err := ghCredentialEnv(ctx, dir)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "gh-wrapper: git credential fetch failed; running gh without an injected token")
-	} else {
-		env = fetchedEnv
+	if host, path := originHostPath(ctx, dir); path != "" {
+		fetchedEnv, err := ghCredentialEnv(ctx, host, path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "gh-wrapper: git credential fetch failed; running gh without an injected token")
+		} else {
+			env = fetchedEnv
+		}
 	}
 
 	return execFunc(realGHPath, append([]string{realGHPath}, args...), env) //nolint:gosec // G204: realGHPath is a code-fixed constant; args are the model's own gh invocation, passed through unmodified
 }
 
 // ghCredentialEnv resolves the bearer and CM endpoint from the staged config
-// file, derives the target (host, path) from dir's git "origin" remote
-// (empty dir means the ambient working directory), fetches a fresh
-// credential, and returns the environment gh should exec with: ambient
+// file, fetches a fresh credential for (host, path), and returns the environment gh should exec with: ambient
 // os.Environ() plus GH_TOKEN/GH_ENTERPRISE_TOKEN (+ GH_HOST for a
 // non-github.com host - gh ignores GH_TOKEN on GitHub Enterprise Server). Any
 // failure returns a nil env and a non-nil error; RunGHWrapper treats that as
 // a signal to exec gh anyway, with no injected token.
-func ghCredentialEnv(ctx context.Context, dir string) ([]string, error) {
+func ghCredentialEnv(ctx context.Context, host, path string) ([]string, error) {
 	src, err := secrets.Open(gitCredentialsConfigPath())
 	if err != nil {
 		return nil, fmt.Errorf("read git-credentials config: %w", err)
@@ -95,8 +98,6 @@ func ghCredentialEnv(ctx context.Context, dir string) ([]string, error) {
 	if credentialsURL == "" || bearer == "" {
 		return nil, fmt.Errorf("gh-wrapper invoked but no provisioned git-credentials config is staged")
 	}
-
-	host, path := originHostPath(ctx, dir)
 
 	cred, err := newGitCredentialClient(credentialsURL, bearer).fetch(ctx, host, path)
 	if err != nil {
@@ -115,8 +116,7 @@ func ghCredentialEnv(ctx context.Context, dir string) ([]string, error) {
 
 // originHostPath returns the bare host and owner/repo path of dir's git
 // "origin" remote, or ("", "") when there is none (no origin configured, or
-// the command fails) - CM then serves the instance-wide credential for an
-// empty (host, path) pair. dir == "" runs git in the ambient working
+// the command fails). dir == "" runs git in the ambient working
 // directory (production); tests pass an explicit dir to avoid mutating global
 // process state via os.Chdir.
 func originHostPath(ctx context.Context, dir string) (host, path string) {

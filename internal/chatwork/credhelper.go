@@ -134,15 +134,13 @@ const (
 	gitCredentialDefaultRetryDelay  = 500 * time.Millisecond
 )
 
-// errGitCredentialSessionNotLive marks CM's 409 response - the only status
-// code gitCredentialClient.fetch retries (400, 401, 404, 500, 502, etc. all
-// fail immediately). The body is NOT inspected, so every 409 is treated as
-// this same retryable case, including CM's other use of 409: a broken project
-// credential binding, which retrying can never fix. That case still retries
-// the bounded gitCredentialDefaultMaxAttempts (~1s total delay) before
-// failing - acceptable today; distinguishing it by response body to fail
-// immediately is a follow-up, not implemented here.
+// errGitCredentialSessionNotLive marks CM's 409 WORKER_NOT_RUNNING refusal, the
+// only response gitCredentialClient.fetch retries. Every other refusal,
+// including the 409 VALIDATION_ERROR for a broken project credential binding,
+// fails at once.
 var errGitCredentialSessionNotLive = errors.New("chat session is not yet live")
+
+const codeWorkerNotRunning = "WORKER_NOT_RUNNING"
 
 // gitCredential is the decode target for CM's worker git-credentials response.
 type gitCredential struct {
@@ -175,8 +173,8 @@ func newGitCredentialClient(credentialsURL, bearer string) *gitCredentialClient 
 
 // fetch mints a fresh credential for (host, path), retrying up to
 // c.maxAttempts times - bounded to errGitCredentialSessionNotLive only - with
-// c.retryDelay between attempts. host and path may be empty (an instance-wide
-// credential fetch, e.g. the gh wrapper with no origin remote).
+// c.retryDelay between attempts. CM refuses an empty (host, path) pair, so
+// callers without a repository do not fetch.
 func (c *gitCredentialClient) fetch(ctx context.Context, host, path string) (gitCredential, error) {
 	var (
 		cred gitCredential
@@ -228,12 +226,8 @@ func (c *gitCredentialClient) doFetch(ctx context.Context, host, path string) (g
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
-	if resp.StatusCode == http.StatusConflict {
-		return gitCredential{}, errGitCredentialSessionNotLive
-	}
-
-	if resp.StatusCode >= 400 {
-		return gitCredential{}, fmt.Errorf("git-credentials returned %d", resp.StatusCode)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return gitCredential{}, c.refusal(resp.StatusCode, body)
 	}
 
 	var gc gitCredential
@@ -246,6 +240,31 @@ func (c *gitCredentialClient) doFetch(ctx context.Context, host, path string) (g
 	}
 
 	return gc, nil
+}
+
+// refusal maps CM's {error, code} body to an error. Without a decodable body
+// it falls back to the bare status. The bearer is masked in case a server
+// echoes it.
+func (c *gitCredentialClient) refusal(status int, body []byte) error {
+	var apiErr struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+
+	if json.Unmarshal(body, &apiErr) != nil || apiErr.Error == "" {
+		return fmt.Errorf("git-credentials returned %d", status)
+	}
+
+	if status == http.StatusConflict && apiErr.Code == codeWorkerNotRunning {
+		return errGitCredentialSessionNotLive
+	}
+
+	text := apiErr.Error
+	if c.bearer != "" {
+		text = strings.ReplaceAll(text, c.bearer, "[redacted]")
+	}
+
+	return fmt.Errorf("git-credentials refused (%d %s): %s", status, apiErr.Code, text)
 }
 
 // GitCredentialGet implements git's credential "get" operation against CM's

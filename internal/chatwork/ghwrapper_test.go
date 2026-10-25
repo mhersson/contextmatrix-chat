@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
@@ -236,23 +237,19 @@ func TestRunGHWrapper_GitHubComNoGHHost(t *testing.T) {
 	assert.False(t, hasGHHost)
 }
 
-// TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected verifies that
-// with no origin remote in cwd, the wrapper still fetches with an empty
-// (host, path) pair - CM's worker git-credentials endpoint serves the
-// instance-wide credential for that pair (rather than 400ing), so a no-origin
-// directory has a real happy path. This proves the wrapper completes that
-// happy path end to end - the fetched instance token actually reaches gh's
-// exec'd environment.
-func TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected(t *testing.T) {
+// TestRunGHWrapper_NoOriginRemote_ExecsUnauthenticated verifies a directory
+// with no origin remote makes no credential fetch (CM refuses an empty
+// repository) and execs gh with no injected token.
+func TestRunGHWrapper_NoOriginRemote_ExecsUnauthenticated(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("GH_TOKEN", "")
 
 	dir := gitRepoWithOrigin(t, "")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Empty(t, r.URL.Query().Get("host"))
-		assert.Empty(t, r.URL.Query().Get("path"))
+	var calls atomic.Int32
 
-		_ = json.NewEncoder(w).Encode(map[string]string{"username": "x-access-token", "token": "ghs_instance999"})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls.Add(1)
 	}))
 	defer srv.Close()
 
@@ -275,11 +272,12 @@ func TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected(t *testing.T) {
 
 	require.NoError(t, RunGHWrapper(context.Background(), dir, []string{"repo", "create"}))
 
-	assert.Equal(t, realGHPath, gotPath, "gh must actually exec")
+	assert.Equal(t, realGHPath, gotPath, "gh must still exec")
+	assert.Zero(t, calls.Load(), "no origin means no credential fetch")
 
 	envMap := envToSliceMap(gotEnv)
-	assert.Equal(t, "ghs_instance999", envMap["GH_TOKEN"], "instance credential must be injected")
-	assert.Equal(t, "ghs_instance999", envMap["GH_ENTERPRISE_TOKEN"], "instance credential must be injected")
+	assert.Empty(t, envMap["GH_TOKEN"])
+	assert.NotContains(t, envMap, "GH_ENTERPRISE_TOKEN")
 }
 
 // TestRunGHWrapper_FetchFailure_StillExecsWithoutToken is the discriminating
