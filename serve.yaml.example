@@ -29,6 +29,13 @@ contextmatrix_url: http://localhost:8080
 # CMX_CONTAINER_CONTEXTMATRIX_URL
 # container_contextmatrix_url: http://172.17.0.1:8080
 
+# URL of this service as seen from inside worker containers. Must be http or
+# https with a non-loopback host and no path; a trailing slash is trimmed.
+# When unset, workers use http://host.docker.internal:<port>, with <port> the
+# webhook port above.
+# CMX_CONTAINER_SERVE_URL
+# container_serve_url: http://172.17.0.1:9093
+
 # Shared secret between ContextMatrix and the chat service. ContextMatrix signs
 # every webhook (and the admin /metrics request) with it; the service verifies
 # the HMAC. Must be at least 32 characters. Required.

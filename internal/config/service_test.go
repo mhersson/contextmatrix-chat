@@ -514,3 +514,42 @@ func TestLoadService_ReplayReasoning(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, cfg.ReplayReasoning, "env wins over the file")
 }
+
+func TestValidate_ContainerServeURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		want    string
+		wantErr bool
+	}{
+		{name: "empty", url: "", want: ""},
+		{name: "ip with port", url: "http://10.0.0.5:19093", want: "http://10.0.0.5:19093"},
+		{name: "https host", url: "https://serve.example", want: "https://serve.example"},
+		{name: "trailing slash trimmed", url: "http://host.docker.internal:9093/", want: "http://host.docker.internal:9093"},
+		{name: "bad scheme", url: "ftp://h:1", wantErr: true},
+		{name: "empty host", url: "http://", wantErr: true},
+		{name: "path", url: "http://h:1/llm", wantErr: true},
+		{name: "localhost", url: "http://localhost:9093", wantErr: true},
+		{name: "loopback v4", url: "http://127.0.0.1:9093", wantErr: true},
+		{name: "loopback v6", url: "http://[::1]:9093", wantErr: true},
+		{name: "unparsable", url: "://bad", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validServiceConfig()
+			cfg.ContainerServeURL = tt.url
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "container_serve_url")
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.ContainerServeURL)
+		})
+	}
+}

@@ -5,6 +5,8 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"reflect"
 	"sort"
@@ -39,6 +41,7 @@ type CompactionConfig struct {
 type ServiceConfig struct {
 	ContextMatrixURL          string
 	ContainerContextMatrixURL string
+	ContainerServeURL         string
 	APIKey                    string
 	Port                      int
 	AdminPort                 int
@@ -75,6 +78,7 @@ type ServiceConfig struct {
 type serviceRaw struct {
 	ContextMatrixURL          string            `koanf:"contextmatrix_url"`
 	ContainerContextMatrixURL string            `koanf:"container_contextmatrix_url"`
+	ContainerServeURL         string            `koanf:"container_serve_url"`
 	APIKey                    string            `koanf:"api_key"`
 	Port                      int               `koanf:"port"`
 	AdminPort                 int               `koanf:"admin_port"`
@@ -261,6 +265,7 @@ func (r serviceRaw) toConfig() *ServiceConfig {
 	return &ServiceConfig{
 		ContextMatrixURL:          r.ContextMatrixURL,
 		ContainerContextMatrixURL: r.ContainerContextMatrixURL,
+		ContainerServeURL:         r.ContainerServeURL,
 		APIKey:                    r.APIKey,
 		Port:                      r.Port,
 		AdminPort:                 r.AdminPort,
@@ -361,6 +366,13 @@ func (c *ServiceConfig) Validate() error {
 		c.AdminBindAddr = "127.0.0.1"
 	}
 
+	serveURL, err := normalizeContainerServeURL(c.ContainerServeURL)
+	if err != nil {
+		return err
+	}
+
+	c.ContainerServeURL = serveURL
+
 	if c.SecretsDir == "" {
 		return fmt.Errorf("secrets_dir is required")
 	}
@@ -382,4 +394,37 @@ func (c *ServiceConfig) Validate() error {
 	}
 
 	return nil
+}
+
+// normalizeContainerServeURL validates container_serve_url and returns it
+// without a trailing slash. Empty is valid and selects the runtime fallback.
+func normalizeContainerServeURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("container_serve_url is not a valid URL: %w", err)
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("container_serve_url scheme must be http or https, got %q", u.Scheme)
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("container_serve_url must have a host")
+	}
+
+	if u.Path != "" && u.Path != "/" {
+		return "", fmt.Errorf("container_serve_url must not have a path, got %q", u.Path)
+	}
+
+	if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()) {
+		return "", fmt.Errorf("container_serve_url must not be a loopback address: workers cannot reach it, got %q", host)
+	}
+
+	return strings.TrimSuffix(raw, "/"), nil
 }
