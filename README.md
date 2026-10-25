@@ -22,7 +22,7 @@ ContextMatrix splits its execution backends:
 - **ChatBackend** - interactive chat sessions (this service).
 
 The chat backend is selected and configured operator-side and runs alongside
-the task backend. It talks to ContextMatrix over five channels:
+the task backend. It talks to ContextMatrix over these channels:
 
 - **Chat lifecycle webhooks** (CM → chat) - HMAC-signed `POST /chat/start`,
   `POST /message`, `POST /chat/end`.
@@ -30,6 +30,11 @@ the task backend. It talks to ContextMatrix over five channels:
 - **Board operations** (worker → CM, over **MCP**) - the in-session model reads
   and writes cards, starts autonomous card runs, and hands a need over to the
   architect, through ContextMatrix's MCP endpoint.
+- **Git credentials** (worker → CM) - `GET /api/worker/git-credentials` with
+  the session's bearer mints a token for one repository on each git or gh call.
+- **Task-skills source** (chat → CM) - `GET /api/chat/task-skills-source`
+  returns the `{git_remote_url, ref}` pointer serve clones and mounts into
+  each worker.
 - **Image inventory** (CM → chat) - HMAC-signed `GET /images` backing
   ContextMatrix's worker-image settings dropdown.
 - **Health** (CM → chat) - open `GET /health` returns `ok`,
