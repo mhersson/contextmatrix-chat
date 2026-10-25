@@ -18,9 +18,9 @@ come from the shared `contextmatrix-harness` module (version pinned in
 
 The HTTP transport core (HMAC auth, replay cache, drain gate, SSE `/logs`,
 health/readiness/images probes, request metrics), the /message dedup cache, the
-log bridge, the metrics bundle, the stdin frame codec, and the task-skills
-resolver come from the shared `contextmatrix-backendkit` module (version pinned
-in `go.mod`). The chat-specific lifecycle handlers, the container executor, and the MCP bridge
+log bridge, the metrics bundle, the stdin frame codec, the task-skills
+resolver, and the per-session LLM proxy come from the shared
+`contextmatrix-backendkit` module (version pinned in `go.mod`). The chat-specific lifecycle handlers, the container executor, and the MCP bridge
 live here; they mount onto and inject into the shared pieces.
 
 ## Package map
@@ -29,7 +29,7 @@ live here; they mount onto and inject into the shared pieces.
 cmd/contextmatrix-chat/   entrypoint; runs the cobra root command
 internal/cli/             cobra commands: serve, work (hidden), git-credential + gh-wrapper (hidden container-internal shims)
 internal/config/          layered service config (defaults < file < env, CMX_*) + Validate
-internal/webhook/         HTTP surface: /chat/start, /chat/end, /message lifecycle handlers, mounted on backendkit/webhookcore.Core (HMAC auth, replay cache, drain gate, SSE /logs, /images, /health, /readyz)
+internal/webhook/         HTTP surface: /chat/start, /chat/end, /message lifecycle handlers and the worker LLM proxy mount (/llm), mounted on backendkit/webhookcore.Core (HMAC auth, replay cache, drain gate, SSE /logs, /images, /health, /readyz)
 internal/executor/        Docker container lifecycle; Tracker gates concurrency; DockerExecutor implements Executor
 internal/chatwork/        container work loop: provisioned credentials, git credential helper, optional clone, tool registry, embedded primer, resume, epoch loop
 internal/mcpbridge/       dials CM's /mcp, adapts each board tool to a harness tools.Tool
@@ -55,8 +55,8 @@ the other way instead: satisfy a harness interface from a consumer here.
 ### Go
 
 - Everything lives under `internal/` - nothing exported outside the module.
-- Interfaces belong in the package that uses them: the webhook server consumes
-  the `executor.Executor` interface that `DockerExecutor` satisfies.
+- Interfaces belong in the package that uses them: the webhook server declares
+  `webhook.SkillsResolver`, which backendkit's task-skills resolver satisfies.
 - Constructors return concrete types; consumers take interfaces.
 - Wrap errors with `fmt.Errorf("operation: %w", err)`. Never swallow errors.
 - `context.Context` is the first parameter of any function that does I/O.
@@ -142,8 +142,9 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
    GETs CM's `/api/worker/git-credentials` with the target repo's
    `(host, path)` and mints a fresh token, so one session can span multiple
    projects/hosts. A fetch failure logs one stderr note (never a credential)
-   and continues. Minted tokens are recorded to a scratch file the redactor
-   polls, so they stay masked.
+   and continues; the `gh` wrapper in a directory with no origin remote makes
+   no fetch, and gh runs unauthenticated. Minted tokens are recorded to a scratch file the
+   redactor polls, so they stay masked.
 9. **task-skills come from ContextMatrix** (single source of truth): serve
    fetches a `{git_remote_url, ref}` pointer, clones it on the host, and
    bind-mounts the clone read-only at `/run/cm-skills`. Chat carries no
@@ -170,12 +171,13 @@ make test      # go test ./...  (also: make test-race)
 make lint      # golangci-lint run
 ```
 
-Also confirm `gofumpt -l .` is empty. Executor tests needing a real Docker
-daemon are gated by `CMX_TEST_DOCKER` and skip when it is unset.
+Executor tests needing a real Docker daemon are gated by `CMX_TEST_DOCKER` and
+skip when it is unset.
 
 - **Never commit to `main`.** Work on a feature branch; tasks of a plan or
   scope the user approved commit there without asking again. Never push
   without explicit user approval.
+- No session links in commits or PRs.
 
 Commit messages: conventional (`type(scope): description`), short and
 imperative, with bullet points in the body for the what/why. NEVER reference a
