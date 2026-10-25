@@ -77,15 +77,16 @@ func RunGHWrapper(ctx context.Context, dir string, args []string) error {
 		}
 	}
 
-	return execFunc(realGHPath, append([]string{realGHPath}, args...), env) //nolint:gosec // G204: realGHPath is a code-fixed constant; args are the model's own gh invocation, passed through unmodified
+	return execFunc(realGHPath, append([]string{realGHPath}, args...), env)
 }
 
 // ghCredentialEnv resolves the bearer and CM endpoint from the staged config
-// file, fetches a fresh credential for (host, path), and returns the environment gh should exec with: ambient
-// os.Environ() plus GH_TOKEN/GH_ENTERPRISE_TOKEN (+ GH_HOST for a
-// non-github.com host - gh ignores GH_TOKEN on GitHub Enterprise Server). Any
-// failure returns a nil env and a non-nil error; RunGHWrapper treats that as
-// a signal to exec gh anyway, with no injected token.
+// file, fetches a fresh credential for (host, path), and returns the
+// environment gh should exec with: ambient os.Environ() plus
+// GH_TOKEN/GH_ENTERPRISE_TOKEN (+ GH_HOST for a non-github.com host - gh
+// ignores GH_TOKEN on GitHub Enterprise Server). Any failure returns a nil env
+// and a non-nil error; RunGHWrapper treats that as a signal to exec gh anyway,
+// with no injected token.
 func ghCredentialEnv(ctx context.Context, host, path string) ([]string, error) {
 	src, err := secrets.Open(gitCredentialsConfigPath())
 	if err != nil {

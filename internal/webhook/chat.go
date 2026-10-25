@@ -26,7 +26,7 @@ const skillsMountPath = "/run/cm-skills"
 // caCertMountPath is the fixed in-container path where the optional operator CA
 // PEM (config: ca_cert_file) is bind-mounted read-only. The worker points its
 // harness LLM client, MCP bridge, and git (GIT_SSL_CAINFO) at this path so
-// egress TLS trusts the extra CA.
+// their TLS trusts the extra CA.
 const caCertMountPath = "/run/cm-ca/ca.crt"
 
 // handleChatStart starts a long-lived chat container for the given session. It
@@ -251,8 +251,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	// Optional extra CA: tell the worker the in-container cert path so its
 	// harness LLM client and MCP bridge trust it, and point git at it via
-	// GIT_SSL_CAINFO. The matching read-only bind is added below. (Chat's worker
-	// uses git but not gh, so no GH_CA_BUNDLE is needed.)
+	// GIT_SSL_CAINFO. The matching read-only bind is added below.
 	if s.caCertFile != "" {
 		env = append(env,
 			"CMX_CA_CERT_FILE="+caCertMountPath,
@@ -403,10 +402,10 @@ func writeResumeJSONL(path string, turns []protocol.ChatResumeTurn) error {
 	return nil
 }
 
-// handleChatEnd closes the stdin of the tracked chat container, signalling EOF
-// to the work process so it exits naturally. It is idempotent: an untracked
-// session (already ended or never started) returns 200. A stale or already-
-// closed stdin is not a hard error - we log it and return 202 regardless.
+// handleChatEnd closes the tracked chat container's stdin and stops the
+// container. It is idempotent: an untracked session (already ended or never
+// started) returns 200. A stale or already-closed stdin is not a hard error -
+// we log it and return 202 regardless.
 func (s *Server) handleChatEnd(w http.ResponseWriter, r *http.Request) {
 	var p protocol.ChatEndPayload
 	if !webhookcore.Decode(w, r, &p) {

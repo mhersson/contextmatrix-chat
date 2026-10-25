@@ -285,7 +285,7 @@ func (e *DockerExecutor) Launch(ctx context.Context, spec LaunchSpec) error {
 	// supervision must outlive the request ctx that triggered Launch, otherwise
 	// a returned webhook handler would cancel a still-running container's wait
 	// and cleanup. Chat containers are long-lived; there is no per-container
-	// deadline - the container runs until /chat/end closes stdin.
+	// deadline - the container runs until Stop (from /chat/end) or a kill.
 	//nolint:gosec // G118: detached ctx is intentional; container outlives the request
 	go e.waitAndCleanup(spec.SessionID, resp.ID, run.StartedAt, attach, pumpDone, log)
 
@@ -318,10 +318,10 @@ func (e *DockerExecutor) pump(sessionID string, r io.Reader, log *slog.Logger) {
 }
 
 // waitAndCleanup blocks on ContainerWait with no deadline - chat containers are
-// long-lived and run until /chat/end closes stdin so the work process exits
-// naturally. It then force-removes the container, observes its duration by
-// outcome, waits up to pumpDrainTimeout for the output pump to finish, fires
-// onExit, clears the tracker entry, and closes the attach connection on return.
+// long-lived and run until Stop (from /chat/end) or a kill. It then
+// force-removes the container, observes its duration by outcome, waits up to
+// pumpDrainTimeout for the output pump to finish, fires onExit, clears the
+// tracker entry, and closes the attach connection on return.
 func (e *DockerExecutor) waitAndCleanup(
 	sessionID, containerID string,
 	startedAt time.Time,
@@ -376,7 +376,7 @@ func (e *DockerExecutor) waitAndCleanup(
 	// Run onExit (chatExit's run-dir teardown) BEFORE releasing the tracker slot.
 	// While the session is still tracked, a concurrent same-session /chat/start
 	// stays 409-blocked (chat.go conflict check), so it cannot recreate the run
-	// dir and have its freshly written primer/resume deleted by this cleanup.
+	// dir and have its freshly written resume.jsonl deleted by this cleanup.
 	if e.onExit != nil {
 		e.onExit(sessionID, exitCode)
 	}

@@ -217,7 +217,7 @@ func (c *gitCredentialClient) doFetch(ctx context.Context, host, path string) (g
 
 	req.Header.Set("Authorization", "Bearer "+c.bearer)
 
-	resp, err := c.http.Do(req) //nolint:gosec // credentialsURL is operator/CM config, not user input
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return gitCredential{}, fmt.Errorf("fetch git-credentials: %w", err)
 	}
