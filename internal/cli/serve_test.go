@@ -72,6 +72,13 @@ func TestChatExit(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "run dir must be removed after container exit")
 }
 
+func TestComposeLLMBaseURL(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "http://host.docker.internal:9093/llm", composeLLMBaseURL("", 9093))
+	assert.Equal(t, "http://10.0.0.5:19093/llm", composeLLMBaseURL("http://10.0.0.5:19093", 9093))
+}
+
 func TestComposeMCPURL(t *testing.T) {
 	t.Parallel()
 
@@ -200,6 +207,14 @@ func TestWarnIfNotWorkerUID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestChatConfig_LLMBaseURL(t *testing.T) {
+	t.Parallel()
+
+	got := chatConfig(&config.ServiceConfig{Port: 9093}, "http://cm:8080")
+
+	assert.Equal(t, "http://host.docker.internal:9093/llm", got.LLMBaseURL)
 }
 
 func TestChatConfig_CarriesReplayReasoning(t *testing.T) {

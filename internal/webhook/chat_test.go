@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mhersson/contextmatrix-backendkit/frames"
+	"github.com/mhersson/contextmatrix-backendkit/llmproxy"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
 	protocol "github.com/mhersson/contextmatrix-protocol"
 	"github.com/stretchr/testify/assert"
@@ -109,6 +110,7 @@ func (w *failOnceWriter) Write(p []byte) (int, error) {
 type fakeExecutor struct {
 	mu        sync.Mutex
 	launched  []executor.LaunchSpec
+	attempted []executor.LaunchSpec
 	stopped   []string
 	launchErr error
 	tracker   *executor.Tracker
@@ -116,12 +118,14 @@ type fakeExecutor struct {
 }
 
 func (f *fakeExecutor) Launch(_ context.Context, spec executor.LaunchSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.attempted = append(f.attempted, spec)
+
 	if f.launchErr != nil {
 		return f.launchErr
 	}
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
 
 	f.launched = append(f.launched, spec)
 
@@ -254,6 +258,7 @@ func newChatServer(t *testing.T) (*Server, *executor.Tracker, *fakeExecutor) {
 	fe := &fakeExecutor{tracker: tracker}
 
 	srv := NewServer(Config{
+		LLMProxy:       newTestLLMProxy(t),
 		APIKey:         testAPIKey,
 		Executor:       fe,
 		Tracker:        tracker,
@@ -367,6 +372,7 @@ func TestChatStart_CapacityLimit(t *testing.T) {
 	tracker := executor.NewTracker(1)
 	fe := &fakeExecutor{tracker: tracker}
 	srv := NewServer(Config{
+		LLMProxy: newTestLLMProxy(t),
 		APIKey:   testAPIKey,
 		Executor: fe,
 		Tracker:  tracker,
@@ -571,6 +577,7 @@ func TestChatStart_PerProjectWorkerImage(t *testing.T) {
 			logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
 			srv := NewServer(Config{
+				LLMProxy: newTestLLMProxy(t),
 				APIKey:   testAPIKey,
 				Executor: fe,
 				Tracker:  tracker,
@@ -621,6 +628,7 @@ func TestChatStart_WorkerImageWireTag(t *testing.T) {
 	fe := &fakeExecutor{tracker: tracker}
 
 	srv := NewServer(Config{
+		LLMProxy: newTestLLMProxy(t),
 		APIKey:   testAPIKey,
 		Executor: fe,
 		Tracker:  tracker,
@@ -656,6 +664,7 @@ func TestChatStart_ConfigEnvForwarded(t *testing.T) {
 	fe := &fakeExecutor{tracker: tracker}
 
 	srv := NewServer(Config{
+		LLMProxy: newTestLLMProxy(t),
 		APIKey:   testAPIKey,
 		Executor: fe,
 		Tracker:  tracker,
@@ -699,6 +708,7 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 		fe := &fakeExecutor{tracker: tracker}
 
 		srv := NewServer(Config{
+			LLMProxy: newTestLLMProxy(t),
 			APIKey:   testAPIKey,
 			Executor: fe,
 			Tracker:  tracker,
@@ -731,6 +741,7 @@ func TestChatStart_ReasoningEffortEnv(t *testing.T) {
 		fe := &fakeExecutor{tracker: tracker}
 
 		srv := NewServer(Config{
+			LLMProxy: newTestLLMProxy(t),
 			APIKey:   testAPIKey,
 			Executor: fe,
 			Tracker:  tracker,
@@ -762,6 +773,7 @@ func TestChatStart_CACertMountAndEnv(t *testing.T) {
 		fe := &fakeExecutor{tracker: tracker}
 
 		srv := NewServer(Config{
+			LLMProxy: newTestLLMProxy(t),
 			APIKey:   testAPIKey,
 			Executor: fe,
 			Tracker:  tracker,
@@ -821,6 +833,7 @@ func TestChatStart_NoSkillsWhenResolverEmpty(t *testing.T) {
 	// Resolver yields no skills (empty pointer or fetch failure): the worker
 	// launches without the skills bind or CMX_TASK_SKILLS_DIR env.
 	srv := NewServer(Config{
+		LLMProxy:       newTestLLMProxy(t),
 		APIKey:         testAPIKey,
 		Executor:       fe,
 		Tracker:        tracker,
@@ -859,6 +872,7 @@ func TestChatStart_NoSkillsWhenResolverFails(t *testing.T) {
 	fe := &fakeExecutor{tracker: tracker}
 
 	srv := NewServer(Config{
+		LLMProxy:       newTestLLMProxy(t),
 		APIKey:         testAPIKey,
 		Executor:       fe,
 		Tracker:        tracker,
@@ -883,61 +897,202 @@ func TestChatStart_NoSkillsWhenResolverFails(t *testing.T) {
 
 // ---- LLM endpoint ------------------------------------------------------------
 
-// TestChatStart_LLMEndpointFromPayload verifies that the CM-provisioned
-// llm_endpoint on the chat-start payload is delivered to the worker as
-// per-session LLM_API_KEY/LLM_BASE_URL/LLM_TYPE container env - the same
-// delivery mechanism already used for CM_CHAT_REPO_URL.
-func TestChatStart_LLMEndpointFromPayload(t *testing.T) {
-	srv, _, fe := newChatServer(t)
+const testRealLLMKey = "sk-real-key-123456"
 
-	payload := protocol.ChatStartPayload{
-		SessionID: testSession,
-		LLMEndpoint: &protocol.LLMEndpoint{
-			Type:    "openai",
-			BaseURL: "https://llm.example/v1",
-			APIKey:  "sk-payload-key-123456",
-		},
+// testLLMBaseURL is the container-side proxy URL the tests configure; the
+// worker must receive exactly this, never the payload's upstream.
+const testLLMBaseURL = "http://host.docker.internal:9093/llm"
+
+// newTestLLMProxy returns a real llmproxy at LLMProxyPrefix.
+func newTestLLMProxy(t *testing.T) *llmproxy.Proxy {
+	t.Helper()
+
+	p, err := llmproxy.New(llmproxy.Config{Prefix: LLMProxyPrefix, Logger: discardLogger()})
+	require.NoError(t, err)
+
+	return p
+}
+
+// newUpstream returns a stub LLM endpoint that records the Authorization
+// header of the last request it served.
+func newUpstream(t *testing.T) (*httptest.Server, func() string) {
+	t.Helper()
+
+	var (
+		mu   sync.Mutex
+		auth string
+	)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	t.Cleanup(ts.Close)
+
+	return ts, func() string {
+		mu.Lock()
+		defer mu.Unlock()
+
+		return auth
+	}
+}
+
+// startLLMSession starts a chat session whose payload carries the given
+// endpoint and returns the response code.
+func startLLMSession(t *testing.T, srv *Server, ep *protocol.LLMEndpoint) int {
+	t.Helper()
+
+	body := mustJSON(t, provisioned(protocol.ChatStartPayload{SessionID: testSession, LLMEndpoint: ep}))
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
+
+	return w.Code
+}
+
+// llmRequest sends method path with the bearer token through srv.Routes().
+func llmRequest(srv *Server, method, path, token string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, path, strings.NewReader("{}"))
+	r.Header.Set("Authorization", "Bearer "+token)
+
+	w := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(w, r)
+
+	return w
+}
+
+func TestChatStart_LLMEnvCarriesProxyNotKey(t *testing.T) {
+	srv, _, fe := newChatServer(t)
+	srv.llmBaseURL = testLLMBaseURL
+
+	upstream, seenAuth := newUpstream(t)
+
+	code := startLLMSession(t, srv, &protocol.LLMEndpoint{Type: "openai", BaseURL: upstream.URL, APIKey: testRealLLMKey})
+	require.Equal(t, http.StatusAccepted, code)
+
+	launched := fe.Launched()
+	require.Len(t, launched, 1)
+
+	for _, kv := range launched[0].Env {
+		assert.NotContains(t, kv, testRealLLMKey)
 	}
 
-	body := mustJSON(t, provisioned(payload))
+	envMap := envToMap(launched[0].Env)
+	assert.Equal(t, testLLMBaseURL, envMap["LLM_BASE_URL"])
+	assert.Equal(t, "openai", envMap["LLM_TYPE"])
+	require.NotEmpty(t, envMap["LLM_API_KEY"])
+	assert.NotEqual(t, testRealLLMKey, envMap["LLM_API_KEY"])
+
+	w := llmRequest(srv, http.MethodPost, "/llm/chat/completions", envMap["LLM_API_KEY"])
+	assert.Equal(t, http.StatusTeapot, w.Code)
+	assert.Equal(t, "Bearer "+testRealLLMKey, seenAuth())
+}
+
+func TestChatStart_EmptyBaseURLStillProxied(t *testing.T) {
+	srv, _, fe := newChatServer(t)
+	srv.llmBaseURL = testLLMBaseURL
+
+	code := startLLMSession(t, srv, &protocol.LLMEndpoint{Type: "openrouter", APIKey: testRealLLMKey})
+	require.Equal(t, http.StatusAccepted, code)
+
+	assert.Equal(t, testLLMBaseURL, envToMap(fe.Launched()[0].Env)["LLM_BASE_URL"])
+}
+
+func TestDropSession_RevokesLLMToken(t *testing.T) {
+	srv, _, fe := newChatServer(t)
+
+	upstream, _ := newUpstream(t)
+	require.Equal(t, http.StatusAccepted,
+		startLLMSession(t, srv, &protocol.LLMEndpoint{Type: "openai", BaseURL: upstream.URL, APIKey: testRealLLMKey}))
+
+	token := envToMap(fe.Launched()[0].Env)["LLM_API_KEY"]
+	require.NotEqual(t, http.StatusUnauthorized, llmRequest(srv, http.MethodGet, "/llm/models", token).Code)
+
+	srv.DropSession(testSession)
+
+	assert.Equal(t, http.StatusUnauthorized, llmRequest(srv, http.MethodGet, "/llm/models", token).Code)
+}
+
+func TestChatStart_LaunchFailureRevokesLLMToken(t *testing.T) {
+	srv, _, fe := newChatServer(t)
+	fe.launchErr = errors.New("docker down")
+
+	upstream, _ := newUpstream(t)
+	code := startLLMSession(t, srv, &protocol.LLMEndpoint{Type: "openai", BaseURL: upstream.URL, APIKey: testRealLLMKey})
+	require.Equal(t, http.StatusBadGateway, code)
+	require.Len(t, fe.attempted, 1)
+
+	token := envToMap(fe.attempted[0].Env)["LLM_API_KEY"]
+	require.NotEmpty(t, token)
+	assert.Equal(t, http.StatusUnauthorized, llmRequest(srv, http.MethodGet, "/llm/models", token).Code)
+}
+
+func TestChatStart_ResumeGetsFreshLLMToken(t *testing.T) {
+	srv, tracker, fe := newChatServer(t)
+
+	upstream, seenAuth := newUpstream(t)
+	ep := &protocol.LLMEndpoint{Type: "openai", BaseURL: upstream.URL, APIKey: testRealLLMKey}
+	require.Equal(t, http.StatusAccepted, startLLMSession(t, srv, ep))
+
+	oldToken := envToMap(fe.Launched()[0].Env)["LLM_API_KEY"]
+
+	srv.DropSession(testSession)
+	tracker.Remove(testSession)
+
+	body := mustJSON(t, provisioned(protocol.ChatStartPayload{
+		SessionID:   testSession,
+		LLMEndpoint: ep,
+		Resume:      &protocol.ChatResumeContext{Turns: []protocol.ChatResumeTurn{{Role: "user", Content: "hi"}}},
+	}))
 	w := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
 	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
 
 	launched := fe.Launched()
-	require.Len(t, launched, 1)
+	require.Len(t, launched, 2)
 
-	envMap := envToMap(launched[0].Env)
-	assert.Equal(t, "sk-payload-key-123456", envMap["LLM_API_KEY"])
-	assert.Equal(t, "https://llm.example/v1", envMap["LLM_BASE_URL"])
-	assert.Equal(t, "openai", envMap["LLM_TYPE"])
+	newToken := envToMap(launched[1].Env)["LLM_API_KEY"]
+	require.NotEmpty(t, newToken)
+	assert.NotEqual(t, oldToken, newToken)
+
+	assert.Equal(t, http.StatusTeapot, llmRequest(srv, http.MethodPost, "/llm/chat/completions", newToken).Code)
+	assert.Equal(t, "Bearer "+testRealLLMKey, seenAuth())
+	assert.Equal(t, http.StatusUnauthorized, llmRequest(srv, http.MethodGet, "/llm/models", oldToken).Code)
 }
 
-// TestChatStart_LLMEndpointEmptyBaseURLStillSet verifies that an explicitly
-// empty base_url on the provisioned LLMEndpoint (the type's canonical default)
-// is still written as a real env value, not skipped - it is a real provisioned
-// answer, not an omission.
-func TestChatStart_LLMEndpointEmptyBaseURLStillSet(t *testing.T) {
+func TestChatStart_RegistersLLMTokenForRedaction(t *testing.T) {
 	srv, _, fe := newChatServer(t)
+	fss := newFakeSessionSecrets()
+	srv.sessionSecrets = fss
 
-	payload := protocol.ChatStartPayload{
-		SessionID: testSession,
-		LLMEndpoint: &protocol.LLMEndpoint{
-			Type:   "openrouter",
-			APIKey: "sk-payload-key-123456",
-			// BaseURL intentionally empty: canonical default for the type.
-		},
-	}
+	upstream, _ := newUpstream(t)
+	require.Equal(t, http.StatusAccepted,
+		startLLMSession(t, srv, &protocol.LLMEndpoint{Type: "openai", BaseURL: upstream.URL, APIKey: testRealLLMKey}))
 
-	body := mustJSON(t, provisioned(payload))
-	w := httptest.NewRecorder()
-	srv.Routes().ServeHTTP(w, signedPostBody(t, "/chat/start", body))
-	require.Equal(t, http.StatusAccepted, w.Code, "body: %s", w.Body.String())
+	token := envToMap(fe.Launched()[0].Env)["LLM_API_KEY"]
+	assert.Contains(t, fss.addedKeys(testSession), token)
+	assert.Contains(t, fss.addedKeys(testSession), testRealLLMKey)
+}
 
-	envMap := envToMap(fe.Launched()[0].Env)
-	baseURL, has := envMap["LLM_BASE_URL"]
-	assert.True(t, has, "LLM_BASE_URL must be set (even empty) when LLMEndpoint is present")
-	assert.Empty(t, baseURL)
+func TestChatStart_LLMProxyRegisterFailureFailsClosed(t *testing.T) {
+	srv, _, fe := newChatServer(t)
+	fss := newFakeSessionSecrets()
+	srv.sessionSecrets = fss
+
+	code := startLLMSession(t, srv, &protocol.LLMEndpoint{Type: "openai", BaseURL: "ftp://x", APIKey: testRealLLMKey})
+	assert.Equal(t, http.StatusInternalServerError, code)
+	assert.Empty(t, fe.attempted)
+	assert.Empty(t, fss.addedKeys(testSession))
+}
+
+func TestChatStart_NoLLMProxyFailsClosed(t *testing.T) {
+	srv, _, fe := newChatServer(t)
+	srv.llmProxy = nil
+
+	code := startLLMSession(t, srv, &protocol.LLMEndpoint{Type: "openai", APIKey: testRealLLMKey})
+	assert.Equal(t, http.StatusInternalServerError, code)
+	assert.Empty(t, fe.attempted)
 }
 
 // TestChatStart_RegistersMCPKeyForRedaction verifies the instance-wide MCP
@@ -950,6 +1105,7 @@ func TestChatStart_RegistersMCPKeyForRedaction(t *testing.T) {
 	fss := newFakeSessionSecrets()
 
 	srv := NewServer(Config{
+		LLMProxy:       newTestLLMProxy(t),
 		APIKey:         testAPIKey,
 		Executor:       fe,
 		Tracker:        tracker,
@@ -988,6 +1144,7 @@ func TestChatStart_RegistersWorkerExtraEnvLLMKeyForRedaction(t *testing.T) {
 	fss := newFakeSessionSecrets()
 
 	srv := NewServer(Config{
+		LLMProxy:       newTestLLMProxy(t),
 		APIKey:         testAPIKey,
 		Executor:       fe,
 		Tracker:        tracker,
@@ -1022,6 +1179,7 @@ func TestChatStart_LaunchFailureUnregistersLLMKey(t *testing.T) {
 	fss := newFakeSessionSecrets()
 
 	srv := NewServer(Config{
+		LLMProxy:       newTestLLMProxy(t),
 		APIKey:         testAPIKey,
 		Executor:       fe,
 		Tracker:        tracker,
@@ -1060,6 +1218,7 @@ func TestDropSession_UnregistersLLMKey(t *testing.T) {
 	fss := newFakeSessionSecrets()
 
 	srv := NewServer(Config{
+		LLMProxy:       newTestLLMProxy(t),
 		APIKey:         testAPIKey,
 		Executor:       fe,
 		Tracker:        tracker,
@@ -1087,6 +1246,7 @@ func TestChatStart_WorkerExtraEnvLLMOverrideWarns(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 
 	srv := NewServer(Config{
+		LLMProxy: newTestLLMProxy(t),
 		APIKey:   testAPIKey,
 		Executor: fe,
 		Tracker:  tracker,
@@ -1188,6 +1348,7 @@ func TestChatStart_GitCredentialsTokenFromPayload(t *testing.T) {
 	fe := &fakeExecutor{tracker: tracker}
 
 	srv := NewServer(Config{
+		LLMProxy: newTestLLMProxy(t),
 		APIKey:   testAPIKey,
 		Executor: fe,
 		Tracker:  tracker,
@@ -1224,6 +1385,7 @@ func TestChatStart_GitCredentialsAndLLMKeyBothRegistered(t *testing.T) {
 	fss := newFakeSessionSecrets()
 
 	srv := NewServer(Config{
+		LLMProxy:       newTestLLMProxy(t),
 		APIKey:         testAPIKey,
 		Executor:       fe,
 		Tracker:        tracker,
@@ -1263,6 +1425,7 @@ func TestChatStart_LaunchFailureUnregistersGitCredentialsKey(t *testing.T) {
 	fss := newFakeSessionSecrets()
 
 	srv := NewServer(Config{
+		LLMProxy:       newTestLLMProxy(t),
 		APIKey:         testAPIKey,
 		Executor:       fe,
 		Tracker:        tracker,
@@ -1715,6 +1878,7 @@ func TestChatStart_ReplayReasoningEnv(t *testing.T) {
 			fe := &fakeExecutor{tracker: tracker}
 
 			srv := NewServer(Config{
+				LLMProxy: newTestLLMProxy(t),
 				APIKey:   testAPIKey,
 				Executor: fe,
 				Tracker:  tracker,

@@ -29,6 +29,15 @@ contextmatrix_url: http://localhost:8080
 # CMX_CONTAINER_CONTEXTMATRIX_URL
 # container_contextmatrix_url: http://172.17.0.1:8080
 
+# URL of this service as seen from inside worker containers. Must be http or
+# https with a host that is neither loopback nor unspecified (0.0.0.0, ::) and
+# no path, query or fragment; a trailing slash is trimmed.
+# When unset, workers use http://host.docker.internal:<port>, with <port> the
+# webhook port below. Workers send their LLM calls to <this URL>/llm, so they
+# must be able to reach that port (a host firewall must allow it).
+# CMX_CONTAINER_SERVE_URL
+# container_serve_url: http://172.17.0.1:9093
+
 # Shared secret between ContextMatrix and the chat service. ContextMatrix signs
 # every webhook (and the admin /metrics request) with it; the service verifies
 # the HMAC. Must be at least 32 characters. Required.
@@ -119,10 +128,14 @@ secrets_dir: /var/run/cm-chat/secrets
 # Additional environment variables injected verbatim into every worker
 # container, after the CM_*/CMX_* system vars (so an explicit entry overrides a
 # system default for any duplicate key). Useful for operator-specific
-# passthrough.
+# passthrough. Limits: overriding LLM_API_KEY needs LLM_BASE_URL as well; the
+# pair bypasses the LLM proxy and puts that key in the container. An HTTP proxy
+# here needs the serve host (host.docker.internal by default) in NO_PROXY, and
+# does not govern LLM calls: those leave from serve, so serve's own
+# HTTP(S)_PROXY / NO_PROXY environment applies (set it on its service unit).
 # worker_extra_env:
 #   HTTP_PROXY: http://proxy.example.com:3128
-#   NO_PROXY: localhost,127.0.0.1
+#   NO_PROXY: localhost,127.0.0.1,host.docker.internal
 
 # Optional host path to a PEM file of extra CA certificate(s) - e.g. the CA of a
 # TLS-inspecting egress proxy. Container-only: when set, the file is bind-mounted
@@ -132,7 +145,8 @@ secrets_dir: /var/run/cm-chat/secrets
 # bash-tool commands (curl/pip/npm, and any model-run git/gh) go through the
 # harness bash tool, which scrubs env, so they do NOT trust this CA without a
 # harness change - intentionally out of scope. The host-side service (GitHub auth,
-# task-skills fetch) uses the OS/pod trust store and is intentionally NOT affected.
+# task-skills fetch) uses the OS/pod trust store and is intentionally NOT affected,
+# except the host-side LLM proxy, which also trusts this CA for its upstream calls.
 # Empty disables it; when set the file must exist on the host. Must be a readable PEM.
 # CMX_CA_CERT_FILE
 # ca_cert_file: /etc/contextmatrix-chat/egress-ca.pem

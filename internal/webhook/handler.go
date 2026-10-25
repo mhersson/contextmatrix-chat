@@ -29,12 +29,25 @@ type SkillsResolver interface {
 	Resolve(ctx context.Context) (string, error)
 }
 
-// SessionSecretRegistry records and forgets the secrets a session's container
-// receives (git-credentials bearer, MCP key, LLM key, and any worker_extra_env
-// LLM_API_KEY override) so the host-side log-bridge redactor masks them in
-// bridged worker stderr and unparsable stdout, the only masking those surfaces
-// get. handleChatStart registers them before the container starts; DropSession
-// and the launch-failure path forget them all in one call.
+// LLMProxyPrefix is the path prefix serve mounts the worker LLM proxy under.
+const LLMProxyPrefix = "/llm"
+
+// LLMProxy holds the real LLM credentials host-side and hands each session a
+// per-session stand-in token. *llmproxy.Proxy satisfies it.
+type LLMProxy interface {
+	http.Handler
+	Register(runKey string, up protocol.LLMEndpoint) (string, error)
+	Revoke(runKey string)
+}
+
+// SessionSecretRegistry records and forgets a session's secrets so the
+// host-side log-bridge redactor masks them in bridged worker stderr and
+// unparsable stdout, the only masking those surfaces get. The secrets are the
+// git-credentials bearer, MCP key and LLM proxy token the container receives,
+// the real LLM key serve holds for it (the container never gets it), and any
+// worker_extra_env LLM_API_KEY override. handleChatStart registers them before
+// the container starts; DropSession and the launch-failure path forget them
+// all in one call.
 // *logbridge.RedactorRegistry satisfies it.
 type SessionSecretRegistry interface {
 	AddSessionKey(sessionID, key string)
@@ -85,6 +98,9 @@ type ChatConfig struct {
 	// GitCredentialsToken so the worker can fetch fresh, per-repo credentials
 	// on demand.
 	GitCredentialsURL string
+	// LLMBaseURL is the container-side URL of the LLM proxy, forwarded to the
+	// worker as LLM_BASE_URL (e.g. http://host.docker.internal:9093/llm).
+	LLMBaseURL string
 }
 
 // Config carries the dependencies NewServer needs. Pointers may be shared with
@@ -113,6 +129,10 @@ type Config struct {
 	// bridged worker logs. nil disables per-session registration (bare test
 	// servers leave it unset).
 	SessionSecrets SessionSecretRegistry
+
+	// LLMProxy serves the worker's LLM calls and mints per-session tokens.
+	// chat/start fails closed without it.
+	LLMProxy LLMProxy
 
 	// Images lists the node's tagged images for GET /images. Nil disables the
 	// endpoint (500 internal).
@@ -184,6 +204,8 @@ type Server struct {
 	replayReasoning           bool
 	caCertFile                string
 	gitCredentialsURL         string
+	llmBaseURL                string
+	llmProxy                  LLMProxy
 
 	dedup *webhookcore.DedupCache
 
@@ -261,6 +283,8 @@ func NewServer(cfg Config) *Server {
 		replayReasoning:           cfg.Chat.ReplayReasoning,
 		caCertFile:                cfg.Chat.CACertFile,
 		gitCredentialsURL:         cfg.Chat.GitCredentialsURL,
+		llmBaseURL:                cfg.Chat.LLMBaseURL,
+		llmProxy:                  cfg.LLMProxy,
 		dedup:                     dedup,
 		logger:                    logger,
 	}
@@ -291,6 +315,10 @@ func (s *Server) DropSession(sessionID string) {
 	if s.sessionSecrets != nil {
 		s.sessionSecrets.RemoveSessionKey(sessionID)
 	}
+
+	if s.llmProxy != nil {
+		s.llmProxy.Revoke(sessionID)
+	}
 }
 
 // Routes returns the mux with every webhook route mounted. The mutating
@@ -308,6 +336,12 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.HandleFunc("GET /images", s.RecordMetrics(s.Auth(s.HandleImages)))
 	mux.HandleFunc("GET /health", s.RecordMetrics(s.HandleHealth))
 	mux.HandleFunc("GET /readyz", s.RecordMetrics(s.HandleReadyz))
+
+	// The proxy authenticates by per-session token, so it sits outside Auth
+	// (workers hold no HMAC key) and DrainGate (an in-flight call finishes within the shutdown budget).
+	if s.llmProxy != nil {
+		mux.HandleFunc(LLMProxyPrefix+"/", s.RecordMetrics(s.llmProxy.ServeHTTP))
+	}
 
 	return mux
 }

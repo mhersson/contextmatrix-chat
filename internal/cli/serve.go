@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mhersson/contextmatrix-backendkit/llmproxy"
 	"github.com/mhersson/contextmatrix-backendkit/logbridge"
 	"github.com/mhersson/contextmatrix-backendkit/taskskills"
 	"github.com/mhersson/contextmatrix-backendkit/webhookcore"
@@ -97,7 +98,16 @@ func runServe(ctx context.Context, configPath string) error {
 
 	warnIfNotWorkerUID(logger, runtime.GOOS, os.Getuid())
 
-	mx := metrics.New()
+	mx := metrics.New(llmproxy.Paths(webhook.LLMProxyPrefix)...)
+
+	llmProxy, err := llmproxy.New(llmproxy.Config{
+		Prefix:     webhook.LLMProxyPrefix,
+		CACertFile: cfg.CACertFile,
+		Logger:     logger,
+	})
+	if err != nil {
+		return fmt.Errorf("llm proxy: %w", err)
+	}
 
 	docker, err := executor.NewClient()
 	if err != nil {
@@ -176,6 +186,7 @@ func runServe(ctx context.Context, configPath string) error {
 		Tracker:          tracker,
 		SkillsResolver:   skillsResolver,
 		SessionSecrets:   redactorRegistry,
+		LLMProxy:         llmProxy,
 		Images:           exec,
 		ImageListFilters: cfg.ImageListFilters,
 		Hub:              hub,
@@ -324,6 +335,16 @@ func composeMCPURL(base string) string {
 	return strings.TrimRight(base, "/") + "/mcp"
 }
 
+// composeLLMBaseURL builds the container-side LLM proxy URL. An unset
+// container_serve_url falls back to host.docker.internal on the webhook port.
+func composeLLMBaseURL(containerServeURL string, port int) string {
+	if containerServeURL == "" {
+		containerServeURL = fmt.Sprintf("http://host.docker.internal:%d", port)
+	}
+
+	return containerServeURL + webhook.LLMProxyPrefix
+}
+
 // composeGitCredentialsURL builds CM's worker git-credentials endpoint URL:
 // <base>/api/worker/git-credentials, with any trailing slash on base trimmed.
 // Forwarded to the worker as CM_GIT_CREDENTIALS_URL alongside the chat-start
@@ -453,5 +474,6 @@ func chatConfig(cfg *config.ServiceConfig, base string) webhook.ChatConfig {
 		ReplayReasoning:           cfg.ReplayReasoning,
 		CACertFile:                cfg.CACertFile,
 		GitCredentialsURL:         composeGitCredentialsURL(base),
+		LLMBaseURL:                composeLLMBaseURL(cfg.ContainerServeURL, cfg.Port),
 	}
 }
