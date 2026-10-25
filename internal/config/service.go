@@ -3,7 +3,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/url"
@@ -295,9 +297,9 @@ func (r serviceRaw) toConfig() *ServiceConfig {
 }
 
 // isNotExist reports whether err is a missing-file error from the file
-// provider. The provider wraps os errors, so match on the message tail.
+// provider, which returns os.ReadFile's error unchanged.
 func isNotExist(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "no such file or directory")
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // Validate checks the service config invariants after merging. A non-digest

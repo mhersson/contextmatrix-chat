@@ -561,3 +561,23 @@ func TestValidate_ContainerServeURL(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadService_FileReadErrors pins that only a missing file is tolerated:
+// an unreadable path (here a directory) must fail instead of silently falling
+// back to defaults.
+func TestLoadService_FileReadErrors(t *testing.T) {
+	clearServiceEnv(t)
+	t.Setenv("CMX_CONTEXTMATRIX_URL", "http://cm.test")
+	t.Setenv("CMX_API_KEY", "k")
+
+	t.Run("missing file falls back to defaults and env", func(t *testing.T) {
+		cfg, err := LoadService(filepath.Join(t.TempDir(), "nope.yaml"))
+		require.NoError(t, err)
+		assert.Equal(t, "http://cm.test", cfg.ContextMatrixURL)
+	})
+
+	t.Run("unreadable path errors", func(t *testing.T) {
+		_, err := LoadService(t.TempDir())
+		require.Error(t, err)
+	})
+}
