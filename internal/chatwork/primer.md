@@ -68,7 +68,7 @@ from it. A later call replaces the earlier hand-off.
   only on a resumed session. `summary` is a one-paragraph recap that becomes
   the first visible message of the resumed chat.
 
-**Mutations** (`create_card`, `update_card`, `transition_card`, `claim_card`, `release_card`, `add_log`, `promote_to_autonomous`, `run_card`, `hand_off_to_architect`) **- only with explicit user request.** The human-only tools `run_card` and `promote_to_autonomous` take `agent_id: "human:chat"`.
+**Mutations** (`create_card`, `update_card`, `transition_card`, `claim_card`, `release_card`, `add_log`, `promote_to_autonomous`, `run_card`, `run_playbook`, `hand_off_to_architect`) **- only with explicit user request.** The human-only tools `run_card`, `run_playbook` and `promote_to_autonomous` take `agent_id: "human:chat"`.
 
 ## Behavior expectations
 
