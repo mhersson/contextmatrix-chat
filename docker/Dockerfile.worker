@@ -86,10 +86,10 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
     && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
     && rm -rf /var/lib/apt/lists/*
 
-# yq (mikefarah), Task and gh from upstream releases, SHA256-verified before
-# install like the Go tarball. Debian's yq is a different tool (a Python jq
-# wrapper), and Debian ships no Task or gh package. Only the task and gh
-# binaries leave their tarballs.
+# yq (mikefarah's, not Debian's Python wrapper of the same name), Task and gh
+# have no usable Debian package, so all three come from pinned upstream
+# releases, SHA256-verified like the Go tarball. Only the task and gh binaries
+# leave their tarballs.
 ARG YQ_VERSION
 ARG YQ_SHA256_AMD64
 ARG YQ_SHA256_ARM64

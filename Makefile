@@ -11,7 +11,8 @@ HISTORY    := internal/buildinfo/history/merges.log
 # if a newer version has been vetted, e.g.
 #   make docker-worker GO_VERSION=1.27.4
 # These values are passed into the Dockerfile as --build-args so the build is
-# reproducible from CI and local shells alike.
+# reproducible from CI and local shells alike, except GOVULNCHECK_VERSION,
+# which CI reads directly.
 GO_VERSION            ?= 1.27.3
 GO_SHA256_AMD64       ?= 65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
 GO_SHA256_ARM64       ?= a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49
