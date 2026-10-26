@@ -7,3 +7,7 @@ transcripts/
 
 # Merge history the Makefile writes for internal/buildinfo.
 /internal/buildinfo/history/merges.log
+
+# Local worktrees and agent scratch - never committed.
+/.worktrees/
+/.superpowers/

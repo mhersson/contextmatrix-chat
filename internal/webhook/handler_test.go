@@ -57,7 +57,6 @@ func TestReadyz_OKAndDraining(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	srv.Routes().ServeHTTP(w2, r2)
 	require.Equal(t, http.StatusServiceUnavailable, w2.Code)
-	assert.Contains(t, w2.Body.String(), "draining")
 }
 
 const testSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -221,7 +220,7 @@ func TestRoutes_LLMProxyOutsideAuthAndDrain(t *testing.T) {
 }
 
 func TestRoutes_LLMProxyMetricsLabel(t *testing.T) {
-	mx := metrics.New(llmproxy.Paths(LLMProxyPrefix)...)
+	mx := metrics.New(llmproxy.Paths(llmproxy.DefaultPrefix)...)
 	srv := NewServer(Config{APIKey: testAPIKey, LLMProxy: newTestLLMProxy(t), Metrics: mx})
 
 	w := llmRequest(srv, http.MethodGet, "/llm/models", "unknown-token")

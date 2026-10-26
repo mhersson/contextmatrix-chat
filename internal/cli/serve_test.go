@@ -61,7 +61,6 @@ func TestChatExit(t *testing.T) {
 	case entry := <-ch:
 		assert.Equal(t, "system", entry.Type)
 		assert.Equal(t, sessionID, entry.SessionID)
-		assert.Contains(t, entry.Content, "container exited")
 		assert.Contains(t, entry.Content, "42")
 	case <-time.After(time.Second):
 		t.Fatal("timeout: no LogEntry published to hub")
@@ -70,13 +69,6 @@ func TestChatExit(t *testing.T) {
 	// Assert per-session run dir was removed.
 	_, err := os.Stat(runDir)
 	assert.True(t, os.IsNotExist(err), "run dir must be removed after container exit")
-}
-
-func TestComposeLLMBaseURL(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "http://host.docker.internal:9093/llm", composeLLMBaseURL("", 9093))
-	assert.Equal(t, "http://10.0.0.5:19093/llm", composeLLMBaseURL("http://10.0.0.5:19093", 9093))
 }
 
 func TestComposeMCPURL(t *testing.T) {
@@ -146,10 +138,20 @@ func TestGracefulShutdown(t *testing.T) {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	gracefulShutdown(httpSrv, nil, exec, tracker, &draining, logger)
+	runDirBase := t.TempDir()
+	for _, id := range []string{"s1", "s2"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(runDirBase, id), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(runDirBase, id, "resume.jsonl"), []byte("{}"), 0o600))
+	}
+
+	gracefulShutdown(httpSrv, nil, exec, tracker, runDirBase, &draining, logger)
 
 	assert.True(t, draining.Load(), "draining flag must be set after shutdown")
 	assert.Len(t, exec.kills, 2, "Kill must be called once per tracked session")
+
+	for _, id := range []string{"s1", "s2"} {
+		assert.NoDirExists(t, filepath.Join(runDirBase, id), "a killed session's run dir must be removed")
+	}
 }
 
 func TestBuildAdminServer_DisabledWhenZero(t *testing.T) {

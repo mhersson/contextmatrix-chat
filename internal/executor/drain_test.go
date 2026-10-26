@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -149,6 +150,35 @@ func launchStreamed(t *testing.T, d *streamDocker, w *exitWatcher, logger *slog.
 		OnLog:      w.onLog,
 		Logger:     logger,
 	})
+}
+
+// startFailDocker is a streamDocker whose ContainerStart fails.
+type startFailDocker struct {
+	*streamDocker
+}
+
+func (startFailDocker) ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	return client.ContainerStartResult{}, errors.New("daemon refused start")
+}
+
+// TestLaunch_StartFailureFreesCapacitySlot proves a failed container start does
+// not leave the session tracked, which would burn a max_concurrent slot forever.
+func TestLaunch_StartFailureFreesCapacitySlot(t *testing.T) {
+	d, _ := newStreamDocker(t)
+	tracker := NewTracker(1)
+	e := NewDockerExecutor(Config{
+		Docker:     startFailDocker{d},
+		Tracker:    tracker,
+		PullPolicy: PullNever,
+		Logger:     slog.New(&warnRecorder{}),
+	})
+
+	err := e.Launch(context.Background(), LaunchSpec{SessionID: "sess-1", Image: "img"})
+	require.Error(t, err)
+
+	_, tracked := tracker.Get("sess-1")
+	assert.False(t, tracked, "a failed start must not leave the session tracked")
+	assert.Zero(t, tracker.Count())
 }
 
 // TestWaitAndCleanup_BridgesTrailingOutputBeforeOnExit pins the redaction

@@ -90,7 +90,7 @@ func TestNormalizeEndpoint(t *testing.T) {
 	m := metrics.New()
 
 	allowed := []string{
-		"/chat/start", "/chat/end", "/message", "/logs", "/health", "/readyz", "/metrics",
+		"/chat/start", "/chat/end", "/message", "/logs", "/images", "/health", "/readyz", "/metrics",
 	}
 	for _, p := range allowed {
 		assert.Equal(t, p, m.NormalizeEndpoint(p), "allowlisted path %q must round-trip", p)

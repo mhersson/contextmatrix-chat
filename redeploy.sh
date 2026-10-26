@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Rebuild the chat binary + all worker images (full + variants), pin the
 # new full-image digest in serve.yaml, and restart the user service.
-# Intended for a local bumblebee-style single-host deployment. Run from
-# the chat repo root.
+# Intended for a single-host deployment that builds its images locally.
+# Run from the chat repo root.
 #
 # Overridable env vars:
 #   CHAT_CONFIG       path to serve.yaml

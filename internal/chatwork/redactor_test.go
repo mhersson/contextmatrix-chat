@@ -101,3 +101,20 @@ func TestRedactorWatcherToleratesAbsentFetchedTokensFile(t *testing.T) {
 
 	assert.Equal(t, "key=[REDACTED]", w.Apply("key=mcp-key-123456"), "static secrets still masked")
 }
+
+// TestNewSessionRedactorMasksEverySessionSecret guards the wiring Run relies
+// on: the MCP key, LLM proxy token and git-credentials bearer must all be
+// masked, so dropping any one from the call leaks it into tool output.
+func TestNewSessionRedactorMasksEverySessionSecret(t *testing.T) {
+	t.Setenv("CM_MCP_API_KEY", "mcp-key-123456")
+
+	w := newSessionRedactor("sess1.llm-proxy-token-000000", "sess1.git-credentials-bearer-000000")
+
+	for _, secret := range []string{
+		"mcp-key-123456",
+		"sess1.llm-proxy-token-000000",
+		"sess1.git-credentials-bearer-000000",
+	} {
+		assert.NotContains(t, w.Apply("v="+secret), secret, "secret must be masked: %s", secret)
+	}
+}

@@ -10,8 +10,8 @@ import (
 )
 
 // chatInbox is a channel-backed harness.Inbox for interactive chat sessions.
-// Messages arrive from a Pump goroutine reading stdin frames; close is signaled
-// on EOF so harness.Run exits cleanly when the host closes the pipe.
+// Messages arrive from a Pump goroutine reading stdin frames; the inbox closes
+// if stdin ends. /chat/end ends a session by stopping the container.
 type chatInbox struct {
 	mu      sync.Mutex
 	pending []harness.UserMessage

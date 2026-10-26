@@ -98,10 +98,10 @@ func runServe(ctx context.Context, configPath string) error {
 
 	warnIfNotWorkerUID(logger, runtime.GOOS, os.Getuid())
 
-	mx := metrics.New(llmproxy.Paths(webhook.LLMProxyPrefix)...)
+	mx := metrics.New(llmproxy.Paths(llmproxy.DefaultPrefix)...)
 
 	llmProxy, err := llmproxy.New(llmproxy.Config{
-		Prefix:     webhook.LLMProxyPrefix,
+		Prefix:     llmproxy.DefaultPrefix,
 		CACertFile: cfg.CACertFile,
 		Logger:     logger,
 	})
@@ -163,12 +163,6 @@ func runServe(ctx context.Context, configPath string) error {
 	if base == "" {
 		base = cfg.ContextMatrixURL
 	}
-
-	// Pre-retirement deployments staged local credentials at
-	// <secrets_dir>/shared/env - in PAT mode a long-lived token. The refresher
-	// that owned that file is gone; remove the residue best-effort so it does
-	// not linger on a persistent secrets_dir.
-	_ = os.RemoveAll(filepath.Join(cfg.SecretsDir, "shared"))
 
 	// Task-skills resolver: fetches the {git_remote_url, ref} pointer from CM and
 	// shallow-clones it once into a host cache dir that handleChatStart binds
@@ -253,23 +247,26 @@ func runServe(ctx context.Context, configPath string) error {
 		logger.Info("context cancelled, shutting down")
 	}
 
-	gracefulShutdown(httpServer, adminSrv, exec, tracker, &draining, logger)
+	gracefulShutdown(httpServer, adminSrv, exec, tracker, cfg.ChatRunDir, &draining, logger)
 	logger.Info("chat service stopped")
 
 	return nil
 }
 
-// gracefulShutdown drains the HTTP listener and kills every tracked container.
+// gracefulShutdown drains the HTTP listener, kills every tracked container and
+// removes its run dir.
 // No status callback is made - the chat backend has no ContextMatrix reporter.
 //  1. flip draining so /readyz returns 503 and mutating routes refuse new work
 //  2. Shutdown the HTTP server with a bounded budget
 //  3. Shutdown the admin server if enabled
-//  4. for each tracked run: Kill the container (ignore ErrNotFound)
+//  4. for each tracked run: Kill the container (ignore ErrNotFound) and remove
+//     its run dir
 func gracefulShutdown(
 	httpServer *http.Server,
 	adminServer *http.Server,
 	exec executor.Executor,
 	tracker *executor.Tracker,
+	chatRunDirBase string,
 	draining *atomic.Bool,
 	logger *slog.Logger,
 ) {
@@ -304,6 +301,14 @@ func gracefulShutdown(
 		}
 
 		killCancel()
+
+		// The exit hook may not run before the process stops; the run dir holds
+		// transcript text, so remove it here.
+		runDir := filepath.Join(chatRunDirBase, run.SessionID)
+		if err := os.RemoveAll(runDir); err != nil {
+			logger.Warn("failed to remove run dir on shutdown",
+				"session_id", run.SessionID, "dir", runDir, "error", err)
+		}
 	}
 }
 
@@ -333,16 +338,6 @@ func chatExit(hub *logbridge.Hub, chatRunDirBase string, logger *slog.Logger) fu
 // double slash.
 func composeMCPURL(base string) string {
 	return strings.TrimRight(base, "/") + "/mcp"
-}
-
-// composeLLMBaseURL builds the container-side LLM proxy URL. An unset
-// container_serve_url falls back to host.docker.internal on the webhook port.
-func composeLLMBaseURL(containerServeURL string, port int) string {
-	if containerServeURL == "" {
-		containerServeURL = fmt.Sprintf("http://host.docker.internal:%d", port)
-	}
-
-	return containerServeURL + webhook.LLMProxyPrefix
 }
 
 // composeGitCredentialsURL builds CM's worker git-credentials endpoint URL:
@@ -474,6 +469,6 @@ func chatConfig(cfg *config.ServiceConfig, base string) webhook.ChatConfig {
 		ReplayReasoning:           cfg.ReplayReasoning,
 		CACertFile:                cfg.CACertFile,
 		GitCredentialsURL:         composeGitCredentialsURL(base),
-		LLMBaseURL:                composeLLMBaseURL(cfg.ContainerServeURL, cfg.Port),
+		LLMBaseURL:                llmproxy.WorkerBaseURL(cfg.ContainerServeURL, cfg.Port, llmproxy.DefaultPrefix),
 	}
 }

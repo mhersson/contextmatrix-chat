@@ -231,7 +231,7 @@ func (a *toolAdapter) Execute(ctx context.Context, args map[string]any) (tools.R
 
 	text := allText(result)
 	if result.IsError {
-		return tools.Result{Text: text}, fmt.Errorf("%s", text) //nolint:err113
+		return tools.Result{Text: text}, fmt.Errorf("%s", text)
 	}
 
 	return tools.Result{Text: text, Images: imageURLs(result)}, nil

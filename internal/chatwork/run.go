@@ -65,14 +65,14 @@ func Run(ctx context.Context) error {
 	}
 
 	// 3. Clone the project repo into /workspace (best-effort: a clone failure
-	// is logged but must not kill the session - the model can re-clone via
-	// Path-B tools).
+	// is logged but must not kill the session - the model can re-clone with its
+	// shell tool).
 	if repoURL := os.Getenv("CM_CHAT_REPO_URL"); repoURL != "" {
 		cloneDir := filepath.Join(workspaceRoot, cloneTarget())
 
 		cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, cloneDir) //nolint:gosec // G702: repoURL is the operator-supplied CM_CHAT_REPO_URL
 		if out, err := cmd.CombinedOutput(); err != nil {
-			slog.Warn("repo clone failed; continuing", //nolint:gosec // G706: operator-supplied env var
+			slog.Warn("repo clone failed; continuing",
 				"url", repoURL, "dir", cloneDir,
 				"error", err, "output", strings.TrimSpace(string(out)))
 		}
@@ -87,10 +87,11 @@ func Run(ctx context.Context) error {
 	}
 
 	// When an extra CA is bind-mounted (ca_cert_file), route the LLM client's
-	// outbound TLS through a transport that trusts it so egress via a
-	// TLS-inspecting proxy validates. The same transport is shared with the MCP
-	// bridge below. Fatal on a malformed PEM: a misconfigured CA would otherwise
-	// fail every request with an opaque x509 error.
+	// outbound TLS through a transport that trusts it, so an https
+	// container_serve_url signed by that CA validates. The same transport is
+	// shared with the MCP bridge below (container_contextmatrix_url). Fatal on a
+	// malformed PEM: a misconfigured CA would otherwise fail every request with
+	// an opaque x509 error.
 	var caHTTPClient *http.Client
 
 	if caCertPath := os.Getenv("CMX_CA_CERT_FILE"); caCertPath != "" {
@@ -154,21 +155,21 @@ func Run(ctx context.Context) error {
 	// by a watcher so a fresh per-repo git token the credential-helper/
 	// gh-wrapper subcommands fetch mid-session (see fetchedTokensPath) is
 	// picked up without restarting the worker.
-	redWatcher := newRedactorWatcher(os.Getenv("CM_MCP_API_KEY"), llmKey, gitCredentialsToken, fetchedTokensPath())
+	redWatcher := newSessionRedactor(llmKey, gitCredentialsToken)
 
 	go redWatcher.watch(ctx)
 
 	// 9. Inbox: channel-backed; Pump reads stdin frames in a goroutine and
-	// closes the inbox on EOF so harness.Run exits when the host closes stdin.
+	// closes the inbox on EOF. /chat/end ends a session by stopping the container.
 	// clearCh carries /clear signals from the frame reader to the epoch loop.
 	in := newChatInbox()
 
 	clearCh := make(chan struct{}, 1)
 	go in.Pump(os.Stdin, clearCh)
 
-	// 10. Emitter: board tool_call lines are filtered from the transcript
-	// (noise reduction - the MCP bridge tools, named mcp__*). All other events
-	// reach stdout for the serve-side log bridge.
+	// 10. Emitter: board tool_call lines (the MCP bridge tools) are filtered
+	// from the transcript as noise. All other events reach stdout for the
+	// serve-side log bridge.
 	filteredWriter := newBoardFilterWriter(os.Stdout, bridge.BoardToolNames())
 	emit := events.NewEmitter(io.Discard, filteredWriter)
 
@@ -442,7 +443,7 @@ func envFloatDefault(name string, def float64) float64 {
 
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil {
-		slog.Warn("invalid env var; using default", "name", name, "value", s, "default", def) //nolint:gosec // G706: env var name is a string literal; value is the caller-supplied env var
+		slog.Warn("invalid env var; using default", "name", name, "value", s, "default", def)
 
 		return def
 	}
@@ -487,7 +488,7 @@ func envIntDefault(name string, def int) int {
 
 	v, err := strconv.Atoi(s)
 	if err != nil {
-		slog.Warn("invalid env var; using default", "name", name, "value", s, "default", def) //nolint:gosec // G706: env var name is a string literal; value is the caller-supplied env var
+		slog.Warn("invalid env var; using default", "name", name, "value", s, "default", def)
 
 		return def
 	}

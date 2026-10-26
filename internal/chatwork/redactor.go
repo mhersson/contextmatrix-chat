@@ -62,6 +62,13 @@ func newRedactorWatcher(mcpKey, llmKey, gitCredentialsToken, fetchedPath string)
 	return w
 }
 
+// newSessionRedactor builds the worker's redactor from every secret the
+// session holds: CM_MCP_API_KEY from the environment, the LLM proxy token, the
+// git-credentials bearer, and tokens fetched mid-session.
+func newSessionRedactor(llmKey, gitCredentialsToken string) *redactorWatcher {
+	return newRedactorWatcher(os.Getenv("CM_MCP_API_KEY"), llmKey, gitCredentialsToken, fetchedTokensPath())
+}
+
 // reload stats fetchedPath FIRST to capture the pre-read mtime, then re-reads
 // it and rebuilds the redactor, and only then assigns that pre-read mtime as
 // the new fetchedLastMod baseline for watch's change detection. Stat-first

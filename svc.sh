@@ -5,8 +5,8 @@
 # -------------------------------------------------
 # Chat is installed as a *user* unit under ~/.config/systemd/user.
 # Rationale:
-#   - Chat needs to talk to the user's Docker socket and uses secrets
-#     that belong to the operator's home dir.
+#   - Chat needs to talk to the user's Docker socket and reads its config
+#     (with the ContextMatrix API key) from the operator's home dir.
 #   - Running as a user unit avoids requiring root for install/update
 #     and naturally scopes the service to a single operator.
 #   - Per-operator isolation (each operator gets their own unit) is a
@@ -39,9 +39,9 @@
 #   - exponential backoff with jitter to avoid thundering-herd on a
 #   flaky Docker daemon.
 #   ReadWritePaths - narrow the filesystem to the runtime dirs chat
-#   actually writes to: the secrets dir plus the configured chat_run_dir
-#   (read from serve.yaml). Paths are prefixed with `-` so a missing dir
-#   is tolerated rather than blocking startup.
+#   actually writes to: secrets_dir (the task-skills clone cache) plus the
+#   configured chat_run_dir (read from serve.yaml). Paths are prefixed with
+#   `-` so a missing dir is tolerated rather than blocking startup.
 #
 # NOTE: the default secrets_dir is /var/run/cm-chat/secrets and chat_run_dir
 # has no default (it is required in serve.yaml). /var/run is root-owned and

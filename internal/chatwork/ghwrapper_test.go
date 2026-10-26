@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
@@ -236,23 +237,20 @@ func TestRunGHWrapper_GitHubComNoGHHost(t *testing.T) {
 	assert.False(t, hasGHHost)
 }
 
-// TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected verifies that
-// with no origin remote in cwd, the wrapper still fetches with an empty
-// (host, path) pair - CM's worker git-credentials endpoint serves the
-// instance-wide credential for that pair (rather than 400ing), so a no-origin
-// directory has a real happy path. This proves the wrapper completes that
-// happy path end to end - the fetched instance token actually reaches gh's
-// exec'd environment.
-func TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected(t *testing.T) {
+// TestRunGHWrapper_NoOriginRemote_ExecsUnauthenticated verifies a directory
+// with no origin remote makes no credential fetch (CM refuses an empty
+// repository) and execs gh with no injected token.
+func TestRunGHWrapper_NoOriginRemote_ExecsUnauthenticated(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GH_ENTERPRISE_TOKEN", "")
 
 	dir := gitRepoWithOrigin(t, "")
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Empty(t, r.URL.Query().Get("host"))
-		assert.Empty(t, r.URL.Query().Get("path"))
+	var calls atomic.Int32
 
-		_ = json.NewEncoder(w).Encode(map[string]string{"username": "x-access-token", "token": "ghs_instance999"})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls.Add(1)
 	}))
 	defer srv.Close()
 
@@ -275,21 +273,16 @@ func TestRunGHWrapper_NoOriginRemote_InstanceCredentialInjected(t *testing.T) {
 
 	require.NoError(t, RunGHWrapper(context.Background(), dir, []string{"repo", "create"}))
 
-	assert.Equal(t, realGHPath, gotPath, "gh must actually exec")
+	assert.Equal(t, realGHPath, gotPath, "gh must still exec")
+	assert.Zero(t, calls.Load(), "no origin means no credential fetch")
 
 	envMap := envToSliceMap(gotEnv)
-	assert.Equal(t, "ghs_instance999", envMap["GH_TOKEN"], "instance credential must be injected")
-	assert.Equal(t, "ghs_instance999", envMap["GH_ENTERPRISE_TOKEN"], "instance credential must be injected")
+	assert.Empty(t, envMap["GH_TOKEN"])
+	assert.Empty(t, envMap["GH_ENTERPRISE_TOKEN"])
 }
 
-// TestRunGHWrapper_FetchFailure_StillExecsWithoutToken is the discriminating
-// regression test for the review finding: RunGHWrapper used to return before
-// ever calling execFunc when the credential fetch failed, breaking every
-// repo-less gh call (gh --version, gh auth status, gh api /user, gh repo
-// list, gh repo create) in provisioned mode. It must now still exec gh - with
-// no injected token - and log exactly one concise stderr note that carries
-// no token, bearer, or URL query value. On the pre-fix code, execFunc is
-// never invoked and this test fails.
+// TestRunGHWrapper_FetchFailure_StillExecsWithoutToken verifies a failed fetch
+// still execs gh with no token and logs one note that carries no secret.
 func TestRunGHWrapper_FetchFailure_StillExecsWithoutToken(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 

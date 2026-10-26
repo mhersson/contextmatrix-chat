@@ -39,6 +39,7 @@ var endpointAllowlist = []string{
 	"/chat/end",
 	"/message",
 	"/logs",
+	"/images",
 	"/health",
 	"/readyz",
 	"/metrics",

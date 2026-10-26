@@ -22,7 +22,7 @@ ContextMatrix splits its execution backends:
 - **ChatBackend** - interactive chat sessions (this service).
 
 The chat backend is selected and configured operator-side and runs alongside
-the task backend. It talks to ContextMatrix over five channels:
+the task backend. It talks to ContextMatrix over these channels:
 
 - **Chat lifecycle webhooks** (CM → chat) - HMAC-signed `POST /chat/start`,
   `POST /message`, `POST /chat/end`.
@@ -30,6 +30,11 @@ the task backend. It talks to ContextMatrix over five channels:
 - **Board operations** (worker → CM, over **MCP**) - the in-session model reads
   and writes cards, starts autonomous card runs, and hands a need over to the
   architect, through ContextMatrix's MCP endpoint.
+- **Git credentials** (worker → CM) - `GET /api/worker/git-credentials` with
+  the session's bearer mints a token for one repository on each git or gh call.
+- **Task-skills source** (chat → CM) - `GET /api/chat/task-skills-source`
+  returns the `{git_remote_url, ref}` pointer serve clones and mounts into
+  each worker.
 - **Image inventory** (CM → chat) - HMAC-signed `GET /images` backing
   ContextMatrix's worker-image settings dropdown.
 - **Health** (CM → chat) - open `GET /health` returns `ok`,
@@ -164,7 +169,11 @@ Limits:
    `ty`/`ruff`, and Rust via `rustup`/`cargo` with `clippy`/`rustfmt`. Slimmer single-language variants
    (`go-node`, `python`, `rust`) are also published, along with `jvm-node` for
    Kotlin/Java + Node projects (JDK 21 as `java`, Maven, Node 24, `yarn`; not
-   part of `full`). Toolchain versions are pinned and checksum-verified.
+   part of `full`). Debian packages come from Debian's signed repositories; the
+   downloaded Go, Node, rustup, Maven, gh, yq and Task archives and binaries
+   are pinned and SHA-verified; the uv image is digest-pinned; golangci-lint and
+   gofumpt are built from source at pinned versions; npm, yarn, pip, ty and
+   ruff are pinned by version and fetched from their registries.
 
    Any other ecosystem (Ruby, .NET) **needs an image carrying that
    toolchain** - build one `FROM` a published variant (see the agent repo's
@@ -284,7 +293,7 @@ make install        # go install the stamped binary
 make test           # go test ./...
 make test-race      # CGO_ENABLED=1 go test -race ./...
 make lint           # golangci-lint run
-make fmt            # gofumpt -w .
+make fmt            # gofumpt -w ./cmd ./internal
 make docker-worker  # build the worker image
 ```
 

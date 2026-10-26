@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"slices"
 	"testing"
@@ -19,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var errRoleOrder = errors.New("llm endpoint status 400: the first non-system message must be from the user")
+var errRoleOrder error = &llm.StatusError{StatusCode: 400, Body: "the first non-system message must be from the user"}
 
 type gatewayCall struct {
 	stream   bool
@@ -205,7 +204,7 @@ func TestRoleOrderFallbackPassesThrough(t *testing.T) {
 		{
 			name:    "assistant-first request failing with a non-400 error",
 			history: resumedHistory(),
-			err:     errors.New("llm endpoint status 500: upstream unavailable"),
+			err:     &llm.StatusError{StatusCode: 500, Body: "upstream unavailable"},
 		},
 	}
 
@@ -241,7 +240,7 @@ func TestRoleOrderFallbackFailedResendIsNotSticky(t *testing.T) {
 			in.closeInbox()
 		}
 
-		return llm.Response{}, errors.New("llm endpoint status 400: unknown model")
+		return llm.Response{}, &llm.StatusError{StatusCode: 400, Body: "unknown model"}
 	}
 
 	_, evs, err := runEpoch(t, gw, in, harness.Config{History: resumedHistory()})
@@ -291,7 +290,7 @@ func TestRoleOrderFallbackCoversCompaction(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, gw.calls, 4, "rejected turn, resend, compaction summary, next turn")
+	require.Len(t, gw.calls, 3, "rejected turn, resend, compaction summary; the triggering reply is kept, not re-asked")
 	assert.False(t, gw.calls[2].stream, "the compaction summary goes through Send")
 	assert.Equal(t, "user", firstNonSystemRole(gw.calls[2].messages))
 	assert.NotContains(t, eventKinds(evs), events.ErrorKind)

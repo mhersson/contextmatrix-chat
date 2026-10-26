@@ -87,7 +87,7 @@ log_level: info
 # Projects override this per-board via the chat worker image in ContextMatrix's
 # project settings.
 # CMX_BASE_IMAGE
-# base_image: ghcr.io/mhersson/contextmatrix-chat@sha256:<digest>
+# base_image: contextmatrix-chat-worker@sha256:<digest>
 
 # Image pull policy: never | if-not-present | always. Default: if-not-present.
 # CMX_IMAGE_PULL_POLICY
@@ -144,8 +144,8 @@ secrets_dir: /var/run/cm-chat/secrets
 # (GIT_SSL_CAINFO) trust it in addition to the system store. NOTE: model-invoked
 # bash-tool commands (curl/pip/npm, and any model-run git/gh) go through the
 # harness bash tool, which scrubs env, so they do NOT trust this CA without a
-# harness change - intentionally out of scope. The host-side service (GitHub auth,
-# task-skills fetch) uses the OS/pod trust store and is intentionally NOT affected,
+# harness change - intentionally out of scope. The host-side service (task-skills
+# fetch) uses the OS/pod trust store and is intentionally NOT affected,
 # except the host-side LLM proxy, which also trusts this CA for its upstream calls.
 # Empty disables it; when set the file must exist on the host. Must be a readable PEM.
 # CMX_CA_CERT_FILE
