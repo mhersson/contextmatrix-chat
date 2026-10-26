@@ -552,7 +552,7 @@ func TestValidate_ContainerServeURL(t *testing.T) {
 			err := cfg.Validate()
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "container_serve_url")
+				assert.Contains(t, err.Error(), "container_serve_url", "the error names the field")
 
 				return
 			}

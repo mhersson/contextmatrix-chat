@@ -369,7 +369,7 @@ func (c *ServiceConfig) Validate() error {
 
 	serveURL, err := llmproxy.ValidateContainerURL(c.ContainerServeURL)
 	if err != nil {
-		return fmt.Errorf("container_serve_url: %w", err)
+		return fmt.Errorf("container_serve_url %q: %w", c.ContainerServeURL, err)
 	}
 
 	c.ContainerServeURL = serveURL
