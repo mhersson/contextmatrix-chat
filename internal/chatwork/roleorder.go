@@ -2,9 +2,10 @@ package chatwork
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"slices"
-	"strings"
 	"sync/atomic"
 
 	"github.com/mhersson/contextmatrix-harness/llm"
@@ -56,7 +57,12 @@ func (f *roleOrderFallback) send(req llm.Request, call func(llm.Request) (llm.Re
 	}
 
 	resp, err := call(req)
-	if err == nil || !strings.Contains(err.Error(), "llm endpoint status 400") {
+	if err == nil {
+		return resp, err
+	}
+
+	var se *llm.StatusError
+	if !errors.As(err, &se) || se.StatusCode != http.StatusBadRequest {
 		return resp, err
 	}
 

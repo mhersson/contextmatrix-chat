@@ -2,7 +2,6 @@ package chatwork
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +21,7 @@ import (
 const replayDetails = `[{"type":"reasoning.text","text":"think","index":0}]`
 
 // errRefusesDetails is how an endpoint that does not accept the field answers.
-var errRefusesDetails = errors.New("llm endpoint status 400: unknown field reasoning_details")
+var errRefusesDetails error = &llm.StatusError{StatusCode: 400, Body: "unknown field reasoning_details"}
 
 func setReplay(t *testing.T, on bool) {
 	t.Helper()
