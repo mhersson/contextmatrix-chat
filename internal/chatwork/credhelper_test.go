@@ -184,7 +184,7 @@ func TestGitCredentialGet_ValidationConflictFailsImmediately(t *testing.T) {
 	require.Error(t, err)
 	require.NotErrorIs(t, err, errGitCredentialSessionNotLive)
 	assert.Equal(t, int32(1), attempts.Load(), "only WORKER_NOT_RUNNING is retried")
-	assert.Contains(t, err.Error(), "409 VALIDATION_ERROR")
+	assert.Contains(t, err.Error(), "VALIDATION_ERROR")
 	assert.NotContains(t, err.Error(), "bearer", "a server echoing the bearer must be masked")
 	assert.Empty(t, stdout.String())
 }

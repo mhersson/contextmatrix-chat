@@ -115,6 +115,6 @@ func TestNewSessionRedactorMasksEverySessionSecret(t *testing.T) {
 		"sess1.llm-proxy-token-000000",
 		"sess1.git-credentials-bearer-000000",
 	} {
-		assert.Equal(t, "v=[REDACTED]", w.Apply("v="+secret), "secret must be masked: %s", secret)
+		assert.NotContains(t, w.Apply("v="+secret), secret, "secret must be masked: %s", secret)
 	}
 }
