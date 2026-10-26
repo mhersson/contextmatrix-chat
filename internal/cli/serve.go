@@ -98,10 +98,10 @@ func runServe(ctx context.Context, configPath string) error {
 
 	warnIfNotWorkerUID(logger, runtime.GOOS, os.Getuid())
 
-	mx := metrics.New(llmproxy.Paths(webhook.LLMProxyPrefix)...)
+	mx := metrics.New(llmproxy.Paths(llmproxy.DefaultPrefix)...)
 
 	llmProxy, err := llmproxy.New(llmproxy.Config{
-		Prefix:     webhook.LLMProxyPrefix,
+		Prefix:     llmproxy.DefaultPrefix,
 		CACertFile: cfg.CACertFile,
 		Logger:     logger,
 	})
@@ -340,16 +340,6 @@ func composeMCPURL(base string) string {
 	return strings.TrimRight(base, "/") + "/mcp"
 }
 
-// composeLLMBaseURL builds the container-side LLM proxy URL. An unset
-// container_serve_url falls back to host.docker.internal on the webhook port.
-func composeLLMBaseURL(containerServeURL string, port int) string {
-	if containerServeURL == "" {
-		containerServeURL = fmt.Sprintf("http://host.docker.internal:%d", port)
-	}
-
-	return containerServeURL + webhook.LLMProxyPrefix
-}
-
 // composeGitCredentialsURL builds CM's worker git-credentials endpoint URL:
 // <base>/api/worker/git-credentials, with any trailing slash on base trimmed.
 // Forwarded to the worker as CM_GIT_CREDENTIALS_URL alongside the chat-start
@@ -479,6 +469,6 @@ func chatConfig(cfg *config.ServiceConfig, base string) webhook.ChatConfig {
 		ReplayReasoning:           cfg.ReplayReasoning,
 		CACertFile:                cfg.CACertFile,
 		GitCredentialsURL:         composeGitCredentialsURL(base),
-		LLMBaseURL:                composeLLMBaseURL(cfg.ContainerServeURL, cfg.Port),
+		LLMBaseURL:                llmproxy.WorkerBaseURL(cfg.ContainerServeURL, cfg.Port, llmproxy.DefaultPrefix),
 	}
 }

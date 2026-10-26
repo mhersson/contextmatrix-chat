@@ -82,7 +82,7 @@ Never add local credential config or serve-side fallbacks; the worker reads
 the provisioned values once at boot from its per-session container env
 (`chatwork.Run`) and the staged git-credentials config file. The real LLM key
 never enters the container: `LLM_API_KEY` there is a per-session token for
-serve's LLM proxy (`webhook.LLMProxyPrefix`), revoked on container exit or
+serve's LLM proxy (`llmproxy.DefaultPrefix`), revoked on container exit or
 launch failure.
 
 ### Config

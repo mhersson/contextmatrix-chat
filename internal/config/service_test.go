@@ -534,6 +534,7 @@ func TestValidate_ContainerServeURL(t *testing.T) {
 		{name: "loopback v4", url: "http://127.0.0.1:9093", wantErr: true},
 		{name: "loopback v6", url: "http://[::1]:9093", wantErr: true},
 		{name: "unparsable", url: "://bad", wantErr: true},
+		{name: "surrounding whitespace", url: " http://10.0.0.5:19093 ", wantErr: true},
 		{name: "query", url: "http://h.example:9093?x=1", wantErr: true},
 		{name: "bare question mark", url: "http://h.example:9093?", wantErr: true},
 		{name: "slash question mark", url: "http://h.example:9093/?", wantErr: true},

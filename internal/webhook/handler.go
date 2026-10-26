@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mhersson/contextmatrix-backendkit/llmproxy"
 	"github.com/mhersson/contextmatrix-backendkit/logbridge"
 	"github.com/mhersson/contextmatrix-backendkit/webhookcore"
 	"github.com/mhersson/contextmatrix-chat/internal/executor"
@@ -28,9 +29,6 @@ import (
 type SkillsResolver interface {
 	Resolve(ctx context.Context) (string, error)
 }
-
-// LLMProxyPrefix is the path prefix serve mounts the worker LLM proxy under.
-const LLMProxyPrefix = "/llm"
 
 // LLMProxy holds the real LLM credentials host-side and hands each session a
 // per-session stand-in token. *llmproxy.Proxy satisfies it.
@@ -340,7 +338,7 @@ func (s *Server) Routes() *http.ServeMux {
 	// The proxy authenticates by per-session token, so it sits outside Auth
 	// (workers hold no HMAC key) and DrainGate (an in-flight call finishes within the shutdown budget).
 	if s.llmProxy != nil {
-		mux.HandleFunc(LLMProxyPrefix+"/", s.RecordMetrics(s.llmProxy.ServeHTTP))
+		mux.HandleFunc(llmproxy.DefaultPrefix+"/", s.RecordMetrics(s.llmProxy.ServeHTTP))
 	}
 
 	return mux

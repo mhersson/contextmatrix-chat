@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net"
-	"net/url"
 	"os"
 	"reflect"
 	"sort"
@@ -20,6 +18,7 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/structs"
 	"github.com/knadh/koanf/v2"
+	"github.com/mhersson/contextmatrix-backendkit/llmproxy"
 )
 
 const envPrefix = "CMX_"
@@ -368,9 +367,9 @@ func (c *ServiceConfig) Validate() error {
 		c.AdminBindAddr = "127.0.0.1"
 	}
 
-	serveURL, err := normalizeContainerServeURL(c.ContainerServeURL)
+	serveURL, err := llmproxy.ValidateContainerURL(c.ContainerServeURL)
 	if err != nil {
-		return err
+		return fmt.Errorf("container_serve_url: %w", err)
 	}
 
 	c.ContainerServeURL = serveURL
@@ -396,45 +395,4 @@ func (c *ServiceConfig) Validate() error {
 	}
 
 	return nil
-}
-
-// normalizeContainerServeURL validates container_serve_url and returns it
-// without a trailing slash. Empty is valid and selects the runtime fallback.
-func normalizeContainerServeURL(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", nil
-	}
-
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("container_serve_url is not a valid URL: %w", err)
-	}
-
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("container_serve_url scheme must be http or https, got %q", u.Scheme)
-	}
-
-	host := u.Hostname()
-	if host == "" {
-		return "", fmt.Errorf("container_serve_url must have a host")
-	}
-
-	if u.Path != "" && u.Path != "/" {
-		return "", fmt.Errorf("container_serve_url must not have a path, got %q", u.Path)
-	}
-
-	if strings.ContainsAny(raw, "?#") {
-		return "", fmt.Errorf("container_serve_url must not carry a query or fragment, got %q", raw)
-	}
-
-	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
-		return "", fmt.Errorf("container_serve_url must not be an unspecified address, got %q: workers would reach themselves", host)
-	}
-
-	if ip := net.ParseIP(host); strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()) {
-		return "", fmt.Errorf("container_serve_url must not be a loopback address: workers cannot reach it, got %q", host)
-	}
-
-	return strings.TrimSuffix(raw, "/"), nil
 }

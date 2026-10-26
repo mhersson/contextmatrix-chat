@@ -885,11 +885,11 @@ const testRealLLMKey = "sk-real-key-123456"
 // worker must receive exactly this, never the payload's upstream.
 const testLLMBaseURL = "http://host.docker.internal:9093/llm"
 
-// newTestLLMProxy returns a real llmproxy at LLMProxyPrefix.
+// newTestLLMProxy returns a real llmproxy at llmproxy.DefaultPrefix.
 func newTestLLMProxy(t *testing.T) *llmproxy.Proxy {
 	t.Helper()
 
-	p, err := llmproxy.New(llmproxy.Config{Prefix: LLMProxyPrefix, Logger: discardLogger()})
+	p, err := llmproxy.New(llmproxy.Config{Prefix: llmproxy.DefaultPrefix, Logger: discardLogger()})
 	require.NoError(t, err)
 
 	return p

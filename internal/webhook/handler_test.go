@@ -220,7 +220,7 @@ func TestRoutes_LLMProxyOutsideAuthAndDrain(t *testing.T) {
 }
 
 func TestRoutes_LLMProxyMetricsLabel(t *testing.T) {
-	mx := metrics.New(llmproxy.Paths(LLMProxyPrefix)...)
+	mx := metrics.New(llmproxy.Paths(llmproxy.DefaultPrefix)...)
 	srv := NewServer(Config{APIKey: testAPIKey, LLMProxy: newTestLLMProxy(t), Metrics: mx})
 
 	w := llmRequest(srv, http.MethodGet, "/llm/models", "unknown-token")
