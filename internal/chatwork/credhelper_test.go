@@ -323,8 +323,11 @@ func TestGitCredentialClient_RefusesRedirectsWithoutForwardingBearer(t *testing.
 	}))
 	t.Cleanup(other.Close)
 
-	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, other.URL+"/creds", http.StatusTemporaryRedirect)
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// A 3xx carrying a valid credential body must still be refused, not decoded.
+		w.Header().Set("Location", other.URL+"/creds")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+		_, _ = w.Write([]byte(`{"username":"u","token":"t"}`))
 	}))
 	t.Cleanup(redirector.Close)
 
