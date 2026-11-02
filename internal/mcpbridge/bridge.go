@@ -76,7 +76,8 @@ func Connect(ctx context.Context, mcpURL, apiKey, chatSessionID string, base htt
 		rt = &headerTransport{headers: headers, base: base}
 	}
 
-	// headerTransport sets the bearer on every hop, so a followed redirect would hand the key to whatever host it names.
+	// headerTransport sets the bearer on every hop, so a followed redirect
+	// would hand the key to whatever host it names.
 	httpClient := &http.Client{
 		Transport: rt,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
