@@ -546,3 +546,34 @@ func TestBridgeChatSessionHeaderSurvivesReconnect(t *testing.T) {
 		assert.Equal(t, chatSessionID, got, "request %d session header", i)
 	}
 }
+
+func TestConnect_RefusesRedirectsWithoutForwardingBearer(t *testing.T) {
+	const key = "secret-mcp-key"
+
+	var (
+		mu       sync.Mutex
+		received int
+	)
+
+	other := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		received++
+	}))
+	t.Cleanup(other.Close)
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirector.Close)
+
+	_, err := mcpbridge.Connect(context.Background(), redirector.URL+"/mcp", key, "sess", nil)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), key)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	assert.Zero(t, received, "redirect target must never be dialed")
+}
