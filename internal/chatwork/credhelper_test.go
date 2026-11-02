@@ -311,3 +311,27 @@ func TestRunGitCredentialHelper_RecordsFetchedTokenForRedaction(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(fetched), "ghs_forredaction999")
 }
+
+func TestGitCredentialClient_RefusesRedirectsWithoutForwardingBearer(t *testing.T) {
+	const bearer = "secret-git-bearer"
+
+	var received atomic.Int32
+
+	// Same hostname, different port: Go's own header stripping would not protect this hop.
+	other := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		received.Add(1)
+	}))
+	t.Cleanup(other.Close)
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/creds", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redirector.Close)
+
+	client := newGitCredentialClient(redirector.URL, bearer)
+
+	_, err := client.fetch(context.Background(), "github.com", "o/r")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), bearer)
+	assert.Zero(t, received.Load(), "redirect target must never be dialed")
+}

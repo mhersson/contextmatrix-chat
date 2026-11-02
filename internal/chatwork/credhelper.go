@@ -163,7 +163,13 @@ type gitCredentialClient struct {
 // bounds.
 func newGitCredentialClient(credentialsURL, bearer string) *gitCredentialClient {
 	return &gitCredentialClient{
-		http:           &http.Client{Timeout: gitCredentialRequestTimeout},
+		// CM's endpoint never redirects; Go's header stripping misses same-host hops on another port or scheme.
+		http: &http.Client{
+			Timeout: gitCredentialRequestTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		credentialsURL: credentialsURL,
 		bearer:         bearer,
 		maxAttempts:    gitCredentialDefaultMaxAttempts,
@@ -226,7 +232,7 @@ func (c *gitCredentialClient) doFetch(ctx context.Context, host, path string) (g
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
-	if resp.StatusCode >= http.StatusBadRequest {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return gitCredential{}, c.refusal(resp.StatusCode, body)
 	}
 
