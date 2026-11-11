@@ -55,12 +55,46 @@ func TestBoardFilterWriter(t *testing.T) {
 
 			var buf bytes.Buffer
 
-			w := newBoardFilterWriter(&buf, boardTools)
+			w := newBoardFilterWriter(&buf, boardToolSet(boardTools))
 
 			n, err := w.Write([]byte(tt.input))
 			require.NoError(t, err)
 			assert.Equal(t, len(tt.input), n, "Write must return len(p) even when lines are filtered")
 			assert.Equal(t, tt.wantOut, buf.String())
+		})
+	}
+}
+
+func TestBoardFilterWriterByMCPServer(t *testing.T) {
+	t.Parallel()
+
+	call := func(name string) string {
+		return `{"seq":1,"kind":"tool_call","data":{"name":"` + name + `"}}` + "\n"
+	}
+	response := `{"seq":2,"kind":"model_response","data":{"content":"use mcp__contextmatrix__list_cards"}}` + "\n"
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"cm tool dropped", call("mcp__contextmatrix__list_cards"), ""},
+		{"Bash passes", call("Bash"), call("Bash")},
+		{"grep passes", call("grep"), call("grep")},
+		{"bridge tool passes", call("mcp__cm__grep"), call("mcp__cm__grep")},
+		{"model_response passes", response, response},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+
+			w := newBoardFilterWriter(&buf, mcpServerTools("contextmatrix"))
+			_, err := w.Write([]byte(tt.input))
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, buf.String())
 		})
 	}
 }

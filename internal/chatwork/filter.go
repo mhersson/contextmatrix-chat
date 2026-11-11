@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"strings"
 )
 
 // boardFilterWriter wraps dst and drops JSONL transcript lines whose kind is
@@ -11,19 +12,32 @@ import (
 // lines pass through unchanged. Write always returns len(p) so the emitter
 // never sees a short-write error on filtered lines.
 type boardFilterWriter struct {
-	dst   io.Writer
-	board map[string]bool
+	dst     io.Writer
+	isBoard func(name string) bool
 }
 
-// newBoardFilterWriter returns a writer that silently drops board tool_call
-// event lines (the MCP bridge tools) from the transcript.
-func newBoardFilterWriter(dst io.Writer, boardToolNames []string) io.Writer {
-	m := make(map[string]bool, len(boardToolNames))
-	for _, n := range boardToolNames {
+// newBoardFilterWriter returns a writer that silently drops tool_call event
+// lines whose tool name isBoard accepts from the transcript.
+func newBoardFilterWriter(dst io.Writer, isBoard func(name string) bool) io.Writer {
+	return &boardFilterWriter{dst: dst, isBoard: isBoard}
+}
+
+// boardToolSet matches the exact names of the MCP bridge tools.
+func boardToolSet(names []string) func(string) bool {
+	m := make(map[string]bool, len(names))
+	for _, n := range names {
 		m[n] = true
 	}
 
-	return &boardFilterWriter{dst: dst, board: m}
+	return func(name string) bool { return m[name] }
+}
+
+// mcpServerTools matches Claude Code's qualified names for one MCP server's
+// tools (mcp__<server>__<tool>).
+func mcpServerTools(server string) func(string) bool {
+	prefix := "mcp__" + server + "__"
+
+	return func(name string) bool { return strings.HasPrefix(name, prefix) }
 }
 
 // Write splits p on newlines and writes each non-filtered line to dst.
@@ -64,5 +78,5 @@ func (w *boardFilterWriter) isFiltered(line []byte) bool {
 		return false
 	}
 
-	return ev.Kind == "tool_call" && w.board[ev.Data.Name]
+	return ev.Kind == "tool_call" && w.isBoard(ev.Data.Name)
 }

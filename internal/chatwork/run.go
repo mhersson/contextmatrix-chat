@@ -189,7 +189,7 @@ func runWorker(ctx context.Context) error {
 	// 10. Emitter: board tool_call lines (the MCP bridge tools) are filtered
 	// from the transcript as noise. All other events reach stdout for the
 	// serve-side log bridge.
-	filteredWriter := newBoardFilterWriter(os.Stdout, bridge.BoardToolNames())
+	filteredWriter := newBoardFilterWriter(os.Stdout, boardToolSet(bridge.BoardToolNames()))
 	emit := events.NewEmitter(io.Discard, filteredWriter)
 
 	// 11. Epoch loop: one harness.Run per epoch; /clear resets history and
@@ -337,6 +337,16 @@ func buildToolRegistry(ctx context.Context, selfPath, sessionID string, mcpBase 
 		return nil, nil, fmt.Errorf("connect to mcp: %w", err)
 	}
 
+	ts, _ := localTools(selfPath)
+	ts = append(ts, bridge.Tools()...)
+
+	return tools.NewRegistry(ts...), bridge, nil
+}
+
+// localTools returns the filesystem/shell tools rooted at /workspace plus the
+// optional skill tool, and the extra bash env (the gh wrapper PATH) when the
+// wrapper is installed. See buildToolRegistry for the selfPath semantics.
+func localTools(selfPath string) (ts []tools.Tool, bashEnv []string) {
 	bashTimeout := envIntDefault("CMX_BASH_TIMEOUT_MAX_SECONDS", 600)
 
 	bashTool := tools.NewBashTool(workspaceRoot).WithMaxTimeout(bashTimeout)
@@ -353,11 +363,12 @@ func buildToolRegistry(ctx context.Context, selfPath, sessionID string, mcpBase 
 		if dir, err := installGHWrapperV2(selfPath); err != nil {
 			slog.Warn("gh wrapper v2 install failed; gh may be unavailable this session", "error", err)
 		} else {
-			bashTool = bashTool.WithExtraEnv([]string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")})
+			bashEnv = []string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")}
+			bashTool = bashTool.WithExtraEnv(bashEnv)
 		}
 	}
 
-	ts := []tools.Tool{
+	ts = []tools.Tool{
 		tools.NewReadTool(workspaceRoot),
 		tools.NewWriteTool(workspaceRoot),
 		tools.NewEditTool(workspaceRoot),
@@ -373,9 +384,7 @@ func buildToolRegistry(ctx context.Context, selfPath, sessionID string, mcpBase 
 		}
 	}
 
-	ts = append(ts, bridge.Tools()...)
-
-	return tools.NewRegistry(ts...), bridge, nil
+	return ts, bashEnv
 }
 
 // cloneTarget returns the directory name to use under /workspace when cloning.

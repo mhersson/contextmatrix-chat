@@ -44,7 +44,7 @@ type redactorWatcher struct {
 }
 
 // newRedactorWatcher builds the initial redactor. mcpKey, llmKey, and
-// gitCredentialsToken are captured once - CM_MCP_API_KEY, LLM_API_KEY, and
+// gitCredentialsToken are captured once - CM_MCP_API_KEY, llmKey (LLM_API_KEY, or the Claude Code token), and
 // CM_GIT_CREDENTIALS_TOKEN are static values delivered via per-session
 // container env. fetchedPath, when non-empty, is polled for worker-fetched
 // git tokens (see fetchedTokensPath) - a missing or unreadable fetchedPath is
@@ -63,7 +63,7 @@ func newRedactorWatcher(mcpKey, llmKey, gitCredentialsToken, fetchedPath string)
 }
 
 // newSessionRedactor builds the worker's redactor from every secret the
-// session holds: CM_MCP_API_KEY from the environment, the LLM proxy token, the
+// session holds: CM_MCP_API_KEY from the environment, the LLM proxy token or Claude Code token, the
 // git-credentials bearer, and tokens fetched mid-session.
 func newSessionRedactor(llmKey, gitCredentialsToken string) *redactorWatcher {
 	return newRedactorWatcher(os.Getenv("CM_MCP_API_KEY"), llmKey, gitCredentialsToken, fetchedTokensPath())
