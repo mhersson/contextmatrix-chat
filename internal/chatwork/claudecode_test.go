@@ -450,3 +450,84 @@ func TestRepoInstructions(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeCodeMCPURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		url        string
+		wantErr    bool
+		wantEvents int
+	}{
+		{name: "set", url: "http://cm:8080/mcp"},
+		{name: "empty is fatal", url: "", wantErr: true, wantEvents: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CM_MCP_URL", tt.url)
+
+			var evBuf bytes.Buffer
+
+			got, err := claudeCodeMCPURL(events.NewEmitter(nil, &evBuf))
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.url, got)
+			}
+
+			var kinds []string
+
+			for line := range strings.Lines(evBuf.String()) {
+				var ev struct {
+					Kind string `json:"kind"`
+				}
+
+				require.NoError(t, json.Unmarshal([]byte(line), &ev))
+
+				kinds = append(kinds, ev.Kind)
+			}
+
+			assert.Len(t, kinds, tt.wantEvents)
+
+			for _, k := range kinds {
+				assert.Equal(t, "error", k)
+			}
+		})
+	}
+}
+
+func TestClaudeCodeEffort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		raw      string
+		want     string
+		wantWarn bool
+	}{
+		{name: "unset", raw: "", want: ""},
+		{name: "accepted", raw: "high", want: "high"},
+		{name: "normalized", raw: " High ", want: "high"},
+		{name: "dropped", raw: "minimal", want: "", wantWarn: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var logBuf bytes.Buffer
+
+			got := claudeCodeEffort(tt.raw, slog.New(slog.NewTextHandler(&logBuf, nil)))
+			assert.Equal(t, tt.want, got)
+
+			if tt.wantWarn {
+				assert.Equal(t, 1, strings.Count(logBuf.String(), "level=WARN"))
+				assert.Contains(t, logBuf.String(), tt.raw)
+			} else {
+				assert.Zero(t, strings.Count(logBuf.String(), "level=WARN"))
+			}
+		})
+	}
+}

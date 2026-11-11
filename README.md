@@ -11,7 +11,9 @@ the board's MCP tools into each session, and streams the conversation back to
 ContextMatrix over Server-Sent Events. It reuses the shared
 [`contextmatrix-harness`](https://github.com/mhersson/contextmatrix-harness) for
 the interactive loop - in-context compaction, seeded-history resume, and live
-turns. It targets operators running ContextMatrix who want model-flexible,
+turns. A chat on a Claude Code subscription runs on a Claude Code session
+instead (see [Claude Code subscription mode](#claude-code-subscription-mode)).
+It targets operators running ContextMatrix who want model-flexible,
 board-aware chat.
 
 ## How it fits ContextMatrix
@@ -63,7 +65,7 @@ flowchart LR
     end
 
     subgraph worker["worker container - work"]
-        H[harness epoch loop]
+        H[harness epoch loop or Claude Code session]
         TR[tools: filesystem + skill + MCP board]
     end
 
@@ -84,7 +86,9 @@ tool registry (filesystem/shell tools rooted at `/workspace`, an optional skill
 tool, and the board's MCP tools), seeds history when resuming, and drives the
 interactive epoch loop. The loop, LLM client, tools, redaction, and event
 stream live in the standalone `contextmatrix-harness` module - FSM-free and
-free of any `contextmatrix-*` dependency.
+free of any `contextmatrix-*` dependency. A Claude Code subscription chat
+drives a Claude Code session loop instead: one `claude` process per session,
+run by the `contextmatrix-vendorkit` module.
 
 ## Requirements
 
@@ -97,6 +101,7 @@ free of any `contextmatrix-*` dependency.
   fresh per repo, per operation, from CM's worker git-credentials endpoint,
   not staged upfront. There is no local credential fallback.
 - Upstream LLM calls leave from `serve`, so its own `HTTP(S)_PROXY` / `NO_PROXY` environment governs them; an egress proxy set only in `worker_extra_env` no longer reaches LLM traffic, so give serve's process (e.g. its service unit) the proxy env.
+  In Claude Code subscription mode `claude` reaches Anthropic from the worker instead, so the `worker_extra_env` proxy settings and `ca_cert_file` apply to it.
 - Workers must reach serve's webhook port at `container_serve_url` (by default `host.docker.internal:<port>`, the Docker host gateway); a host firewall must allow it.
 - A shared HMAC secret (at least 32 characters), configured on both this service
   and ContextMatrix.
@@ -160,6 +165,55 @@ Limits:
 
 - Overriding the key in `worker_extra_env` needs `LLM_BASE_URL` as well; the pair bypasses the proxy and puts that key in the container.
 - An HTTP proxy set in `worker_extra_env` needs the serve host (`host.docker.internal` by default) in `NO_PROXY`.
+
+## Claude Code subscription mode
+
+When ContextMatrix runs a chat on a Claude Code subscription, the chat-start
+payload carries an LLM endpoint of type `claude_code` with the subscription
+token (`claude setup-token`) instead of an endpoint URL and key, next to the
+usual model and MCP key. serve skips the LLM proxy and passes the token to the
+worker as `LLM_OAUTH_TOKEN` with `LLM_TYPE=claude_code`. The worker reads the
+token once, removes it from its own environment, and hands it only to
+`claude`.
+
+- **Version check.** At boot the worker runs `claude --version`. When the
+  worker image (or the project's chat worker image) has no runnable `claude`,
+  the chat pane shows an error naming the tested release and the worker exits;
+  it never falls back to the endpoint. A different version logs one warning
+  naming both versions, and the chat runs.
+- **One `claude` process per session**, working in `/workspace` with the worker
+  user's HOME, so the git credential helper, the `gh` wrapper and the
+  toolchains work in its Bash as they do in harness mode. Its tools come from
+  Claude Code's built-ins (Read, Write, Edit, Bash); grep, glob, git and the
+  task-skills tool, which the worker serves over a loopback MCP server; and the
+  board tools from ContextMatrix's own MCP server, which `claude` connects to
+  as `contextmatrix`. The worker fails at boot when no MCP URL is provisioned.
+- **Resume and `/clear`.** A resumed chat opens with the restored transcript,
+  rendered as text above the orientation primer. `/clear` ends the `claude`
+  process and starts a fresh one, opened by the primer.
+- **Turns.** A message sent while `claude` is working waits for the turn to
+  end; everything that arrived in the meantime goes as the next turn.
+- **Failures.** A `claude` process that exits is resumed on the next message;
+  if that resume cannot start, a fresh session opens with the primer. Nothing
+  restarts on its own before that message. A subscription usage limit shows
+  in the chat pane, never falls back to the LLM endpoint, and lifts on the
+  first message after the reset. A token Claude Code rejects ends the chat
+  with an error.
+- **Transcripts.** Resume within a session reads the conversation transcripts
+  kept under the container's HOME (`~/.vendorkit/sessions`). The worker never
+  prunes them; they go when the container is removed at session end.
+- **What does not apply:** compaction (Claude Code compacts on its own),
+  reasoning replay, `tool_output_max_bytes`, and redacting tool output before
+  the model sees it (the events stay redacted). `reasoning_effort` becomes
+  Claude Code's effort, and a value it does not accept falls back to its
+  default. `bash_timeout_max_seconds` does apply, as the ceiling of Claude
+  Code's Bash timeout.
+
+The token owner must be the only human who drives chat sessions on it, even
+when ContextMatrix has several accounts; nothing enforces this, so it is an
+operator obligation. The token is readable inside the worker, so a
+prompt-injected session could exfiltrate it (see
+[Worker credentials](#worker-credentials)).
 
 ## Running as a ContextMatrix backend
 

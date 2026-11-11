@@ -22,6 +22,7 @@ import (
 	"github.com/mhersson/contextmatrix-harness/llm"
 	"github.com/mhersson/contextmatrix-harness/tlsca"
 	"github.com/mhersson/contextmatrix-harness/tools"
+	protocol "github.com/mhersson/contextmatrix-protocol"
 )
 
 const (
@@ -38,6 +39,7 @@ const (
 // clones the project repo, assembles the tool registry and harness config, and
 // drives the epoch loop to completion. Each epoch is one harness.Run; a /clear
 // frame ends the current epoch and starts a fresh one with no history. A
+// claude_code chat runs on a Claude Code session instead (runClaudeCode). A
 // cancelled ctx is a requested shutdown, not a failure, and returns nil.
 func Run(ctx context.Context) error {
 	return shutdownErr(ctx, runWorker(ctx))
@@ -58,6 +60,10 @@ func shutdownErr(ctx context.Context, err error) error {
 }
 
 func runWorker(ctx context.Context) error {
+	if os.Getenv("LLM_TYPE") == protocol.LLMEndpointTypeClaudeCode {
+		return runClaudeCode(ctx)
+	}
+
 	// 1. handleChatStart sets LLM_API_KEY/LLM_BASE_URL/LLM_TYPE as per-session
 	// container env: LLM_BASE_URL is serve's proxy URL and LLM_API_KEY a
 	// per-session proxy token, not the real key.
@@ -75,26 +81,10 @@ func runWorker(ctx context.Context) error {
 		return err
 	}
 
-	gitCredentialsToken := os.Getenv("CM_GIT_CREDENTIALS_TOKEN")
-
-	// 2. Configure git credential auth (CM_GIT_CREDENTIALS_TOKEN).
-	selfPath, err := configureGitAuth(ctx, gitCredentialsToken)
+	// 2-3. Git credential auth and the project repo clone.
+	selfPath, gitCredentialsToken, err := prepareWorkspace(ctx)
 	if err != nil {
 		return err
-	}
-
-	// 3. Clone the project repo into /workspace (best-effort: a clone failure
-	// is logged but must not kill the session - the model can re-clone with its
-	// shell tool).
-	if repoURL := os.Getenv("CM_CHAT_REPO_URL"); repoURL != "" {
-		cloneDir := filepath.Join(workspaceRoot, cloneTarget())
-
-		cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, cloneDir) //nolint:gosec // G702: repoURL is the operator-supplied CM_CHAT_REPO_URL
-		if out, err := cmd.CombinedOutput(); err != nil {
-			slog.Warn("repo clone failed; continuing",
-				"url", repoURL, "dir", cloneDir,
-				"error", err, "output", strings.TrimSpace(string(out)))
-		}
 	}
 
 	// 4. Build the LLM client and resolve the model's context window from the
@@ -159,16 +149,7 @@ func runWorker(ctx context.Context) error {
 	defer func() { _ = bridge.Close() }()
 
 	// 7. History: seed from a prior session when CM_CHAT_RESUME == "1".
-	var history []llm.Message
-
-	if os.Getenv("CM_CHAT_RESUME") == "1" {
-		rc, err := LoadResume(resumePath)
-		if err != nil {
-			slog.Warn("load resume failed; starting fresh", "error", err)
-		} else {
-			history = SeedHistory(rc)
-		}
-	}
+	history := loadResumeHistory()
 
 	// 8. Redactor: mask the secrets from all tool output and event data. Backed
 	// by a watcher so a fresh per-repo git token the credential-helper/
@@ -422,6 +403,48 @@ func validateLLMKey(llmKey string) error {
 	}
 
 	return nil
+}
+
+// prepareWorkspace configures git credential auth from CM_GIT_CREDENTIALS_TOKEN
+// and clones the project repo under /workspace. The clone is best-effort: a
+// failure is logged, and the model can re-clone with its shell tool.
+func prepareWorkspace(ctx context.Context) (selfPath, gitCredentialsToken string, err error) {
+	gitCredentialsToken = os.Getenv("CM_GIT_CREDENTIALS_TOKEN")
+
+	selfPath, err = configureGitAuth(ctx, gitCredentialsToken)
+	if err != nil {
+		return "", "", err
+	}
+
+	if repoURL := os.Getenv("CM_CHAT_REPO_URL"); repoURL != "" {
+		cloneDir := filepath.Join(workspaceRoot, cloneTarget())
+
+		cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, cloneDir) //nolint:gosec // G702: repoURL is the operator-supplied CM_CHAT_REPO_URL
+		if out, err := cmd.CombinedOutput(); err != nil {
+			slog.Warn("repo clone failed; continuing",
+				"url", repoURL, "dir", cloneDir,
+				"error", err, "output", strings.TrimSpace(string(out)))
+		}
+	}
+
+	return selfPath, gitCredentialsToken, nil
+}
+
+// loadResumeHistory seeds history from a prior session when CM_CHAT_RESUME is
+// "1". An unreadable resume file starts the chat fresh.
+func loadResumeHistory() []llm.Message {
+	if os.Getenv("CM_CHAT_RESUME") != "1" {
+		return nil
+	}
+
+	rc, err := LoadResume(resumePath)
+	if err != nil {
+		slog.Warn("load resume failed; starting fresh", "error", err)
+
+		return nil
+	}
+
+	return SeedHistory(rc)
 }
 
 // configureGitAuth stages the CM-provisioned git-credentials config into a

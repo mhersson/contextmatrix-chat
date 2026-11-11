@@ -2,6 +2,7 @@ package chatwork
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -52,6 +53,126 @@ func takeOAuthToken() (string, error) {
 	}
 
 	return tok, nil
+}
+
+var _ chatSession = (*claudecode.Session)(nil)
+
+// runClaudeCode runs a claude_code chat on one Claude Code session in place of
+// the harness epoch loop.
+func runClaudeCode(ctx context.Context) error {
+	emit := events.NewEmitter(io.Discard, newBoardFilterWriter(os.Stdout, mcpServerTools(cmMCPServerName)))
+
+	if err := checkClaudeCode(ctx, claudecode.CheckVersion, emit, slog.Default()); err != nil {
+		return err
+	}
+
+	token, err := takeOAuthToken()
+	if err != nil {
+		return bootError(emit, err)
+	}
+
+	mcpURL, err := claudeCodeMCPURL(emit)
+	if err != nil {
+		return err
+	}
+
+	selfPath, gitCredentialsToken, err := prepareWorkspace(ctx)
+	if err != nil {
+		return err
+	}
+
+	sessionID := os.Getenv("CM_CHAT_SESSION")
+	if sessionID == "" {
+		slog.Warn("CM_CHAT_SESSION is empty; session_id will be blank in the primer and the X-CM-Chat-Session header is not sent, so ContextMatrix skips its session check")
+	}
+
+	ts, bashEnv := localTools(selfPath)
+	history := loadResumeHistory()
+
+	redWatcher := newSessionRedactor(token, gitCredentialsToken)
+
+	go redWatcher.watch(ctx)
+
+	in := newChatInbox()
+
+	clearCh := make(chan struct{}, 1)
+	go in.Pump(os.Stdin, clearCh)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return bootError(emit, fmt.Errorf("resolve home for claude code: %w", err))
+	}
+
+	var repoDir string
+	if os.Getenv("CM_CHAT_REPO_URL") != "" {
+		repoDir = filepath.Join(workspaceRoot, cloneTarget())
+	}
+
+	cfg := claudeCodeConfig{
+		Token:                 token,
+		Model:                 os.Getenv("CM_MODEL"),
+		Effort:                claudeCodeEffort(os.Getenv("CMX_REASONING_EFFORT"), slog.Default()),
+		SessionID:             sessionID,
+		MCPURL:                mcpURL,
+		MCPAPIKey:             os.Getenv("CM_MCP_API_KEY"),
+		CACertPath:            os.Getenv("CMX_CA_CERT_FILE"),
+		Home:                  home,
+		BashTimeoutMaxSeconds: envIntDefault("CMX_BASH_TIMEOUT_MAX_SECONDS", 0),
+		RepoDir:               repoDir,
+	}
+
+	spec := claudeCodeSpec(cfg, tools.NewRegistry(ts...), bashEnv, emit, redWatcher.Apply)
+
+	loop := &sessionLoop{
+		start: func(ctx context.Context, resume string) (chatSession, error) {
+			s := spec
+			s.Resume = resume
+
+			sess, err := claudecode.StartSession(ctx, s)
+			if err != nil {
+				// A typed nil *Session would be a non-nil chatSession.
+				return nil, err
+			}
+
+			return sess, nil
+		},
+		inbox:   in,
+		clearCh: clearCh,
+		emit:    emit,
+		redact:  redWatcher.Apply,
+		primer:  renderPrimer(sessionID),
+	}
+
+	return loop.run(ctx, openingMessage(loop.primer, history))
+}
+
+// claudeCodeMCPURL returns CM_MCP_URL. Without it the chat has no board tools,
+// so boot fails closed as harness mode's MCP connect does.
+func claudeCodeMCPURL(emit *events.Emitter) (string, error) {
+	u := os.Getenv("CM_MCP_URL")
+	if u == "" {
+		return "", bootError(emit, errors.New("CM_MCP_URL is not set: a claude code chat needs the contextmatrix mcp server"))
+	}
+
+	return u, nil
+}
+
+// claudeCodeEffort maps the configured reasoning effort to a Claude Code
+// --effort value; one it does not accept falls back to the CLI default.
+func claudeCodeEffort(raw string, logger *slog.Logger) string {
+	effort := claudecode.NormalizeEffort(raw)
+	if raw != "" && effort == "" {
+		logger.Warn("reasoning effort not accepted by claude code; using its default", "effort", raw)
+	}
+
+	return effort
+}
+
+// bootError shows a fatal boot error in the chat pane and returns it.
+func bootError(emit *events.Emitter, err error) error {
+	emit.Emit(events.ErrorKind, map[string]any{"error": err.Error()})
+
+	return err
 }
 
 // checkClaudeCode fails only when no runnable claude exists; an untested
