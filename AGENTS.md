@@ -10,7 +10,8 @@ Two runtime roles in one binary:
 - **`serve`** - host service: lifecycle webhooks, one worker container per
   session, task-skills clone staging, log SSE, graceful drain.
 - **`work`** - hidden container entrypoint: assembles the tool registry,
-  optionally clones the project repo, seeds resume history, runs the epoch loop.
+  optionally clones the project repo, seeds resume history, runs the epoch loop. SIGTERM or SIGINT cancels the
+  session and the worker exits 0.
 
 The interactive loop, LLM client, tool primitives, redaction, and event stream
 come from the shared `contextmatrix-harness` module (version pinned in

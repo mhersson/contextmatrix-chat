@@ -37,8 +37,27 @@ const (
 // the CM-provisioned credentials from its env, configures git auth, optionally
 // clones the project repo, assembles the tool registry and harness config, and
 // drives the epoch loop to completion. Each epoch is one harness.Run; a /clear
-// frame ends the current epoch and starts a fresh one with no history.
+// frame ends the current epoch and starts a fresh one with no history. A
+// cancelled ctx is a requested shutdown, not a failure, and returns nil.
 func Run(ctx context.Context) error {
+	return shutdownErr(ctx, runWorker(ctx))
+}
+
+// shutdownErr maps any error to nil once ctx is done. It tests ctx.Err(), not
+// errors.Is(err, context.Canceled): a signal cancellation cause need not wrap it.
+func shutdownErr(ctx context.Context, err error) error {
+	if ctx.Err() == nil {
+		return err
+	}
+
+	if err != nil {
+		slog.Info("worker stopped", "error", err, "cause", context.Cause(ctx))
+	}
+
+	return nil
+}
+
+func runWorker(ctx context.Context) error {
 	// 1. handleChatStart sets LLM_API_KEY/LLM_BASE_URL/LLM_TYPE as per-session
 	// container env: LLM_BASE_URL is serve's proxy URL and LLM_API_KEY a
 	// per-session proxy token, not the real key.

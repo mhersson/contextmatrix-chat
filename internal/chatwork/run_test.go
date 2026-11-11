@@ -279,3 +279,36 @@ func TestBuildToolRegistrySendsChatSessionHeader(t *testing.T) {
 		assert.Equal(t, sessionID, h)
 	}
 }
+
+func TestShutdownErr(t *testing.T) {
+	t.Parallel()
+
+	boom := errors.New("boom")
+
+	tests := []struct {
+		name string
+		done bool
+		err  error
+		want error
+	}{
+		{"live ctx keeps the error", false, boom, boom},
+		{"cancelled ctx drops the error", true, boom, nil},
+		{"cancelled ctx with no error", true, nil, nil},
+		{"live ctx with no error", false, nil, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			if tt.done {
+				cancel()
+			}
+
+			assert.Equal(t, tt.want, shutdownErr(ctx, tt.err))
+		})
+	}
+}
