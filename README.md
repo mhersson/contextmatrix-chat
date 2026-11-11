@@ -233,9 +233,15 @@ prompt-injected session could exfiltrate it (see
    `ty`/`ruff`, and Rust via `rustup`/`cargo` with `clippy`/`rustfmt`. Slimmer single-language variants
    (`go-node`, `python`, `rust`) are also published, along with `jvm-node` for
    Kotlin/Java + Node projects (JDK 21 as `java`, Maven, Node 24, `yarn`; not
-   part of `full`). Debian packages come from Debian's signed repositories; the
-   downloaded Go, Node, rustup, Maven, gh, yq and Task archives and binaries
-   are pinned and SHA-verified; the uv image is digest-pinned; golangci-lint and
+   part of `full`). Every variant also carries the pinned `claude` binary
+   (`/usr/local/bin/claude`, from Claude Code's npm platform tarball, with no
+   Node needed), which Claude Code subscription chats run on; a project's own
+   worker image used for such a chat must carry a runnable `claude` too, or the
+   boot version check fails the chat (see
+   [Claude Code subscription mode](#claude-code-subscription-mode)). Debian
+   packages come from Debian's signed repositories; the
+   downloaded Go, Node, rustup, Maven, gh, yq, Task and `claude` archives and
+   binaries are pinned and SHA-verified; the uv image is digest-pinned; golangci-lint and
    gofumpt are built from source at pinned versions; npm, yarn, pip, ty and
    ruff are pinned by version and fetched from their registries.
 

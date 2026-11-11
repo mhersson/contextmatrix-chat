@@ -41,7 +41,7 @@ internal/mcpbridge/       dials CM's /mcp, adapts each board tool to a harness t
 internal/secrets/         KEY=value env-file read/write (atomic write+rename); stages the worker's provisioned git-credentials config
 internal/metrics/         chat's Prometheus metric set: the shared backendkit bundle (namespaced cm_chat) plus the endpoint allowlist
 internal/buildinfo/       build stamp (ldflags version, commit, build time) and the embedded merge history serve reports on /health
-docker/Dockerfile.worker  worker image; entrypoint `contextmatrix-chat work`
+docker/Dockerfile.worker  worker images (five targets, each with the pinned `claude`); entrypoint `contextmatrix-chat work`
 ```
 
 ## Boundary discipline (the load-bearing invariant)
