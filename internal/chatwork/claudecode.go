@@ -66,6 +66,8 @@ func checkClaudeCode(ctx context.Context, check func(context.Context, string) (f
 		return wrapped
 	}
 
+	logger.Info("claude code version", "found", found)
+
 	if !tested {
 		logger.Warn("claude code version differs from the tested release", "found", found, "tested", claudecode.Version)
 	}
@@ -168,11 +170,11 @@ func claudeCodeSpec(cfg claudeCodeConfig, local *tools.Registry, bashEnv []strin
 }
 
 // repoInstructions returns the clone root's AGENTS.md, else CLAUDE.md, capped
-// at repoInstructionsCap. Nothing below dir is read. Claude Code does not load
+// at repoInstructionsCap. Nothing outside the clone root is read, symlinks included. Claude Code does not load
 // the repo's own file because the session restricts settings to the user's.
 func repoInstructions(dir string) (name, content string) {
 	for _, n := range []string{"AGENTS.md", "CLAUDE.md"} {
-		if c, ok := readInstructionFile(filepath.Join(dir, n)); ok {
+		if c, ok := readInstructionFile(dir, filepath.Join(dir, n)); ok {
 			return n, c
 		}
 	}
@@ -180,8 +182,25 @@ func repoInstructions(dir string) (name, content string) {
 	return "", ""
 }
 
-func readInstructionFile(path string) (string, bool) {
-	f, err := os.Open(path) //nolint:gosec // fixed file name under the clone root
+// readInstructionFile reads path only when its symlink-resolved target stays
+// inside root, so a committed link cannot pull in /proc or credential files.
+func readInstructionFile(root, path string) (string, bool) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", false
+	}
+
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", false
+	}
+
+	rel, err := filepath.Rel(rootReal, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+
+	f, err := os.Open(resolved) //nolint:gosec // resolved target confined to the clone root above
 	if err != nil {
 		return "", false
 	}

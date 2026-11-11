@@ -148,7 +148,12 @@ func TestCheckClaudeCode(t *testing.T) {
 				assert.Contains(t, logBuf.String(), tt.found)
 				assert.Contains(t, logBuf.String(), claudecode.Version)
 			} else {
-				assert.Empty(t, logBuf.String())
+				assert.Zero(t, strings.Count(logBuf.String(), "level=WARN"))
+			}
+
+			if !tt.wantErr {
+				assert.Contains(t, logBuf.String(), "level=INFO")
+				assert.Contains(t, logBuf.String(), tt.found)
 			}
 		})
 	}
@@ -340,10 +345,14 @@ func TestRepoInstructions(t *testing.T) {
 	big := strings.Repeat("a", repoInstructionsCap+1000)
 	multibyte := strings.Repeat("a", repoInstructionsCap-1) + strings.Repeat("é", 10)
 
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "secret.md"), []byte("outside"), 0o644))
+
 	tests := []struct {
 		name     string
 		files    map[string]string
 		dirs     []string
+		links    map[string]string // link name -> target; relative targets resolve in the root
 		wantName string
 		check    func(t *testing.T, content string)
 	}{
@@ -395,6 +404,20 @@ func TestRepoInstructions(t *testing.T) {
 			check: func(t *testing.T, c string) { assert.Empty(t, c) },
 		},
 		{
+			name:     "in-repo symlink is followed",
+			files:    map[string]string{"AGENTS.md": "agents"},
+			links:    map[string]string{"CLAUDE.md": "AGENTS.md"},
+			wantName: "AGENTS.md",
+			check:    func(t *testing.T, c string) { assert.Equal(t, "agents", c) },
+		},
+		{
+			name:     "symlink leaving the root is rejected",
+			files:    map[string]string{"CLAUDE.md": "claude"},
+			links:    map[string]string{"AGENTS.md": filepath.Join(outside, "secret.md")},
+			wantName: "CLAUDE.md",
+			check:    func(t *testing.T, c string) { assert.Equal(t, "claude", c) },
+		},
+		{
 			name:     "directory named AGENTS.md is skipped",
 			dirs:     []string{"AGENTS.md"},
 			files:    map[string]string{"CLAUDE.md": "claude"},
@@ -415,6 +438,10 @@ func TestRepoInstructions(t *testing.T) {
 				p := filepath.Join(dir, rel)
 				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 				require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+			}
+
+			for link, target := range tt.links {
+				require.NoError(t, os.Symlink(target, filepath.Join(dir, link)))
 			}
 
 			name, content := repoInstructions(dir)
