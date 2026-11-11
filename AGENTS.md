@@ -176,8 +176,9 @@ Executor tests needing a real Docker daemon are gated by `CMX_TEST_DOCKER` and
 skip when it is unset.
 
 - **Never commit to `main`.** Work on a feature branch; tasks of a plan or
-  scope the user approved commit there without asking again. Never push
-  without explicit user approval.
+  scope the user approved commit there without asking again. Pushing a
+  feature branch and opening a PR need no approval; merging a PR, pushing
+  to `main` and pushing a tag each need explicit user approval.
 - No session links in commits or PRs.
 
 Commit messages: conventional (`type(scope): description`), short and
