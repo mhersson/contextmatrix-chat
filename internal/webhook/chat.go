@@ -95,9 +95,22 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	claudeCode := p.LLMEndpoint.Type == protocol.LLMEndpointTypeClaudeCode
+
+	// Fail-closed: a claude_code session without its subscription token cannot
+	// authenticate. Logs the session ID only, never the endpoint.
+	if claudeCode && p.LLMEndpoint.OAuthToken == "" {
+		s.logger.Warn("chat/start: no claude code token", "session_id", p.SessionID)
+		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal,
+			"CM did not provision a claude code token")
+
+		return
+	}
+
 	// Fail-closed: without the proxy the only alternative is handing the worker
-	// the real key. Checked before any side effect.
-	if s.llmProxy == nil {
+	// the real key. Checked before any side effect. claude_code sessions bypass
+	// the proxy.
+	if !claudeCode && s.llmProxy == nil {
 		s.logger.Error("chat/start: llm proxy not configured", "session_id", p.SessionID)
 		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal,
 			"llm proxy not configured")
@@ -144,12 +157,18 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	// The worker gets a per-session stand-in token for serve's LLM proxy, never
 	// the real key. Registered before any redaction key so a failure leaves
 	// nothing to undo; the error is not logged because it may quote the endpoint.
-	llmToken, err := s.llmProxy.Register(p.SessionID, *p.LLMEndpoint)
-	if err != nil {
-		s.logger.Error("chat/start: llm proxy register failed", "session_id", p.SessionID)
-		webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal, "internal error")
+	var llmToken string
 
-		return
+	if !claudeCode {
+		var err error
+
+		llmToken, err = s.llmProxy.Register(p.SessionID, *p.LLMEndpoint)
+		if err != nil {
+			s.logger.Error("chat/start: llm proxy register failed", "session_id", p.SessionID)
+			webhookcore.WriteError(w, http.StatusInternalServerError, protocol.CodeInternal, "internal error")
+
+			return
+		}
 	}
 
 	env := []string{
@@ -212,13 +231,21 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 		env = append(env, "CM_CHAT_RESUME=1")
 	}
 
-	// The worker's LLM_* point at serve's proxy; the real key stays host-side.
-	// The type is still passed through so the harness picks the right wire format.
-	env = append(env,
-		"LLM_API_KEY="+llmToken,
-		"LLM_BASE_URL="+s.llmBaseURL,
-		"LLM_TYPE="+p.LLMEndpoint.Type,
-	)
+	if claudeCode {
+		// The subscription token rides the worker env; there is no proxy to hide it.
+		env = append(env,
+			"LLM_TYPE="+protocol.LLMEndpointTypeClaudeCode,
+			llmOAuthTokenEnv+"="+p.LLMEndpoint.OAuthToken,
+		)
+	} else {
+		// The worker's LLM_* point at serve's proxy; the real key stays host-side.
+		// The type is still passed through so the harness picks the right wire format.
+		env = append(env,
+			"LLM_API_KEY="+llmToken,
+			"LLM_BASE_URL="+s.llmBaseURL,
+			"LLM_TYPE="+p.LLMEndpoint.Type,
+		)
+	}
 
 	// Arm the host-side log-bridge redactor BEFORE the container starts so a
 	// secret surfacing on worker stderr or an unparsable stdout line is masked
@@ -226,6 +253,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	// still masked defensively. Forgotten on container exit (DropSession).
 	if s.sessionSecrets != nil {
 		s.sessionSecrets.AddSessionKey(p.SessionID, llmToken)
+		s.sessionSecrets.AddSessionKey(p.SessionID, p.LLMEndpoint.OAuthToken)
 		s.sessionSecrets.AddSessionKey(p.SessionID, p.LLMEndpoint.APIKey)
 	}
 
@@ -261,19 +289,24 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	// Operator-supplied extra env is appended after the system vars so that
 	// explicit operator entries take precedence over CM_*/CMX_* defaults for
-	// any duplicate keys. An LLM_* key here replaces the per-session proxy token
-	// and URL set above (Docker keeps the last duplicate). An LLM_API_KEY with
-	// LLM_BASE_URL bypasses the proxy; LLM_API_KEY alone is rejected by it.
-	// Intentional, but surfaced below for operator visibility.
-	for k, v := range s.workerExtraEnv {
-		env = append(env, k+"="+v)
+	// any duplicate keys. In endpoint mode an LLM_* key here replaces the
+	// per-session proxy token and URL set above (Docker keeps the last
+	// duplicate); LLM_API_KEY with LLM_BASE_URL bypasses the proxy, and
+	// LLM_API_KEY alone is rejected by it. Reserved keys are withheld.
+	extraEnv, reserved := workerExtraEnv(s.workerExtraEnv, claudeCode)
+	env = append(env, extraEnv...)
+
+	if len(reserved) > 0 {
+		s.reservedEnvWarnOnce.Do(func() {
+			s.logger.Warn("worker_extra_env sets reserved llm keys; ignored", "env_names", reserved)
+		})
 	}
 
-	// Warn when worker_extra_env sets an LLM_* key, since that operator value
-	// silently replaces the session's proxy token and URL. Log the env
+	// Warn when worker_extra_env applies an LLM_* key, since that operator
+	// value silently replaces the session's proxy token and URL. Log the env
 	// NAME(s) only - never the value - and once per process, so a long-lived
 	// server with a static worker_extra_env does not spam its log every session.
-	if names := llmExtraEnvKeys(s.workerExtraEnv); len(names) > 0 {
+	if names := llmEnvKeys(extraEnv); len(names) > 0 {
 		s.llmOverrideWarnOnce.Do(func() {
 			s.logger.Warn("worker_extra_env overrides CM-provisioned llm credentials for this session",
 				"env_names", names)
@@ -283,8 +316,9 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	// The overriding operator key - not the provisioned one - is what the
 	// worker actually sends on every inference call, so it is what can surface
 	// on worker stderr. Register it host-side like the provisioned secrets;
-	// AddSessionKey ignores the empty (no-override) case.
-	if s.sessionSecrets != nil {
+	// AddSessionKey ignores the empty (no-override) case. A withheld key is
+	// never in the env, so it needs no registration.
+	if s.sessionSecrets != nil && !claudeCode {
 		s.sessionSecrets.AddSessionKey(p.SessionID, s.workerExtraEnv["LLM_API_KEY"])
 	}
 
@@ -301,7 +335,7 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	// Per-project worker image override (protocol
 	// ChatStartPayload.WorkerImage - CM derives it from the board's
-	// remote_execution.worker_image). When present, it replaces the service-wide
+	// remote_execution.chat_worker_image). When present, it replaces the service-wide
 	// base image so a project can run a toolchain-specific worker; empty falls
 	// back to the configured base image exactly as before. A per-project image
 	// bypasses the startup digest-pin warning, so log the override at launch to
@@ -332,7 +366,9 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 			s.sessionSecrets.RemoveSessionKey(p.SessionID)
 		}
 
-		s.llmProxy.Revoke(p.SessionID)
+		if !claudeCode {
+			s.llmProxy.Revoke(p.SessionID)
+		}
 
 		if errors.Is(err, executor.ErrCapacity) {
 			webhookcore.WriteError(w, http.StatusTooManyRequests, protocol.CodeLimitReached, "concurrency limit reached")
@@ -362,15 +398,51 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// llmExtraEnvKeys returns the sorted LLM_* keys present in extra (operator
-// worker_extra_env). Because worker_extra_env is appended to the container env
-// last, any of these overrides the CM-provisioned per-session LLM_* credential
-// (Docker: last duplicate wins). Returns nil when there are none.
-func llmExtraEnvKeys(extra map[string]string) []string {
+// llmOAuthTokenEnv is the worker env name carrying a claude_code session's
+// subscription token.
+const llmOAuthTokenEnv = "LLM_OAUTH_TOKEN" //nolint:gosec // env var name, not a credential
+
+// workerExtraEnv returns the operator's extra env as KEY=VALUE entries sorted
+// by key, plus the sorted names it withheld. LLM_OAUTH_TOKEN and a claude_code
+// LLM_TYPE are always withheld, so an override can neither inject a token nor
+// route an endpoint session onto the claude path. In claude_code mode every
+// LLM_TYPE, LLM_API_KEY and LLM_BASE_URL is withheld too.
+func workerExtraEnv(extra map[string]string, claudeCode bool) (env, reserved []string) {
+	for k, v := range extra {
+		if isReservedExtraEnv(k, v, claudeCode) {
+			reserved = append(reserved, k)
+
+			continue
+		}
+
+		env = append(env, k+"="+v)
+	}
+
+	slices.Sort(env)
+	slices.Sort(reserved)
+
+	return env, reserved
+}
+
+func isReservedExtraEnv(key, value string, claudeCode bool) bool {
+	switch key {
+	case llmOAuthTokenEnv:
+		return true
+	case "LLM_TYPE":
+		return claudeCode || value == protocol.LLMEndpointTypeClaudeCode
+	case "LLM_API_KEY", "LLM_BASE_URL":
+		return claudeCode
+	}
+
+	return false
+}
+
+// llmEnvKeys returns the sorted LLM_* names in KEY=VALUE env entries.
+func llmEnvKeys(env []string) []string {
 	var keys []string
 
-	for k := range extra {
-		if strings.HasPrefix(k, "LLM_") {
+	for _, kv := range env {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "LLM_") {
 			keys = append(keys, k)
 		}
 	}

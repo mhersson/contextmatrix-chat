@@ -85,6 +85,12 @@ never enters the container: `LLM_API_KEY` there is a per-session token for
 serve's LLM proxy (`llmproxy.DefaultPrefix`), revoked on container exit or
 launch failure.
 
+The one exception is a `claude_code` (Claude Code subscription) endpoint: it
+bypasses the proxy, and the subscription token sits in the worker env
+(`LLM_OAUTH_TOKEN`, then `claude`'s env), so a prompt-injected session could
+read and exfiltrate it. serve still masks it in every bridged frame.
+`worker_extra_env` can never set `LLM_OAUTH_TOKEN`.
+
 ### Config
 
 koanf, not viper. Precedence: defaults < file < env. `CMX_*` env prefix; nested

@@ -148,6 +148,14 @@ stand-in token plus the proxy URL.
   the token when the container exits or the launch fails.
 - A resumed session gets a fresh token; the old one stays dead.
 
+Exception: a Claude Code subscription session (`claude_code` endpoint) bypasses
+the proxy. serve puts the subscription token in the worker env as
+`LLM_OAUTH_TOKEN` (with `LLM_TYPE=claude_code`), where a prompt-injected session
+could read and exfiltrate it; serve still masks it in every bridged frame.
+`worker_extra_env` can never set `LLM_OAUTH_TOKEN` or an `LLM_TYPE` of
+`claude_code`, and in a Claude Code session it cannot set `LLM_TYPE`,
+`LLM_API_KEY` or `LLM_BASE_URL` either; serve logs the withheld names once.
+
 Limits:
 
 - Overriding the key in `worker_extra_env` needs `LLM_BASE_URL` as well; the pair bypasses the proxy and puts that key in the container.

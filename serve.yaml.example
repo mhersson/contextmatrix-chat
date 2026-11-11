@@ -128,7 +128,8 @@ secrets_dir: /var/run/cm-chat/secrets
 # Additional environment variables injected verbatim into every worker
 # container, after the CM_*/CMX_* system vars (so an explicit entry overrides a
 # system default for any duplicate key). Useful for operator-specific
-# passthrough. Limits: overriding LLM_API_KEY needs LLM_BASE_URL as well; the
+# passthrough. LLM_OAUTH_TOKEN is never applied, and neither is LLM_TYPE (nor
+# LLM_API_KEY / LLM_BASE_URL) for Claude Code subscription sessions. Limits: overriding LLM_API_KEY needs LLM_BASE_URL as well; the
 # pair bypasses the LLM proxy and puts that key in the container. An HTTP proxy
 # here needs the serve host (host.docker.internal by default) in NO_PROXY, and
 # does not govern LLM calls: those leave from serve, so serve's own

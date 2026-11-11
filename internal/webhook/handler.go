@@ -221,6 +221,10 @@ type Server struct {
 	// worker_extra_env produces the same override on every session, and
 	// repeating it per request would spam a long-lived server's log.
 	llmOverrideWarnOnce sync.Once
+
+	// reservedEnvWarnOnce guards the "worker_extra_env sets reserved llm keys"
+	// warning for the same reason: a static worker_extra_env trips it every session.
+	reservedEnvWarnOnce sync.Once
 }
 
 // NewServer wires a Server from its dependencies. It builds the transport Core
