@@ -193,9 +193,11 @@ token once, removes it from its own environment, and hands it only to
   process and starts a fresh one, opened by the primer.
 - **Turns.** A message sent while `claude` is working waits for the turn to
   end; everything that arrived in the meantime goes as the next turn.
-- **Failures.** A `claude` process that exits is resumed on the next message;
-  if that resume cannot start, a fresh session opens with the primer. Nothing
-  restarts on its own before that message. A subscription usage limit shows
+- **Failures.** A `claude` process that exits is resumed on the next message,
+  and a message the exited process never took is sent once more to the resumed
+  one; if that resume cannot start, a fresh session opens with the primer.
+  Nothing restarts on its own before that message. A failed turn shows one
+  error line. A subscription usage limit shows
   in the chat pane, never falls back to the LLM endpoint, and lifts on the
   first message after the reset. A token Claude Code rejects ends the chat
   with an error.

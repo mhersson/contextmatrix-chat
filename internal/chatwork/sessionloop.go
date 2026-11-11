@@ -1,11 +1,16 @@
 package chatwork
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/mhersson/contextmatrix-harness/events"
 	"github.com/mhersson/contextmatrix-harness/harness"
@@ -47,6 +52,7 @@ type sessionLoop struct {
 	inbox   *chatInbox
 	clearCh <-chan struct{}
 	emit    *events.Emitter
+	tap     *eventTap // counts what emit carries, the session's own events included
 	redact  func(string) string
 	primer  string // rendered primer: the first message after a /clear or a fresh restart
 
@@ -93,16 +99,29 @@ func (l *sessionLoop) run(ctx context.Context, opening string) error {
 }
 
 // sendAll sends texts in order as separate turns and stops at a /clear or at
-// a failed turn, which leaves the session down and drops the rest.
+// a failed turn, which leaves the session down and drops the rest. A text that
+// never reached claude is resent once on a reopened session.
 func (l *sessionLoop) sendAll(ctx context.Context, texts []string) (cleared bool, err error) {
-	for _, text := range texts {
+	mayResend := true
+
+	for len(texts) > 0 {
 		if l.sess == nil || ctx.Err() != nil {
 			return false, nil
 		}
 
-		cleared, err = l.send(ctx, text)
+		text := texts[0]
+		texts = texts[1:]
+
+		var lost bool
+
+		cleared, lost, err = l.send(ctx, text, mayResend)
 		if cleared || err != nil {
 			return cleared, err
+		}
+
+		if lost {
+			texts = append(l.reopen(ctx, text), texts...)
+			mayResend = false
 		}
 	}
 
@@ -110,24 +129,29 @@ func (l *sessionLoop) sendAll(ctx context.Context, texts []string) (cleared bool
 }
 
 // send runs one turn under a clear watch. A cleared or shut-down turn is not a
-// failure.
-func (l *sessionLoop) send(ctx context.Context, text string) (cleared bool, err error) {
+// failure; lost reports a text the session never took.
+func (l *sessionLoop) send(ctx context.Context, text string, mayResend bool) (cleared, lost bool, err error) {
+	before := l.tap.counts()
 	turnCtx, stop := watchClear(ctx, l.clearCh)
 	res, sendErr := l.sess.Send(turnCtx, text, nil)
 	cleared = stop()
+	during := l.tap.counts().since(before)
 
 	slog.Info("chat turn finished", "reason", res.Reason, "turns", res.Turns)
 
 	if cleared || ctx.Err() != nil || sendErr == nil {
-		return cleared, nil
+		return cleared, false, nil
 	}
 
-	return false, l.turnFailed(sendErr)
+	lost, err = l.turnFailed(sendErr, during, mayResend)
+
+	return false, lost, err
 }
 
 // turnFailed closes the session after a failed turn and keeps its ID, so the
-// next message resumes the conversation. Only a rejected token is fatal.
-func (l *sessionLoop) turnFailed(err error) error {
+// next message resumes the conversation. Only a rejected token is fatal. The
+// error and awaiting_human events the session already emitted are not repeated.
+func (l *sessionLoop) turnFailed(err error, during tapCounts, mayResend bool) (lost bool, fatal error) {
 	var limit *claudecode.UsageLimitError
 
 	switch {
@@ -135,18 +159,33 @@ func (l *sessionLoop) turnFailed(err error) error {
 		// vendorkit already emitted usage_limit; a retry cannot pass before the reset.
 		l.closeSession()
 	case errors.Is(err, claudecode.ErrNotLoggedIn):
-		l.emitError(err)
+		l.reportError(err, during)
 		l.closeSession()
 
-		return fmt.Errorf("claude code turn: %w", err)
+		return false, fmt.Errorf("claude code turn: %w", err)
+	case during.userInputs == 0 && mayResend:
+		// A Send that emitted no user_input never reached claude: the process
+		// had exited while idle.
+		slog.Warn("claude code process had exited; resending on a reopened session", "error", l.redact(err.Error()))
+		l.closeSession()
+
+		return true, nil
 	default:
-		l.emitError(err)
+		l.reportError(err, during)
 		l.closeSession()
 	}
 
-	l.emitAwaitingHuman()
+	if during.awaiting == 0 {
+		l.emitAwaitingHuman()
+	}
 
-	return nil
+	return false, nil
+}
+
+func (l *sessionLoop) reportError(err error, during tapCounts) {
+	if during.errors == 0 {
+		l.emitError(err)
+	}
 }
 
 // await waits for the next user turn and, with no live session, reopens one,
@@ -215,9 +254,13 @@ func (l *sessionLoop) restart(ctx context.Context) (texts []string, done bool) {
 		return nil, true
 	}
 
-	// drain any stale clear signal that arrived while handling this one
+	// A drained signal may belong to a /clear whose hold landed after the
+	// release above, so release again rather than leave the inbox held.
 	select {
 	case <-l.clearCh:
+		if closed := l.inbox.releaseClear(); closed {
+			return nil, true
+		}
 	default:
 	}
 
@@ -346,4 +389,72 @@ func watchClear(ctx context.Context, clearCh <-chan struct{}) (turnCtx context.C
 	}
 
 	return turnCtx, stop
+}
+
+// eventTap counts the user_input, error and awaiting_human lines on their way
+// to dst, so the loop can tell what a failed Send already reported. It must
+// only count: Close or Send from an Emitter writer deadlocks.
+type eventTap struct {
+	dst                          io.Writer
+	userInputs, errors, awaiting atomic.Int64
+}
+
+// tapCounts is a snapshot of an eventTap's counters.
+type tapCounts struct {
+	userInputs, errors, awaiting int64
+}
+
+func newEventTap(dst io.Writer) *eventTap {
+	return &eventTap{dst: dst}
+}
+
+// Write counts every line in p, then passes p to dst unchanged.
+func (t *eventTap) Write(p []byte) (int, error) {
+	for line := range bytes.Lines(p) {
+		t.count(line)
+	}
+
+	return t.dst.Write(p)
+}
+
+var tapKinds = [][]byte{[]byte(`"kind":"user_input"`), []byte(`"kind":"error"`), []byte(`"kind":"state_change"`)}
+
+func (t *eventTap) count(line []byte) {
+	// Skip the decode for the many lines no counter needs, tool output included.
+	if !slices.ContainsFunc(tapKinds, func(k []byte) bool { return bytes.Contains(line, k) }) {
+		return
+	}
+
+	var ev struct {
+		Kind string `json:"kind"`
+		Data struct {
+			State string `json:"state"`
+		} `json:"data"`
+	}
+
+	if json.Unmarshal(line, &ev) != nil {
+		return
+	}
+
+	switch {
+	case ev.Kind == string(events.UserInput):
+		t.userInputs.Add(1)
+	case ev.Kind == string(events.ErrorKind):
+		t.errors.Add(1)
+	case ev.Kind == string(events.StateChange) && ev.Data.State == "awaiting_human":
+		t.awaiting.Add(1)
+	}
+}
+
+func (t *eventTap) counts() tapCounts {
+	return tapCounts{userInputs: t.userInputs.Load(), errors: t.errors.Load(), awaiting: t.awaiting.Load()}
+}
+
+// since returns the counts added after before was taken.
+func (c tapCounts) since(before tapCounts) tapCounts {
+	return tapCounts{
+		userInputs: c.userInputs - before.userInputs,
+		errors:     c.errors - before.errors,
+		awaiting:   c.awaiting - before.awaiting,
+	}
 }

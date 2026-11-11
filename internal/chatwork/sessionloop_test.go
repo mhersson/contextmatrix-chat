@@ -28,11 +28,30 @@ const (
 	testPrimer  = "PRIMER"
 )
 
+// fakeEvents is what a fakeSession emits for a turn, as vendorkit's mapper does.
+type fakeEvents int
+
+const (
+	noEvents          fakeEvents = iota
+	inputEvents                  // user_input only
+	crashEvents                  // user_input, then error for a failed turn (a process exit)
+	resultErrorEvents            // user_input, then error and awaiting_human for a failed turn (a result error)
+)
+
+// errDeadProcess is a Send on a process that had already exited: vendorkit
+// returns it at once and emits nothing.
+var errDeadProcess = errors.New("claudecode: session ended (done)")
+
 // fakeSession records what the loop sends and how often it closes the session.
-// reply answers turn i; nil means every turn succeeds.
+// reply answers turn i; nil means every turn succeeds. reports selects what each
+// turn emits through emit, redacted with redact; the starter sets both.
 type fakeSession struct {
-	id    string
-	reply func(ctx context.Context, i int, text string) (harness.Result, error)
+	id      string
+	reply   func(ctx context.Context, i int, text string) (harness.Result, error)
+	reports fakeEvents
+
+	emit   *events.Emitter
+	redact func(string) string
 
 	mu     sync.Mutex
 	sends  []string
@@ -45,11 +64,36 @@ func (s *fakeSession) Send(ctx context.Context, text string, _ []llm.ImageURL) (
 	s.sends = append(s.sends, text)
 	s.mu.Unlock()
 
-	if s.reply == nil {
-		return harness.Result{Reason: "done", Completed: true}, nil
+	res, err := harness.Result{Reason: "done", Completed: true}, error(nil)
+	if s.reply != nil {
+		res, err = s.reply(ctx, i, text)
 	}
 
-	return s.reply(ctx, i, text)
+	s.report(res, err)
+
+	return res, err
+}
+
+func (s *fakeSession) report(res harness.Result, err error) {
+	if s.reports == noEvents || errors.Is(err, errDeadProcess) {
+		return
+	}
+
+	s.emit.Emit(events.UserInput, map[string]any{"content_len": 1})
+
+	var limit *claudecode.UsageLimitError
+
+	switch {
+	case err == nil, res.Reason == "canceled", s.reports == inputEvents:
+	case errors.As(err, &limit):
+		s.emit.Emit(events.Kind("usage_limit"), map[string]any{"window": limit.Window})
+	default:
+		s.emit.Emit(events.ErrorKind, map[string]any{"error": s.redact(err.Error())})
+
+		if s.reports == resultErrorEvents {
+			s.emit.Emit(events.StateChange, map[string]any{"state": "awaiting_human"})
+		}
+	}
 }
 
 func (s *fakeSession) Close() error {
@@ -85,6 +129,9 @@ type startStep struct {
 }
 
 type fakeStarter struct {
+	emit   *events.Emitter
+	redact func(string) string
+
 	mu      sync.Mutex
 	steps   []startStep
 	resumes []string
@@ -109,6 +156,8 @@ func (f *fakeStarter) start(_ context.Context, resume string) (chatSession, erro
 	if step.err != nil {
 		return nil, step.err
 	}
+
+	step.sess.emit, step.sess.redact = f.emit, f.redact
 
 	f.mu.Lock()
 	f.started = append(f.started, step.sess)
@@ -186,17 +235,21 @@ func newLoopFixture(redact func(string) string, steps ...startStep) *loopFixture
 	}
 
 	f := &loopFixture{
-		starter: &fakeStarter{steps: steps},
 		inbox:   newChatInbox(),
 		clearCh: make(chan struct{}, 1),
 		events:  &bytes.Buffer{},
 	}
 
+	tap := newEventTap(f.events)
+	emit := events.NewEmitter(io.Discard, tap)
+	f.starter = &fakeStarter{emit: emit, redact: redact, steps: steps}
+
 	f.loop = &sessionLoop{
 		start:   f.starter.start,
 		inbox:   f.inbox,
 		clearCh: f.clearCh,
-		emit:    events.NewEmitter(io.Discard, f.events),
+		emit:    emit,
+		tap:     tap,
 		redact:  redact,
 		primer:  testPrimer,
 	}
@@ -432,7 +485,7 @@ func TestSessionLoopClearAfterWaitDropsTurn(t *testing.T) {
 
 	var f *loopFixture
 
-	s1 := &fakeSession{id: "id-1", reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
 		if i == 1 {
 			pushUser(f.inbox, "q2")
 
@@ -510,41 +563,58 @@ func TestSessionLoopUsageLimitResumesOnNextMessage(t *testing.T) {
 	assertClosedOnce(t, f.starter)
 }
 
+// One failed turn shows one redacted error line and one awaiting_human,
+// whichever of the session and the loop emits them.
 func TestSessionLoopCrashEmitsRedactedErrorAndResumes(t *testing.T) {
 	t.Parallel()
 
-	var f *loopFixture
+	tests := []struct {
+		name    string
+		reports fakeEvents
+	}{
+		{name: "process exit reported by the session", reports: crashEvents},
+		{name: "result error reported by the session", reports: resultErrorEvents},
+		{name: "error the session did not report", reports: inputEvents},
+	}
 
-	s1 := &fakeSession{id: "id-1", reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
-		if i == 1 {
-			pushUser(f.inbox, "q2")
-			f.inbox.closeInbox()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-			return harness.Result{Reason: "error"}, errors.New("claude exited: secret-000000")
-		}
+			var f *loopFixture
 
-		return harness.Result{Reason: "done"}, nil
-	}}
-	s2 := &fakeSession{id: "id-1"}
+			s1 := &fakeSession{id: "id-1", reports: tt.reports, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+				if i == 1 {
+					pushUser(f.inbox, "q2")
+					f.inbox.closeInbox()
 
-	redact := func(s string) string { return strings.ReplaceAll(s, "secret-000000", "[REDACTED]") }
-	f = newLoopFixture(redact, startStep{sess: s1}, startStep{sess: s2})
-	pushUser(f.inbox, "q1")
+					return harness.Result{Reason: "error"}, errors.New("claude exited: secret-000000")
+				}
 
-	require.NoError(t, f.run(t.Context(), t))
-	assert.Equal(t, []string{"", "id-1"}, f.starter.starts())
-	assert.Equal(t, []string{"q2"}, s2.sent())
+				return harness.Result{Reason: "done"}, nil
+			}}
+			s2 := &fakeSession{id: "id-1"}
 
-	evs := f.decoded(t)
-	errs := errorEvents(evs)
-	require.Len(t, errs, 1)
+			redact := func(s string) string { return strings.ReplaceAll(s, "secret-000000", "[REDACTED]") }
+			f = newLoopFixture(redact, startStep{sess: s1}, startStep{sess: s2})
+			pushUser(f.inbox, "q1")
 
-	msg, ok := errs[0].Data["error"].(string)
-	require.True(t, ok)
-	assert.NotEmpty(t, msg)
-	assert.NotContains(t, msg, "secret-000000")
-	assert.Equal(t, 1, awaitingHumanCount(evs))
-	assertClosedOnce(t, f.starter)
+			require.NoError(t, f.run(t.Context(), t))
+			assert.Equal(t, []string{"", "id-1"}, f.starter.starts())
+			assert.Equal(t, []string{"q2"}, s2.sent())
+
+			evs := f.decoded(t)
+			errs := errorEvents(evs)
+			require.Len(t, errs, 1)
+
+			msg, ok := errs[0].Data["error"].(string)
+			require.True(t, ok)
+			assert.NotEmpty(t, msg)
+			assert.NotContains(t, msg, "secret-000000")
+			assert.Equal(t, 1, awaitingHumanCount(evs))
+			assertClosedOnce(t, f.starter)
+		})
+	}
 }
 
 func TestSessionLoopResumeStartFailureStartsFresh(t *testing.T) {
@@ -552,7 +622,7 @@ func TestSessionLoopResumeStartFailureStartsFresh(t *testing.T) {
 
 	var f *loopFixture
 
-	s1 := &fakeSession{id: "id-1", reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
 		if i == 1 {
 			pushUser(f.inbox, "q2")
 			f.inbox.closeInbox()
@@ -581,16 +651,184 @@ func TestSessionLoopResumeStartFailureStartsFresh(t *testing.T) {
 func TestSessionLoopNotLoggedInIsFatal(t *testing.T) {
 	t.Parallel()
 
-	s1 := &fakeSession{id: "id-1", reply: func(context.Context, int, string) (harness.Result, error) {
-		return harness.Result{Reason: "error"}, fmt.Errorf("turn: %w", claudecode.ErrNotLoggedIn)
-	}}
-	f := newLoopFixture(nil, startStep{sess: s1})
+	tests := []struct {
+		name    string
+		reports fakeEvents
+	}{
+		{name: "reported by the session", reports: resultErrorEvents},
+		{name: "not reported, not mistaken for a dead process", reports: noEvents},
+	}
 
-	err := f.run(t.Context(), t)
-	require.ErrorIs(t, err, claudecode.ErrNotLoggedIn)
-	assert.Len(t, errorEvents(f.decoded(t)), 1)
-	assert.Equal(t, []string{""}, f.starter.starts())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s1 := &fakeSession{id: "id-1", reports: tt.reports, reply: func(context.Context, int, string) (harness.Result, error) {
+				return harness.Result{Reason: "error"}, fmt.Errorf("turn: %w", claudecode.ErrNotLoggedIn)
+			}}
+			f := newLoopFixture(nil, startStep{sess: s1})
+
+			err := f.run(t.Context(), t)
+			require.ErrorIs(t, err, claudecode.ErrNotLoggedIn)
+			assert.Len(t, errorEvents(f.decoded(t)), 1)
+			assert.Equal(t, []string{""}, f.starter.starts())
+			assertClosedOnce(t, f.starter)
+		})
+	}
+}
+
+// A Send that emits no user_input never reached claude: the process had
+// exited while idle. The text goes once to a reopened session, and the dead
+// session shows no error.
+func TestSessionLoopIdleDeathResendsText(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		resumeErr  error
+		wantStarts []string
+		wantSent   []string
+		wantErrors int
+	}{
+		{name: "resumed", wantStarts: []string{"", "id-1"}, wantSent: []string{"q1"}},
+		{
+			name:       "resume fails, fresh with the primer",
+			resumeErr:  errors.New("no transcript for id-1"),
+			wantStarts: []string{"", "id-1", ""},
+			wantSent:   []string{testPrimer, "q1"},
+			wantErrors: 1, // the failed resume start, not the dead session
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+				if i == 1 {
+					return harness.Result{Reason: "error"}, errDeadProcess
+				}
+
+				return harness.Result{Reason: "done"}, nil
+			}}
+			reopened := &fakeSession{id: "id-2", reports: crashEvents}
+
+			steps := []startStep{{sess: s1}}
+			if tt.resumeErr != nil {
+				steps = append(steps, startStep{err: tt.resumeErr})
+			}
+
+			f := newLoopFixture(nil, append(steps, startStep{sess: reopened})...)
+			pumpFrames(t, f.inbox, f.clearCh, userFrame("q1"))
+
+			require.NoError(t, f.run(t.Context(), t))
+			assert.Equal(t, tt.wantStarts, f.starter.starts())
+			assert.Equal(t, []string{testOpening, "q1"}, s1.sent())
+			assert.Equal(t, tt.wantSent, reopened.sent())
+
+			evs := f.decoded(t)
+			assert.Len(t, errorEvents(evs), tt.wantErrors)
+			assert.Zero(t, awaitingHumanCount(evs))
+			assertClosedOnce(t, f.starter)
+		})
+	}
+}
+
+func TestSessionLoopIdleDeathResendsOnlyOnce(t *testing.T) {
+	t.Parallel()
+
+	dead := func(context.Context, int, string) (harness.Result, error) {
+		return harness.Result{Reason: "error"}, errDeadProcess
+	}
+	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(ctx context.Context, i int, text string) (harness.Result, error) {
+		if i == 1 {
+			return dead(ctx, i, text)
+		}
+
+		return harness.Result{Reason: "done"}, nil
+	}}
+	s2 := &fakeSession{id: "id-1", reports: crashEvents, reply: dead}
+
+	f := newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2})
+	pumpFrames(t, f.inbox, f.clearCh, userFrame("q1"))
+
+	require.NoError(t, f.run(t.Context(), t))
+	assert.Equal(t, []string{"", "id-1"}, f.starter.starts())
+	assert.Equal(t, []string{"q1"}, s2.sent())
+
+	evs := f.decoded(t)
+	assert.Len(t, errorEvents(evs), 1)
+	assert.Equal(t, 1, awaitingHumanCount(evs))
 	assertClosedOnce(t, f.starter)
+}
+
+func TestEventTap(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		emit  func(e *events.Emitter)
+		lines int
+		want  tapCounts
+	}{
+		{
+			name:  "user_input",
+			emit:  func(e *events.Emitter) { e.Emit(events.UserInput, map[string]any{"content_len": 3}) },
+			lines: 1,
+			want:  tapCounts{userInputs: 1},
+		},
+		{
+			name:  "error",
+			emit:  func(e *events.Emitter) { e.Emit(events.ErrorKind, map[string]any{"error": "boom"}) },
+			lines: 1,
+			want:  tapCounts{errors: 1},
+		},
+		{
+			name:  "awaiting_human",
+			emit:  func(e *events.Emitter) { e.Emit(events.StateChange, map[string]any{"state": "awaiting_human"}) },
+			lines: 1,
+			want:  tapCounts{awaiting: 1},
+		},
+		{
+			name: "other events are not counted",
+			emit: func(e *events.Emitter) {
+				e.Emit(events.StateChange, map[string]any{"stop": "done"})
+				e.Emit(events.ToolCallKind, map[string]any{"name": "awaiting_human"})
+				e.Emit(events.Kind("usage_limit"), map[string]any{"window": "five_hour"})
+			},
+			lines: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var dst bytes.Buffer
+
+			tap := newEventTap(&dst)
+			tt.emit(events.NewEmitter(io.Discard, tap))
+
+			assert.Equal(t, tt.want, tap.counts())
+			assert.Len(t, strings.Split(strings.TrimSpace(dst.String()), "\n"), tt.lines)
+		})
+	}
+
+	t.Run("lines in one write count separately", func(t *testing.T) {
+		t.Parallel()
+
+		var dst bytes.Buffer
+
+		tap := newEventTap(&dst)
+		before := tap.counts()
+		p := []byte(`{"kind":"user_input"}` + "\n" + `{"kind":"error","data":{"error":"x"}}` + "\n")
+
+		n, err := tap.Write(p)
+		require.NoError(t, err)
+		assert.Equal(t, len(p), n)
+		assert.Equal(t, string(p), dst.String())
+		assert.Equal(t, tapCounts{userInputs: 1, errors: 1}, tap.counts().since(before))
+	})
 }
 
 func TestSessionLoopInitialStartFailureIsFatal(t *testing.T) {

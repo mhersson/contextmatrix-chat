@@ -60,7 +60,8 @@ var _ chatSession = (*claudecode.Session)(nil)
 // runClaudeCode runs a claude_code chat on one Claude Code session in place of
 // the harness epoch loop.
 func runClaudeCode(ctx context.Context) error {
-	emit := events.NewEmitter(io.Discard, newBoardFilterWriter(os.Stdout, mcpServerTools(cmMCPServerName)))
+	tap := newEventTap(newBoardFilterWriter(os.Stdout, mcpServerTools(cmMCPServerName)))
+	emit := events.NewEmitter(io.Discard, tap)
 
 	if err := checkClaudeCode(ctx, claudecode.CheckVersion, emit, slog.Default()); err != nil {
 		return err
@@ -139,6 +140,7 @@ func runClaudeCode(ctx context.Context) error {
 		inbox:   in,
 		clearCh: clearCh,
 		emit:    emit,
+		tap:     tap,
 		redact:  redWatcher.Apply,
 		primer:  renderPrimer(sessionID),
 	}
