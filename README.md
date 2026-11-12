@@ -214,22 +214,22 @@ hardening is applied.
   the rest of the process. The turn it halts shows no error and is sent once
   more at once on a restarted `claude` process that resumes the conversation
   (with the fallback above); a halted first turn of a new conversation goes
-  alone to a fresh session instead. If the resent turn fails too, it shows one
-  error line. A subscription usage limit shows
-  in the chat pane, never falls back to the LLM endpoint, and lifts on the
-  first message after the reset. A token Claude Code rejects ends the chat
-  with an error.
+  alone to a fresh session instead. If the resent turn fails too, it shows
+  one error line. A subscription usage limit shows in the chat pane, never
+  falls back to the LLM endpoint, and lifts on the first message after the
+  reset. A token Claude Code rejects ends the chat with an error.
 - **Transcripts.** Resume within a session reads the conversation transcripts
   kept under the container's HOME (`~/.vendorkit/sessions`). The worker never
   prunes them; they go when the container is removed at session end.
 - **What does not apply:** compaction (Claude Code compacts on its own) and
   reasoning replay. `tool_output_max_bytes` and redacting tool output before
   the model sees it apply to the tools served over the bridge (grep, glob,
-  git and the task-skills tool), not to Claude Code's built-ins (the events
-  stay redacted). `reasoning_effort` becomes
-  Claude Code's effort, and a value it does not accept falls back to its
-  default. `bash_timeout_max_seconds` does apply, as the ceiling of Claude
-  Code's Bash timeout.
+  git and the task-skills tool), not to Claude Code's built-ins or to
+  ContextMatrix's board tools, which `claude` calls directly (the events
+  stay redacted). `reasoning_effort` becomes Claude Code's effort, and a
+  value it does not accept falls back to its default.
+  `bash_timeout_max_seconds` does apply, as the ceiling of Claude Code's
+  Bash timeout.
 
 The token owner must be the only human who drives chat sessions on it, even
 when ContextMatrix has several accounts; nothing enforces this, so it is an
