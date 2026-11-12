@@ -450,7 +450,7 @@ func loadResumeHistory() []llm.Message {
 // configureGitAuth stages the CM-provisioned git-credentials config into a
 // 0600 scratch file the git-credential/gh-wrapper subcommands read from (see
 // gitCredentialsConfigPath's doc for why NOT env - they run through the
-// harness bash tool's scrubbed environment) and registers the v2 helper
+// scrubbed environment of the harness bash tool or Claude Code's Bash built-in) and registers the v2 helper
 // GLOBALLY, since a provisioned session is multi-host by construction. It
 // returns the resolved self path for the gh-wrapper install, "" when git auth
 // is unavailable. Setup failures are non-fatal: a degraded git-auth

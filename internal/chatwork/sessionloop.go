@@ -143,6 +143,13 @@ func (l *sessionLoop) send(ctx context.Context, text string, mayResend bool) (cl
 		return cleared, false, nil
 	}
 
+	// A completed turn with an error (a transcript-store failure) leaves a healthy process.
+	if res.Completed {
+		slog.Warn("claude code turn completed with an error", "error", l.redact(sendErr.Error()))
+
+		return false, false, nil
+	}
+
 	lost, err = l.turnFailed(sendErr, during, mayResend)
 
 	return false, lost, err
@@ -265,7 +272,14 @@ func (l *sessionLoop) restart(ctx context.Context) (texts []string, done bool) {
 	}
 
 	if err := l.startSession(ctx, ""); err != nil {
-		return nil, ctx.Err() != nil
+		if ctx.Err() != nil {
+			return nil, true
+		}
+
+		// The cancelled turn left CM's working indicator on.
+		l.emitAwaitingHuman()
+
+		return nil, false
 	}
 
 	return []string{l.primer}, false

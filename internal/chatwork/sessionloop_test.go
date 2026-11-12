@@ -525,7 +525,7 @@ func TestSessionLoopClearAfterEOFStartsNothing(t *testing.T) {
 	}}
 	f := newLoopFixture(nil, startStep{sess: s1})
 
-	pumpFrames(t, f.inbox, f.clearCh, frames.Frame{Type: frames.TypeClear})
+	pumpFrames(t, f.inbox, f.clearCh, userFrame("stale"), frames.Frame{Type: frames.TypeClear})
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{""}, f.starter.starts())
@@ -889,5 +889,58 @@ func TestSessionLoopInboxClosedWhileDownStartsNothing(t *testing.T) {
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{""}, f.starter.starts())
+	assertClosedOnce(t, f.starter)
+}
+
+// A turn that completed but returned an error (a transcript-store failure)
+// leaves a healthy process: no error event, no close, the next message goes to
+// the same session.
+func TestSessionLoopCompletedTurnErrorKeepsSession(t *testing.T) {
+	t.Parallel()
+
+	var f *loopFixture
+
+	s1 := &fakeSession{id: "id-1", reports: inputEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+		if i == 1 {
+			pushUser(f.inbox, "q2")
+			f.inbox.closeInbox()
+
+			return harness.Result{Reason: "done", Completed: true}, errors.New("store transcripts: disk full")
+		}
+
+		return harness.Result{Reason: "done", Completed: true}, nil
+	}}
+	f = newLoopFixture(nil, startStep{sess: s1})
+	pushUser(f.inbox, "q1")
+
+	require.NoError(t, f.run(t.Context(), t))
+	assert.Equal(t, []string{""}, f.starter.starts())
+	assert.Equal(t, []string{testOpening, "q1", "q2"}, s1.sent())
+
+	evs := f.decoded(t)
+	assert.Empty(t, errorEvents(evs))
+	assert.Zero(t, awaitingHumanCount(evs))
+	assertClosedOnce(t, f.starter)
+}
+
+// A /clear mid-turn whose fresh start fails still returns CM's chat to idle.
+func TestSessionLoopClearThenFailedRestartAwaitsHuman(t *testing.T) {
+	t.Parallel()
+
+	s1 := &fakeSession{id: "id-1", reply: func(ctx context.Context, _ int, _ string) (harness.Result, error) {
+		return blockUntilCanceled(ctx)
+	}}
+	s3 := &fakeSession{id: "id-3"}
+	f := newLoopFixture(nil, startStep{sess: s1}, startStep{err: errors.New("spawn failed")}, startStep{sess: s3})
+
+	pumpFrames(t, f.inbox, f.clearCh, userFrame("stale"), frames.Frame{Type: frames.TypeClear}, userFrame("after"))
+
+	require.NoError(t, f.run(t.Context(), t))
+	assert.Equal(t, []string{"", "", ""}, f.starter.starts())
+	assert.Equal(t, []string{testPrimer, "after"}, s3.sent())
+
+	evs := f.decoded(t)
+	assert.Len(t, errorEvents(evs), 1)
+	assert.Equal(t, 1, awaitingHumanCount(evs))
 	assertClosedOnce(t, f.starter)
 }

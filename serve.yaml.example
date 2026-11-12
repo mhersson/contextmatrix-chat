@@ -147,9 +147,9 @@ secrets_dir: /var/run/cm-chat/secrets
 # (harness LLM client, MCP bridge; claude itself in Claude Code subscription
 # sessions, via NODE_EXTRA_CA_CERTS) and the code-driven initial git clone
 # (GIT_SSL_CAINFO) trust it in addition to the system store. NOTE: model-invoked
-# bash-tool commands (curl/pip/npm, and any model-run git/gh) go through the
-# harness bash tool, which scrubs env, so they do NOT trust this CA without a
-# harness change - intentionally out of scope. The host-side service (task-skills
+# shell commands run with a scrubbed env, so curl/pip and any model-run git/gh
+# do NOT trust this CA - intentionally out of scope. In a Claude Code session
+# the Bash built-in inherits NODE_EXTRA_CA_CERTS, so node and npm do trust it. The host-side service (task-skills
 # fetch) uses the OS/pod trust store and is intentionally NOT affected,
 # except the host-side LLM proxy, which also trusts this CA for its upstream calls.
 # Empty disables it; when set the file must exist on the host. Must be a readable PEM.

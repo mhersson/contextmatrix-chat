@@ -63,13 +63,14 @@ func runClaudeCode(ctx context.Context) error {
 	tap := newEventTap(newBoardFilterWriter(os.Stdout, mcpServerTools(cmMCPServerName)))
 	emit := events.NewEmitter(io.Discard, tap)
 
-	if err := checkClaudeCode(ctx, claudecode.CheckVersion, emit, slog.Default()); err != nil {
-		return err
-	}
-
+	// The token is taken first so the version check's child cannot inherit it.
 	token, err := takeOAuthToken()
 	if err != nil {
 		return bootError(emit, err)
+	}
+
+	if err := checkClaudeCode(ctx, claudecode.CheckVersion, emit, slog.Default()); err != nil {
+		return err
 	}
 
 	mcpURL, err := claudeCodeMCPURL(emit)
@@ -182,8 +183,8 @@ func bootError(emit *events.Emitter, err error) error {
 func checkClaudeCode(ctx context.Context, check func(context.Context, string) (found string, tested bool, err error), emit *events.Emitter, logger *slog.Logger) error {
 	found, tested, err := check(ctx, claudeCodeBinary)
 	if err != nil {
-		wrapped := fmt.Errorf("claude code %s is required but the chat worker image (or the project's chat_worker_image override) lacks a usable %s binary: %w",
-			claudecode.Version, claudeCodeBinary, err)
+		wrapped := fmt.Errorf("no usable %s binary (tested release: claude code %s); the chat worker image (or the project's chat_worker_image override) lacks one: %w",
+			claudeCodeBinary, claudecode.Version, err)
 		emit.Emit(events.ErrorKind, map[string]any{"error": wrapped.Error()})
 
 		return wrapped

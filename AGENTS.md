@@ -130,7 +130,7 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
    and re-orients the next epoch from the same primer - the host sends only
    `/clear`. Resume seeds history from `resume.jsonl` when `CM_CHAT_RESUME=1`.
    A `claude_code` chat runs the session loop instead
-   (`chatwork/sessionloop.go`): one `claude` process answers each turn, the
+   (`chatwork/sessionloop.go`): one long-lived `claude` process answers every turn, the
    messages that arrive during a turn go together as the next one, `/clear`
    closes the process and opens a fresh one with the same primer, and resume
    renders the restored transcript as text above the primer. A process that

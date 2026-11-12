@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -529,5 +530,23 @@ func TestClaudeCodeEffort(t *testing.T) {
 				assert.Zero(t, strings.Count(logBuf.String(), "level=WARN"))
 			}
 		})
+	}
+}
+
+// The pinned claude version is a wire value duplicated in the build files; all
+// three must name the release vendorkit was tested against.
+func TestClaudeCodeVersionPinsAgree(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ file, pattern string }{
+		{"../../Makefile", `(?m)^CLAUDE_CODE_VERSION\s*\?=\s*(\S+)`},
+		{"../../docker/Dockerfile.worker", `(?m)^ARG CLAUDE_CODE_VERSION=(\S+)`},
+	} {
+		data, err := os.ReadFile(tt.file)
+		require.NoError(t, err)
+
+		m := regexp.MustCompile(tt.pattern).FindSubmatch(data)
+		require.NotNil(t, m, tt.file)
+		assert.Equal(t, claudecode.Version, string(m[1]), tt.file)
 	}
 }

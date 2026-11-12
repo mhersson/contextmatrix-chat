@@ -8,7 +8,7 @@ import (
 )
 
 // boardFilterWriter wraps dst and drops JSONL transcript lines whose kind is
-// "tool_call" and whose data.name is a board (MCP bridge) tool. All other
+// "tool_call" and whose data.name the isBoard predicate accepts. All other
 // lines pass through unchanged. Write always returns len(p) so the emitter
 // never sees a short-write error on filtered lines.
 type boardFilterWriter struct {
