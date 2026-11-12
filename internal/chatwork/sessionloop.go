@@ -54,7 +54,7 @@ type sessionLoop struct {
 	emit    *events.Emitter
 	tap     *eventTap // counts what emit carries, the session's own events included
 	redact  func(string) string
-	primer  string       // rendered primer: the first message after a /clear or a fresh restart
+	primer  string       // rendered primer: opens the first turn after a /clear or a fresh restart
 	log     *slog.Logger // nil means slog.Default()
 
 	sess   chatSession // nil while no claude process is live
@@ -70,9 +70,9 @@ func (l *sessionLoop) logger() *slog.Logger {
 	return slog.Default()
 }
 
-// run starts the session, sends opening, then answers each user turn until
-// stdin closes or ctx ends. Only a failed first start and a rejected token are
-// errors.
+// run starts the session, sends opening with any user text already waiting,
+// then answers each user turn until stdin closes or ctx ends. Only a failed
+// first start and a rejected token are errors.
 func (l *sessionLoop) run(ctx context.Context, opening string) error {
 	defer l.closeSession()
 
@@ -84,7 +84,7 @@ func (l *sessionLoop) run(ctx context.Context, opening string) error {
 		return err
 	}
 
-	texts := []string{opening}
+	texts := []string{openingTurn(opening, joinTurn(l.inbox.Drain()))}
 
 	for {
 		cleared, err := l.sendAll(ctx, texts)
@@ -278,7 +278,7 @@ func (l *sessionLoop) reopen(ctx context.Context, text string) []string {
 	}
 
 	if l.startSession(ctx, "") == nil {
-		return []string{l.primer, text}
+		return []string{openingTurn(l.primer, text)}
 	}
 
 	if ctx.Err() == nil {
@@ -323,7 +323,7 @@ func (l *sessionLoop) restart(ctx context.Context) (texts []string, done bool) {
 		return nil, false
 	}
 
-	return []string{l.primer}, false
+	return []string{openingTurn(l.primer, joinTurn(l.inbox.Drain()))}, false
 }
 
 // startSession starts a claude process and keeps its ID for a later resume.
@@ -388,6 +388,12 @@ func openingMessage(primer string, history []llm.Message) string {
 	}
 
 	return fmt.Sprintf(resumeOpening, claudecode.RenderTranscript(msgs), primer)
+}
+
+// openingTurn puts user text that waited for a new conversation's opening in
+// that turn, as the harness does, so claude answers both in one reply.
+func openingTurn(opening, text string) string {
+	return joinTurn([]harness.UserMessage{{Content: opening}, {Content: text}})
 }
 
 // joinTurn joins the non-empty messages of one turn in arrival order.

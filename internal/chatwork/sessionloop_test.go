@@ -225,6 +225,11 @@ func pushUser(in *chatInbox, content string) {
 	in.push(harness.UserMessage{MessageID: content, Content: content})
 }
 
+// turn is the text of one turn that carries parts.
+func turn(parts ...string) string {
+	return strings.Join(parts, "\n\n")
+}
+
 type loopFixture struct {
 	starter *fakeStarter
 	inbox   *chatInbox
@@ -424,18 +429,50 @@ func TestWatchClear(t *testing.T) {
 	})
 }
 
-func TestSessionLoopOpeningThenJoinedMessages(t *testing.T) {
+// User text already waiting goes in the opening's turn, as the harness drains
+// its inbox before its first model call; text sent during that turn goes next.
+func TestSessionLoopOpeningTurn(t *testing.T) {
 	t.Parallel()
 
-	s1 := &fakeSession{id: "id-1"}
-	f := newLoopFixture(nil, startStep{sess: s1})
+	tests := []struct {
+		name     string
+		queued   []string // messages waiting at boot
+		asked    []string // messages that arrive during the opening turn
+		wantSent []string
+	}{
+		{name: "queued messages go with the opening", queued: []string{"a", "b"}, wantSent: []string{turn(testOpening, "a", "b")}},
+		{name: "nothing queued, the opening goes alone", asked: []string{"a", "b"}, wantSent: []string{testOpening, turn("a", "b")}},
+	}
 
-	pumpFrames(t, f.inbox, f.clearCh, userFrame("a"), userFrame("b"))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	require.NoError(t, f.run(t.Context(), t))
-	assert.Equal(t, []string{""}, f.starter.starts())
-	assert.Equal(t, []string{testOpening, "a\n\nb"}, s1.sent())
-	assertClosedOnce(t, f.starter)
+			var f *loopFixture
+
+			s1 := &fakeSession{id: "id-1", reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+				if i == 0 {
+					for _, q := range tt.asked {
+						pushUser(f.inbox, q)
+					}
+
+					f.inbox.closeInbox()
+				}
+
+				return harness.Result{Reason: "done"}, nil
+			}}
+			f = newLoopFixture(nil, startStep{sess: s1})
+
+			for _, q := range tt.queued {
+				pushUser(f.inbox, q)
+			}
+
+			require.NoError(t, f.run(t.Context(), t))
+			assert.Equal(t, []string{""}, f.starter.starts())
+			assert.Equal(t, tt.wantSent, s1.sent())
+			assertClosedOnce(t, f.starter)
+		})
+	}
 }
 
 func TestSessionLoopClearRestartsWithPrimer(t *testing.T) {
@@ -452,7 +489,7 @@ func TestSessionLoopClearRestartsWithPrimer(t *testing.T) {
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", ""}, f.starter.starts())
 	assert.Equal(t, []string{testOpening}, s1.sent())
-	assert.Equal(t, []string{testPrimer, "after"}, s2.sent())
+	assert.Equal(t, []string{turn(testPrimer, "after")}, s2.sent())
 	assertClosedOnce(t, f.starter)
 }
 
@@ -460,25 +497,27 @@ func TestSessionLoopClearWhileIdle(t *testing.T) {
 	t.Parallel()
 
 	opened := make(chan struct{})
+	pushed := make(chan struct{})
 	s1 := &fakeSession{id: "id-1", reply: func(context.Context, int, string) (harness.Result, error) {
 		close(opened)
 
 		return harness.Result{Reason: "done"}, nil
 	}}
 	s2 := &fakeSession{id: "id-2"}
-	f := newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2})
+	f := newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2, hook: func() { <-pushed }})
 
 	go func() {
 		<-opened
 		signalClear(f.inbox, f.clearCh)
 		pushUser(f.inbox, "next")
 		f.inbox.closeInbox()
+		close(pushed)
 	}()
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", ""}, f.starter.starts())
 	assert.Equal(t, []string{testOpening}, s1.sent())
-	assert.Equal(t, []string{testPrimer, "next"}, s2.sent())
+	assert.Equal(t, []string{turn(testPrimer, "next")}, s2.sent())
 	assertClosedOnce(t, f.starter)
 }
 
@@ -490,7 +529,10 @@ func TestSessionLoopClearAfterWaitDropsTurn(t *testing.T) {
 	var f *loopFixture
 
 	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
-		if i == 1 {
+		switch i {
+		case 0:
+			pushUser(f.inbox, "q1")
+		case 1:
 			pushUser(f.inbox, "q2")
 
 			return harness.Result{Reason: "error"}, errors.New("claude exited")
@@ -511,13 +553,11 @@ func TestSessionLoopClearAfterWaitDropsTurn(t *testing.T) {
 		startStep{sess: s3},
 	)
 
-	pushUser(f.inbox, "q1")
-
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "id-1", ""}, f.starter.starts())
 	assert.Equal(t, []string{testOpening, "q1"}, s1.sent())
 	assert.Empty(t, s2.sent())
-	assert.Equal(t, []string{testPrimer, "after"}, s3.sent())
+	assert.Equal(t, []string{turn(testPrimer, "after")}, s3.sent())
 	assertClosedOnce(t, f.starter)
 }
 
@@ -543,7 +583,10 @@ func TestSessionLoopUsageLimitResumesOnNextMessage(t *testing.T) {
 	var f *loopFixture
 
 	s1 := &fakeSession{id: "id-1", reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
-		if i == 1 {
+		switch i {
+		case 0:
+			pushUser(f.inbox, "q1")
+		case 1:
 			pushUser(f.inbox, "q2")
 			f.inbox.closeInbox()
 
@@ -555,7 +598,6 @@ func TestSessionLoopUsageLimitResumesOnNextMessage(t *testing.T) {
 	s2 := &fakeSession{id: "id-1"}
 
 	f = newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2})
-	pushUser(f.inbox, "q1")
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "id-1"}, f.starter.starts())
@@ -588,7 +630,10 @@ func TestSessionLoopCrashEmitsRedactedErrorAndResumes(t *testing.T) {
 			var f *loopFixture
 
 			s1 := &fakeSession{id: "id-1", reports: tt.reports, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
-				if i == 1 {
+				switch i {
+				case 0:
+					pushUser(f.inbox, "q1")
+				case 1:
 					pushUser(f.inbox, "q2")
 					f.inbox.closeInbox()
 
@@ -601,7 +646,6 @@ func TestSessionLoopCrashEmitsRedactedErrorAndResumes(t *testing.T) {
 
 			redact := func(s string) string { return strings.ReplaceAll(s, "secret-000000", "[REDACTED]") }
 			f = newLoopFixture(redact, startStep{sess: s1}, startStep{sess: s2})
-			pushUser(f.inbox, "q1")
 
 			require.NoError(t, f.run(t.Context(), t))
 			assert.Equal(t, []string{"", "id-1"}, f.starter.starts())
@@ -627,7 +671,10 @@ func TestSessionLoopResumeStartFailureStartsFresh(t *testing.T) {
 	var f *loopFixture
 
 	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
-		if i == 1 {
+		switch i {
+		case 0:
+			pushUser(f.inbox, "q1")
+		case 1:
 			pushUser(f.inbox, "q2")
 			f.inbox.closeInbox()
 
@@ -643,11 +690,10 @@ func TestSessionLoopResumeStartFailureStartsFresh(t *testing.T) {
 		startStep{err: errors.New("no transcript for id-1")},
 		startStep{sess: s3},
 	)
-	pushUser(f.inbox, "q1")
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "id-1", ""}, f.starter.starts())
-	assert.Equal(t, []string{testPrimer, "q2"}, s3.sent())
+	assert.Equal(t, []string{turn(testPrimer, "q2")}, s3.sent())
 	assert.Len(t, errorEvents(f.decoded(t)), 2)
 	assertClosedOnce(t, f.starter)
 }
@@ -699,7 +745,7 @@ func TestSessionLoopIdleDeathResendsText(t *testing.T) {
 			name:       "resume fails, fresh with the primer",
 			resumeErr:  errors.New("no transcript for id-1"),
 			wantStarts: []string{"", "id-1", ""},
-			wantSent:   []string{testPrimer, "q1"},
+			wantSent:   []string{turn(testPrimer, "q1")},
 			wantErrors: 1, // the failed resume start, not the dead session
 		},
 	}
@@ -708,10 +754,15 @@ func TestSessionLoopIdleDeathResendsText(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			var f *loopFixture
+
 			s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
 				if i == 1 {
 					return harness.Result{Reason: "error"}, errDeadProcess
 				}
+
+				pushUser(f.inbox, "q1")
+				f.inbox.closeInbox()
 
 				return harness.Result{Reason: "done"}, nil
 			}}
@@ -722,8 +773,7 @@ func TestSessionLoopIdleDeathResendsText(t *testing.T) {
 				steps = append(steps, startStep{err: tt.resumeErr})
 			}
 
-			f := newLoopFixture(nil, append(steps, startStep{sess: reopened})...)
-			pumpFrames(t, f.inbox, f.clearCh, userFrame("q1"))
+			f = newLoopFixture(nil, append(steps, startStep{sess: reopened})...)
 
 			require.NoError(t, f.run(t.Context(), t))
 			assert.Equal(t, tt.wantStarts, f.starter.starts())
@@ -741,6 +791,8 @@ func TestSessionLoopIdleDeathResendsText(t *testing.T) {
 func TestSessionLoopIdleDeathResendsOnlyOnce(t *testing.T) {
 	t.Parallel()
 
+	var f *loopFixture
+
 	dead := func(context.Context, int, string) (harness.Result, error) {
 		return harness.Result{Reason: "error"}, errDeadProcess
 	}
@@ -749,12 +801,14 @@ func TestSessionLoopIdleDeathResendsOnlyOnce(t *testing.T) {
 			return dead(ctx, i, text)
 		}
 
+		pushUser(f.inbox, "q1")
+		f.inbox.closeInbox()
+
 		return harness.Result{Reason: "done"}, nil
 	}}
 	s2 := &fakeSession{id: "id-1", reports: crashEvents, reply: dead}
 
-	f := newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2})
-	pumpFrames(t, f.inbox, f.clearCh, userFrame("q1"))
+	f = newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2})
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "id-1"}, f.starter.starts())
@@ -778,17 +832,21 @@ func mcpHalt() (harness.Result, error) {
 func TestSessionLoopMCPHaltMidSessionResumesAndResends(t *testing.T) {
 	t.Parallel()
 
+	var f *loopFixture
+
 	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
 		if i == 1 {
 			return mcpHalt()
 		}
 
+		pushUser(f.inbox, "q1")
+		f.inbox.closeInbox()
+
 		return harness.Result{Reason: "done"}, nil
 	}}
 	s2 := &fakeSession{id: "id-1", reports: crashEvents}
 
-	f := newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2})
-	pumpFrames(t, f.inbox, f.clearCh, userFrame("q1"))
+	f = newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2})
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "id-1"}, f.starter.starts())
@@ -802,8 +860,8 @@ func TestSessionLoopMCPHaltMidSessionResumesAndResends(t *testing.T) {
 }
 
 // A halt on the first turn of a new conversation leaves nothing stored to
-// resume. That turn is the opening, which carries the primer, so it goes alone
-// to a fresh process.
+// resume. That turn is the opening, which carries the primer and the user text
+// that waited for it, so it goes once, alone, to a fresh process.
 func TestSessionLoopMCPHaltOnFreshOpeningResendsItAlone(t *testing.T) {
 	t.Parallel()
 
@@ -813,8 +871,8 @@ func TestSessionLoopMCPHaltOnFreshOpeningResendsItAlone(t *testing.T) {
 		opening    string // the halted process's first turn
 		wantStarts []string
 	}{
-		{name: "boot opening", opening: testOpening, wantStarts: []string{"", ""}},
-		{name: "primer after a /clear", clear: true, opening: testPrimer, wantStarts: []string{"", "", ""}},
+		{name: "boot opening", opening: turn(testOpening, "q1"), wantStarts: []string{"", ""}},
+		{name: "primer after a /clear", clear: true, opening: turn(testPrimer, "q1"), wantStarts: []string{"", "", ""}},
 	}
 
 	for _, tt := range tests {
@@ -846,7 +904,7 @@ func TestSessionLoopMCPHaltOnFreshOpeningResendsItAlone(t *testing.T) {
 			require.NoError(t, f.run(t.Context(), t))
 			assert.Equal(t, tt.wantStarts, f.starter.starts())
 			assert.Equal(t, []string{tt.opening}, halted.sent())
-			assert.Equal(t, []string{tt.opening, "q1"}, fresh.sent())
+			assert.Equal(t, []string{tt.opening}, fresh.sent())
 
 			evs := f.decoded(t)
 			assert.Empty(t, errorEvents(evs))
@@ -880,7 +938,7 @@ func TestSessionLoopMCPHaltFreshStartFailureAwaitsHuman(t *testing.T) {
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "", ""}, f.starter.starts())
-	assert.Equal(t, []string{testPrimer, "q1"}, s3.sent())
+	assert.Equal(t, []string{turn(testPrimer, "q1")}, s3.sent())
 
 	evs := f.decoded(t)
 	assert.Len(t, errorEvents(evs), 1)
@@ -896,7 +954,10 @@ func TestSessionLoopMCPHaltOnResumedProcessResumesAgain(t *testing.T) {
 	var f *loopFixture
 
 	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
-		if i == 1 {
+		switch i {
+		case 0:
+			pushUser(f.inbox, "q1")
+		case 1:
 			pushUser(f.inbox, "q2")
 			f.inbox.closeInbox()
 
@@ -911,7 +972,6 @@ func TestSessionLoopMCPHaltOnResumedProcessResumesAgain(t *testing.T) {
 	s3 := &fakeSession{id: "id-1", reports: crashEvents}
 
 	f = newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2}, startStep{sess: s3})
-	pushUser(f.inbox, "q1")
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "id-1", "id-1"}, f.starter.starts())
@@ -931,7 +991,7 @@ func TestSessionLoopMCPHaltResendsOnlyOnce(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		queued     []string // messages waiting at boot
+		asked      []string // messages that arrive during the opening turn
 		halted     string   // the boot process's halted turn
 		resentID   string   // the ID of the process the halted turn is resent on
 		wantStarts []string
@@ -939,7 +999,7 @@ func TestSessionLoopMCPHaltResendsOnlyOnce(t *testing.T) {
 	}{
 		{
 			name:       "resumed conversation",
-			queued:     []string{"q1"},
+			asked:      []string{"q1"},
 			halted:     "q1",
 			resentID:   "id-1",
 			wantStarts: []string{"", "id-1", "id-1"},
@@ -950,7 +1010,7 @@ func TestSessionLoopMCPHaltResendsOnlyOnce(t *testing.T) {
 			halted:     testOpening,
 			resentID:   "id-2",
 			wantStarts: []string{"", "", ""},
-			wantNext:   []string{testPrimer, "next"},
+			wantNext:   []string{turn(testPrimer, "next")},
 		},
 	}
 
@@ -960,7 +1020,13 @@ func TestSessionLoopMCPHaltResendsOnlyOnce(t *testing.T) {
 
 			var f *loopFixture
 
-			s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, _ int, text string) (harness.Result, error) {
+			s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, text string) (harness.Result, error) {
+				if i == 0 {
+					for _, q := range tt.asked {
+						pushUser(f.inbox, q)
+					}
+				}
+
 				if text == tt.halted {
 					return mcpHalt()
 				}
@@ -976,9 +1042,6 @@ func TestSessionLoopMCPHaltResendsOnlyOnce(t *testing.T) {
 			s3 := &fakeSession{id: "id-3", reports: crashEvents}
 
 			f = newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2}, startStep{sess: s3})
-			for _, q := range tt.queued {
-				pushUser(f.inbox, q)
-			}
 
 			require.NoError(t, f.run(t.Context(), t))
 			assert.Equal(t, tt.wantStarts, f.starter.starts())
@@ -1112,11 +1175,12 @@ func TestSessionLoopInboxClosedWhileDownStartsNothing(t *testing.T) {
 			return harness.Result{Reason: "error"}, &claudecode.UsageLimitError{}
 		}
 
+		pushUser(f.inbox, "q1")
+
 		return harness.Result{Reason: "done"}, nil
 	}}
 
 	f = newLoopFixture(nil, startStep{sess: s1})
-	pushUser(f.inbox, "q1")
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{""}, f.starter.starts())
@@ -1132,7 +1196,10 @@ func TestSessionLoopCompletedTurnErrorKeepsSession(t *testing.T) {
 	var f *loopFixture
 
 	s1 := &fakeSession{id: "id-1", reports: inputEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
-		if i == 1 {
+		switch i {
+		case 0:
+			pushUser(f.inbox, "q1")
+		case 1:
 			pushUser(f.inbox, "q2")
 			f.inbox.closeInbox()
 
@@ -1142,7 +1209,6 @@ func TestSessionLoopCompletedTurnErrorKeepsSession(t *testing.T) {
 		return harness.Result{Reason: "done", Completed: true}, nil
 	}}
 	f = newLoopFixture(nil, startStep{sess: s1})
-	pushUser(f.inbox, "q1")
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{""}, f.starter.starts())
@@ -1168,7 +1234,7 @@ func TestSessionLoopClearThenFailedRestartAwaitsHuman(t *testing.T) {
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "", ""}, f.starter.starts())
-	assert.Equal(t, []string{testPrimer, "after"}, s3.sent())
+	assert.Equal(t, []string{turn(testPrimer, "after")}, s3.sent())
 
 	evs := f.decoded(t)
 	assert.Len(t, errorEvents(evs), 1)
