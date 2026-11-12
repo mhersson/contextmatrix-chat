@@ -155,7 +155,8 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
    `claude_code` chat.
 6. **Model and MCP key come from ContextMatrix** in the chat-start payload
    (`CM_MODEL`, `CM_MCP_API_KEY`). Chat never selects models or stages the MCP
-   key.
+   key. A `claude_code` chat's effort comes only from the endpoint's `effort`
+   (`CM_CLAUDE_CODE_EFFORT`), never from `reasoning_effort`.
 7. **Board operations go over MCP, never raw HTTP.** The worker dials
    `<container_contextmatrix_url>/mcp`, lists board tools, and offers them to
    the model alongside the filesystem/shell tools rooted at `/workspace`. In a

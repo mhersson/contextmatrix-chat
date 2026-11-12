@@ -221,15 +221,18 @@ hardening is applied.
 - **Transcripts.** Resume within a session reads the conversation transcripts
   kept under the container's HOME (`~/.vendorkit/sessions`). The worker never
   prunes them; they go when the container is removed at session end.
-- **What does not apply:** compaction (Claude Code compacts on its own) and
-  reasoning replay. `tool_output_max_bytes` and redacting tool output before
-  the model sees it apply to the tools served over the bridge (grep, glob,
-  git and the task-skills tool), not to Claude Code's built-ins or to
-  ContextMatrix's board tools, which `claude` calls directly (the events
-  stay redacted). `reasoning_effort` becomes Claude Code's effort, and a
-  value it does not accept falls back to its default.
-  `bash_timeout_max_seconds` does apply, as the ceiling of Claude Code's
-  Bash timeout.
+- **Effort.** Claude Code's effort is the endpoint's `effort`
+  (ContextMatrix's `claude_code.effort`), which serve passes to the worker as
+  `CM_CLAUDE_CODE_EFFORT` and the worker gives `claude` as `--effort`. Empty
+  means no `--effort`, so Claude Code uses its own default; a value Claude
+  Code does not accept is dropped with one warning, with the same result.
+- **What does not apply:** compaction (Claude Code compacts on its own),
+  reasoning replay and `reasoning_effort`. `tool_output_max_bytes` and
+  redacting tool output before the model sees it apply to the tools served
+  over the bridge (grep, glob, git and the task-skills tool), not to Claude
+  Code's built-ins or to ContextMatrix's board tools, which `claude` calls
+  directly (the events stay redacted). `bash_timeout_max_seconds` does
+  apply, as the ceiling of Claude Code's Bash timeout.
 
 The token owner must be the only human who drives chat sessions on it, even
 when ContextMatrix has several accounts; nothing enforces this, so it is an
