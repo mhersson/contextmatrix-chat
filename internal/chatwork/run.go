@@ -32,6 +32,7 @@ const (
 	defaultContextWindow       = 128000
 	defaultCompactionThreshold = 0.85
 	defaultKeepRecentTurns     = 6
+	defaultToolOutputMaxBytes  = 131072
 )
 
 // Run is the container entrypoint for one interactive chat session. It reads
@@ -234,7 +235,7 @@ func runHarness(ctx context.Context) error {
 func harnessConfig(model string, contextWindow int, history []llm.Message, inbox harness.Inbox, redact func(string) string) harness.Config {
 	threshold := envFloatDefault("CMX_COMPACTION_THRESHOLD", defaultCompactionThreshold)
 	keepRecent := envIntDefault("CMX_COMPACTION_KEEP_RECENT_TURNS", defaultKeepRecentTurns)
-	toolOutputMaxBytes := envIntDefault("CMX_TOOL_OUTPUT_MAX_BYTES", 131072)
+	toolOutputMaxBytes := envIntDefault("CMX_TOOL_OUTPUT_MAX_BYTES", defaultToolOutputMaxBytes)
 
 	return harness.Config{
 		Model:              model,

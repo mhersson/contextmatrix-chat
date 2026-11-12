@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -14,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mhersson/contextmatrix-harness/events"
+	"github.com/mhersson/contextmatrix-harness/llm"
 	"github.com/mhersson/contextmatrix-harness/tools"
 	"github.com/mhersson/contextmatrix-vendorkit/claudecode"
 	vkbridge "github.com/mhersson/contextmatrix-vendorkit/mcpbridge"
@@ -569,4 +572,86 @@ func TestClaudeCodeTap(t *testing.T) {
 
 	assert.Equal(t, kept, out.String())
 	assert.EqualValues(t, 1, tap.counts().awaiting)
+}
+
+type stubTool struct {
+	name     string
+	text     string
+	err      error
+	terminal bool
+}
+
+func (s stubTool) Name() string     { return s.name }
+func (s stubTool) Schema() llm.Tool { return llm.Tool{} }
+func (s stubTool) Terminal() bool   { return s.terminal }
+func (s stubTool) Execute(context.Context, map[string]any) (tools.Result, error) {
+	return tools.Result{Text: s.text}, s.err
+}
+
+var errStub = errors.New("stub failure")
+
+func bridgedFor(t *testing.T, cfg claudeCodeConfig, redact func(string) string, ts ...tools.Tool) *tools.Registry {
+	t.Helper()
+
+	spec := claudeCodeSpec(cfg, tools.NewRegistry(ts...), nil, events.NewEmitter(nil, nil), redact)
+
+	return spec.Tools
+}
+
+func TestBridgedToolsCapAndRedact(t *testing.T) {
+	const marker = "SYNTHETIC-SECRET-xyz"
+
+	redact := func(s string) string { return strings.ReplaceAll(s, marker, "[REDACTED]") }
+	cfg := testCfg()
+	cfg.ToolOutputMaxBytes = 300
+
+	t.Run("output over the cap is head and tail trimmed", func(t *testing.T) {
+		big := "HEAD" + strings.Repeat("x", 5000) + "TAIL"
+		reg := bridgedFor(t, cfg, redact, stubTool{name: "grep", text: big})
+
+		tl, ok := reg.Get("grep")
+		require.True(t, ok)
+
+		res, err := tl.Execute(context.Background(), nil)
+		require.NoError(t, err)
+		assert.Less(t, len(res.Text), 400)
+		assert.True(t, strings.HasPrefix(res.Text, "HEAD"))
+		assert.True(t, strings.HasSuffix(res.Text, "TAIL"))
+	})
+
+	t.Run("secret in output and error is masked", func(t *testing.T) {
+		reg := bridgedFor(t, cfg, redact, stubTool{name: "git", text: "out " + marker, err: errors.New("bad " + marker)})
+
+		tl, _ := reg.Get("git")
+		res, err := tl.Execute(context.Background(), nil)
+		require.Error(t, err)
+		assert.NotContains(t, res.Text, marker)
+		assert.Contains(t, res.Text, "[REDACTED]")
+		assert.NotContains(t, err.Error(), marker)
+		assert.Contains(t, err.Error(), "[REDACTED]")
+	})
+
+	t.Run("unchanged error is returned as is", func(t *testing.T) {
+		reg := bridgedFor(t, cfg, redact, stubTool{name: "git", err: fmt.Errorf("wrapped: %w", errStub)})
+
+		tl, _ := reg.Get("git")
+		_, err := tl.Execute(context.Background(), nil)
+		assert.ErrorIs(t, err, errStub)
+	})
+
+	t.Run("terminal is delegated", func(t *testing.T) {
+		reg := bridgedFor(t, cfg, redact, stubTool{name: "done", terminal: true}, stubTool{name: "git"})
+
+		done, _ := reg.Get("done")
+		git, _ := reg.Get("git")
+
+		assert.True(t, done.(tools.Terminal).Terminal())
+		assert.False(t, git.(tools.Terminal).Terminal())
+	})
+
+	t.Run("builtins are not bridged and an empty bridge stays nil", func(t *testing.T) {
+		spec := claudeCodeSpec(cfg, tools.NewRegistry(stubTool{name: "read"}), nil, events.NewEmitter(nil, nil), redact)
+		assert.Equal(t, []string{"Read"}, spec.BuiltinTools)
+		assert.Nil(t, spec.Tools)
+	})
 }

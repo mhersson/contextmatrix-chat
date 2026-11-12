@@ -215,9 +215,11 @@ hardening is applied.
 - **Transcripts.** Resume within a session reads the conversation transcripts
   kept under the container's HOME (`~/.vendorkit/sessions`). The worker never
   prunes them; they go when the container is removed at session end.
-- **What does not apply:** compaction (Claude Code compacts on its own),
-  reasoning replay, `tool_output_max_bytes`, and redacting tool output before
-  the model sees it (the events stay redacted). `reasoning_effort` becomes
+- **What does not apply:** compaction (Claude Code compacts on its own) and
+  reasoning replay. `tool_output_max_bytes` and redacting tool output before
+  the model sees it apply to the tools served over the bridge (grep, glob,
+  git and the task-skills tool), not to Claude Code's built-ins (the events
+  stay redacted). `reasoning_effort` becomes
   Claude Code's effort, and a value it does not accept falls back to its
   default. `bash_timeout_max_seconds` does apply, as the ceiling of Claude
   Code's Bash timeout.

@@ -219,8 +219,9 @@ message_dedup_cache_size: 1000
 bash_timeout_max_seconds: 600
 
 # Maximum bytes of tool output returned to the model per turn (128 KB backstop).
-# Forwarded as CMX_TOOL_OUTPUT_MAX_BYTES. Default: 131072. Does not apply to
-# Claude Code subscription sessions.
+# Forwarded as CMX_TOOL_OUTPUT_MAX_BYTES. Default: 131072. In Claude Code
+# subscription sessions it caps only the tools served over the bridge (grep,
+# glob, git, task skills), not Claude Code's built-ins.
 # CMX_TOOL_OUTPUT_MAX_BYTES
 tool_output_max_bytes: 131072
 

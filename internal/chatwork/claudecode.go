@@ -35,6 +35,7 @@ type claudeCodeConfig struct {
 	Home                            string // the worker user's own HOME (os.UserHomeDir)
 	BashTimeoutMaxSeconds           int    // CMX_BASH_TIMEOUT_MAX_SECONDS; 0 = not mapped
 	RepoDir                         string // repo clone root; "" when CM_CHAT_REPO_URL is unset
+	ToolOutputMaxBytes              int    // CMX_TOOL_OUTPUT_MAX_BYTES; caps each bridged tool result
 }
 
 // claudeCodePassthrough is the worker env claude needs beyond tools.ScrubbedEnv.
@@ -127,6 +128,7 @@ func runClaudeCode(ctx context.Context) error {
 		Home:                  home,
 		BashTimeoutMaxSeconds: envIntDefault("CMX_BASH_TIMEOUT_MAX_SECONDS", 0),
 		RepoDir:               repoDir,
+		ToolOutputMaxBytes:    envIntDefault("CMX_TOOL_OUTPUT_MAX_BYTES", defaultToolOutputMaxBytes),
 	}
 
 	spec := claudeCodeSpec(cfg, tools.NewRegistry(ts...), bashEnv, emit, redWatcher.Apply)
@@ -260,6 +262,7 @@ func claudeCodeEnv(cfg claudeCodeConfig, bashEnv []string) []string {
 // MCP server wired straight in.
 func claudeCodeSpec(cfg claudeCodeConfig, local *tools.Registry, bashEnv []string, emit *events.Emitter, redact func(string) string) claudecode.Spec {
 	builtins, bridged := claudecode.SplitRegistry(local)
+	bridged = capAndRedact(bridged, cfg.ToolOutputMaxBytes, redact)
 
 	prompt := chatSystemPrompt
 
@@ -293,6 +296,50 @@ func claudeCodeSpec(cfg claudeCodeConfig, local *tools.Registry, bashEnv []strin
 		Emitter:            emit,
 		Redact:             redact,
 	}
+}
+
+// capAndRedact wraps every tool of a registry served over vendorkit's bridge,
+// where the harness's own output cap and redaction do not run. nil stays nil.
+func capAndRedact(reg *tools.Registry, maxBytes int, redact func(string) string) *tools.Registry {
+	if reg == nil {
+		return nil
+	}
+
+	all := reg.All()
+	wrapped := make([]tools.Tool, 0, len(all))
+
+	for _, t := range all {
+		wrapped = append(wrapped, cappedTool{Tool: t, maxBytes: maxBytes, redact: redact})
+	}
+
+	return tools.NewRegistry(wrapped...)
+}
+
+type cappedTool struct {
+	tools.Tool
+
+	maxBytes int
+	redact   func(string) string
+}
+
+func (c cappedTool) Execute(ctx context.Context, args map[string]any) (tools.Result, error) {
+	res, err := c.Tool.Execute(ctx, args)
+	res.Text = tools.HeadTail(c.redact(res.Text), c.maxBytes)
+
+	if err != nil {
+		// Keep the original error (and its wrapping) when nothing changed.
+		if msg := tools.HeadTail(c.redact(err.Error()), c.maxBytes); msg != err.Error() {
+			err = errors.New(msg)
+		}
+	}
+
+	return res, err
+}
+
+func (c cappedTool) Terminal() bool {
+	term, ok := c.Tool.(tools.Terminal)
+
+	return ok && term.Terminal()
 }
 
 // repoInstructions returns the clone root's AGENTS.md, else CLAUDE.md, capped
