@@ -1939,3 +1939,223 @@ func TestChatStart_ReplayReasoningEnv(t *testing.T) {
 		})
 	}
 }
+
+// ---- claude_code sessions ---------------------------------------------------
+
+const testOAuthToken = "sk-ant-oat01-test-token-000000"
+
+// recordingLLMProxy counts Register and Revoke calls.
+type recordingLLMProxy struct {
+	http.Handler
+
+	mu        sync.Mutex
+	registers int
+	revokes   int
+}
+
+func (p *recordingLLMProxy) Register(string, protocol.LLMEndpoint) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.registers++
+
+	return "tok", nil
+}
+
+func (p *recordingLLMProxy) Revoke(string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.revokes++
+}
+
+func (p *recordingLLMProxy) counts() (registers, revokes int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.registers, p.revokes
+}
+
+func claudeCodeEndpoint() *protocol.LLMEndpoint {
+	return &protocol.LLMEndpoint{
+		Type:       protocol.LLMEndpointTypeClaudeCode,
+		OAuthToken: testOAuthToken,
+		BaseURL:    "http://ignored.invalid",
+		APIKey:     "sk-ignored-000000",
+	}
+}
+
+func TestChatStart_ClaudeCodeEnv(t *testing.T) {
+	srv, _, fe := newChatServer(t)
+	srv.llmProxy = nil
+
+	require.Equal(t, http.StatusAccepted, startLLMSession(t, srv, claudeCodeEndpoint()))
+
+	env := fe.Launched()[0].Env
+	m := envToMap(env)
+	assert.Equal(t, "claude_code", m["LLM_TYPE"])
+	assert.Equal(t, testOAuthToken, m["LLM_OAUTH_TOKEN"])
+	assert.NotContains(t, m, "LLM_API_KEY")
+	assert.NotContains(t, m, "LLM_BASE_URL")
+
+	for _, kv := range env {
+		assert.NotContains(t, kv, "sk-ignored-000000")
+		assert.NotContains(t, kv, "ignored.invalid")
+	}
+}
+
+func TestChatStart_ClaudeCodeNeverRegistersWithProxy(t *testing.T) {
+	srv, _, _ := newChatServer(t)
+	rec := &recordingLLMProxy{Handler: http.NotFoundHandler()}
+	srv.llmProxy = rec
+
+	require.Equal(t, http.StatusAccepted, startLLMSession(t, srv, claudeCodeEndpoint()))
+
+	registers, _ := rec.counts()
+	assert.Zero(t, registers)
+}
+
+func TestChatStart_ClaudeCodeWithoutTokenFailsClosed(t *testing.T) {
+	srv, _, fe := newChatServer(t)
+	fss := newFakeSessionSecrets()
+	srv.sessionSecrets = fss
+
+	ep := claudeCodeEndpoint()
+	ep.OAuthToken = ""
+
+	assert.Equal(t, http.StatusInternalServerError, startLLMSession(t, srv, ep))
+	assert.Empty(t, fe.attempted)
+	assert.Empty(t, fss.addedKeys(testSession))
+
+	_, err := os.Stat(filepath.Join(srv.chatRunDirBase, testSession))
+	assert.True(t, os.IsNotExist(err), "no run dir may be created")
+}
+
+func TestChatStart_ClaudeCodeRegistersTokenForRedaction(t *testing.T) {
+	srv, _, _ := newChatServer(t)
+	fss := newFakeSessionSecrets()
+	srv.sessionSecrets = fss
+
+	require.Equal(t, http.StatusAccepted, startLLMSession(t, srv, claudeCodeEndpoint()))
+	assert.Contains(t, fss.addedKeys(testSession), testOAuthToken)
+}
+
+func TestChatStart_ClaudeCodeLaunchFailureWithoutProxy(t *testing.T) {
+	t.Run("nil proxy", func(t *testing.T) {
+		srv, _, fe := newChatServer(t)
+		srv.llmProxy = nil
+		fe.launchErr = errors.New("docker down")
+
+		fss := newFakeSessionSecrets()
+		srv.sessionSecrets = fss
+
+		assert.Equal(t, http.StatusBadGateway, startLLMSession(t, srv, claudeCodeEndpoint()))
+		assert.Contains(t, fss.removedSessions(), testSession)
+	})
+
+	t.Run("proxy never revoked", func(t *testing.T) {
+		srv, _, fe := newChatServer(t)
+		rec := &recordingLLMProxy{Handler: http.NotFoundHandler()}
+		srv.llmProxy = rec
+		fe.launchErr = errors.New("docker down")
+
+		assert.Equal(t, http.StatusBadGateway, startLLMSession(t, srv, claudeCodeEndpoint()))
+
+		_, revokes := rec.counts()
+		assert.Zero(t, revokes)
+	})
+}
+
+func newExtraEnvServer(t *testing.T, extra map[string]string) (*Server, *fakeExecutor, *bytes.Buffer) {
+	t.Helper()
+
+	tracker := executor.NewTracker(10)
+	fe := &fakeExecutor{tracker: tracker}
+	logBuf := &bytes.Buffer{}
+
+	srv := NewServer(Config{
+		LLMProxy: newTestLLMProxy(t),
+		APIKey:   testAPIKey,
+		Executor: fe,
+		Tracker:  tracker,
+		Chat: ChatConfig{
+			Image:          testImage,
+			MCPURL:         testMCPURL,
+			ChatRunDirBase: t.TempDir(),
+			MaxConcurrent:  10,
+			WorkerExtraEnv: extra,
+		},
+		Logger: slog.New(slog.NewTextHandler(logBuf, nil)),
+	})
+
+	return srv, fe, logBuf
+}
+
+func countPrefix(env []string, prefix string) int {
+	n := 0
+
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			n++
+		}
+	}
+
+	return n
+}
+
+func TestChatStart_ClaudeCodeWorkerExtraEnvCannotOverride(t *testing.T) {
+	srv, fe, logBuf := newExtraEnvServer(t, map[string]string{
+		"LLM_TYPE":        "openai",
+		"LLM_OAUTH_TOKEN": "operator-oauth-000000",
+		"LLM_API_KEY":     "operator-key-000000",
+		"LLM_BASE_URL":    "http://operator.invalid",
+		"HTTP_PROXY":      "http://p:3128",
+	})
+
+	require.Equal(t, http.StatusAccepted, startLLMSession(t, srv, claudeCodeEndpoint()))
+
+	env := fe.Launched()[0].Env
+	assert.Equal(t, 1, countPrefix(env, "LLM_TYPE="))
+	assert.Equal(t, 1, countPrefix(env, "LLM_OAUTH_TOKEN="))
+	assert.Zero(t, countPrefix(env, "LLM_API_KEY="))
+	assert.Zero(t, countPrefix(env, "LLM_BASE_URL="))
+
+	m := envToMap(env)
+	assert.Equal(t, "claude_code", m["LLM_TYPE"])
+	assert.Equal(t, testOAuthToken, m["LLM_OAUTH_TOKEN"])
+	assert.Equal(t, "http://p:3128", m["HTTP_PROXY"])
+
+	logged := logBuf.String()
+	for _, name := range []string{"LLM_OAUTH_TOKEN", "LLM_API_KEY", "LLM_BASE_URL", "LLM_TYPE"} {
+		assert.Contains(t, logged, name)
+	}
+
+	for _, secret := range []string{"operator-oauth-000000", "operator-key-000000", "operator.invalid", testOAuthToken} {
+		assert.NotContains(t, logged, secret)
+	}
+}
+
+func TestChatStart_EndpointWorkerExtraEnvCannotSetOAuthToken(t *testing.T) {
+	cases := []struct {
+		name     string
+		extra    map[string]string
+		wantType string
+	}{
+		{"oauth token withheld", map[string]string{"LLM_OAUTH_TOKEN": "x-000000"}, "openrouter"},
+		{"type override still wins", map[string]string{"LLM_TYPE": "openai"}, "openai"},
+		{"claude_code type withheld", map[string]string{"LLM_TYPE": "claude_code"}, "openrouter"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, fe, _ := newExtraEnvServer(t, tc.extra)
+
+			code := startLLMSession(t, srv, &protocol.LLMEndpoint{Type: "openrouter", APIKey: testRealLLMKey})
+			require.Equal(t, http.StatusAccepted, code)
+
+			env := fe.Launched()[0].Env
+			assert.Zero(t, countPrefix(env, "LLM_OAUTH_TOKEN="))
+			assert.Equal(t, tc.wantType, envToMap(env)["LLM_TYPE"])
+		})
+	}
+}

@@ -4,26 +4,49 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"strings"
 )
 
 // boardFilterWriter wraps dst and drops JSONL transcript lines whose kind is
-// "tool_call" and whose data.name is a board (MCP bridge) tool. All other
-// lines pass through unchanged. Write always returns len(p) so the emitter
-// never sees a short-write error on filtered lines.
+// "tool_call" and whose data.name the isBoard predicate accepts; all other
+// lines pass through. Write always returns len(p) so the emitter never sees a
+// short-write error on filtered lines.
 type boardFilterWriter struct {
-	dst   io.Writer
-	board map[string]bool
+	dst     io.Writer
+	isBoard func(name string) bool
+	// dropStop drops the stop line: Claude Code ends a process at every
+	// /clear, usage limit and crash, and it would reach ContextMatrix as a
+	// raw-JSON row nothing reads.
+	dropStop bool
 }
 
-// newBoardFilterWriter returns a writer that silently drops board tool_call
-// event lines (the MCP bridge tools) from the transcript.
-func newBoardFilterWriter(dst io.Writer, boardToolNames []string) io.Writer {
-	m := make(map[string]bool, len(boardToolNames))
-	for _, n := range boardToolNames {
+// newBoardFilterWriter returns a writer that silently drops tool_call event
+// lines whose tool name isBoard accepts from the transcript.
+func newBoardFilterWriter(dst io.Writer, isBoard func(name string) bool) io.Writer {
+	return &boardFilterWriter{dst: dst, isBoard: isBoard}
+}
+
+// newClaudeCodeFilterWriter is newBoardFilterWriter that also drops the stop line.
+func newClaudeCodeFilterWriter(dst io.Writer, isBoard func(name string) bool) io.Writer {
+	return &boardFilterWriter{dst: dst, isBoard: isBoard, dropStop: true}
+}
+
+// boardToolSet matches the exact names of the MCP bridge tools.
+func boardToolSet(names []string) func(string) bool {
+	m := make(map[string]bool, len(names))
+	for _, n := range names {
 		m[n] = true
 	}
 
-	return &boardFilterWriter{dst: dst, board: m}
+	return func(name string) bool { return m[name] }
+}
+
+// mcpServerTools matches Claude Code's qualified names for one MCP server's
+// tools (mcp__<server>__<tool>).
+func mcpServerTools(server string) func(string) bool {
+	prefix := "mcp__" + server + "__"
+
+	return func(name string) bool { return strings.HasPrefix(name, prefix) }
 }
 
 // Write splits p on newlines and writes each non-filtered line to dst.
@@ -47,8 +70,13 @@ func (w *boardFilterWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// isFiltered reports whether line is a tool_call event for a board tool.
+// isFiltered reports whether line is a board tool_call event or, with
+// dropStop, a state_change stop line.
 func (w *boardFilterWriter) isFiltered(line []byte) bool {
+	if w.dropStop && bytes.Contains(line, []byte(`"stop"`)) && isStopLine(line) {
+		return true
+	}
+
 	if !bytes.Contains(line, []byte(`"tool_call"`)) {
 		return false
 	}
@@ -64,5 +92,22 @@ func (w *boardFilterWriter) isFiltered(line []byte) bool {
 		return false
 	}
 
-	return ev.Kind == "tool_call" && w.board[ev.Data.Name]
+	return ev.Kind == "tool_call" && w.isBoard(ev.Data.Name)
+}
+
+// isStopLine reports whether line is a state_change event whose data has a
+// stop key.
+func isStopLine(line []byte) bool {
+	var ev struct {
+		Kind string         `json:"kind"`
+		Data map[string]any `json:"data"`
+	}
+
+	if err := json.Unmarshal(bytes.TrimRight(line, "\n\r"), &ev); err != nil {
+		return false
+	}
+
+	_, stop := ev.Data["stop"]
+
+	return ev.Kind == "state_change" && stop
 }

@@ -128,23 +128,34 @@ secrets_dir: /var/run/cm-chat/secrets
 # Additional environment variables injected verbatim into every worker
 # container, after the CM_*/CMX_* system vars (so an explicit entry overrides a
 # system default for any duplicate key). Useful for operator-specific
-# passthrough. Limits: overriding LLM_API_KEY needs LLM_BASE_URL as well; the
-# pair bypasses the LLM proxy and puts that key in the container. An HTTP proxy
-# here needs the serve host (host.docker.internal by default) in NO_PROXY, and
-# does not govern LLM calls: those leave from serve, so serve's own
-# HTTP(S)_PROXY / NO_PROXY environment applies (set it on its service unit).
+# passthrough. LLM_OAUTH_TOKEN is never applied, and neither is LLM_TYPE (nor
+# LLM_API_KEY / LLM_BASE_URL) for Claude Code subscription sessions. Limits:
+# overriding LLM_API_KEY needs LLM_BASE_URL as well; the pair bypasses the LLM
+# proxy and puts that key in the container. An HTTP proxy here needs the serve
+# host (host.docker.internal by default) in NO_PROXY, and does not govern
+# endpoint LLM calls: those leave from serve, so serve's own HTTP(S)_PROXY /
+# NO_PROXY environment applies (set it on its service unit). In Claude Code
+# subscription sessions claude reaches Anthropic from the worker, so the proxy
+# here applies to it. Loopback (127.0.0.1,localhost,::1) is added to claude's
+# NO_PROXY automatically when a proxy variable is set, so the loopback MCP
+# bridge needs nothing; NO_PROXY must still include the host of
+# container_contextmatrix_url, or CM's MCP and the git-credentials fetch go
+# through the proxy and fail. HTTP_PROXY alone carries claude's
+# https API traffic; set HTTPS_PROXY for it explicitly, or add .anthropic.com to
+# NO_PROXY when the proxy is not meant to carry it.
 # worker_extra_env:
 #   HTTP_PROXY: http://proxy.example.com:3128
-#   NO_PROXY: localhost,127.0.0.1,host.docker.internal
+#   NO_PROXY: localhost,127.0.0.1,host.docker.internal,172.17.0.1
 
 # Optional host path to a PEM file of extra CA certificate(s) - e.g. the CA of a
 # TLS-inspecting egress proxy. Container-only: when set, the file is bind-mounted
 # read-only into each worker at /run/cm-ca/ca.crt and the worker's outbound TLS
-# (harness LLM client, MCP bridge) and the code-driven initial git clone
+# (harness LLM client, MCP bridge; claude itself in Claude Code subscription
+# sessions, via NODE_EXTRA_CA_CERTS) and the code-driven initial git clone
 # (GIT_SSL_CAINFO) trust it in addition to the system store. NOTE: model-invoked
-# bash-tool commands (curl/pip/npm, and any model-run git/gh) go through the
-# harness bash tool, which scrubs env, so they do NOT trust this CA without a
-# harness change - intentionally out of scope. The host-side service (task-skills
+# shell commands run with a scrubbed env, so curl/pip and any model-run git/gh
+# do NOT trust this CA - intentionally out of scope. In a Claude Code session
+# the Bash built-in inherits NODE_EXTRA_CA_CERTS, so node and npm do trust it. The host-side service (task-skills
 # fetch) uses the OS/pod trust store and is intentionally NOT affected,
 # except the host-side LLM proxy, which also trusts this CA for its upstream calls.
 # Empty disables it; when set the file must exist on the host. Must be a readable PEM.
@@ -162,6 +173,8 @@ secrets_dir: /var/run/cm-chat/secrets
 
 # --- In-context compaction ----------------------------------------------------
 
+# Does not apply to Claude Code subscription sessions: Claude Code compacts on
+# its own.
 compaction:
   # Fraction of the model's context window at which older messages are dropped.
   # Must be in (0, 1]. Default: 0.85.
@@ -199,12 +212,16 @@ message_dedup_cache_size: 1000
 # --- Worker CMX_* knobs -------------------------------------------------------
 
 # Maximum wall-clock seconds a bash tool call may run inside a worker container.
-# Forwarded as CMX_BASH_TIMEOUT_MAX_SECONDS. Default: 600.
+# Forwarded as CMX_BASH_TIMEOUT_MAX_SECONDS. Default: 600. It also applies to
+# Claude Code subscription sessions, as the Bash built-in's timeout ceiling
+# (BASH_MAX_TIMEOUT_MS); below 2 minutes it also lowers the default timeout.
 # CMX_BASH_TIMEOUT_MAX_SECONDS
 bash_timeout_max_seconds: 600
 
 # Maximum bytes of tool output returned to the model per turn (128 KB backstop).
-# Forwarded as CMX_TOOL_OUTPUT_MAX_BYTES. Default: 131072.
+# Forwarded as CMX_TOOL_OUTPUT_MAX_BYTES. Default: 131072. In Claude Code
+# subscription sessions it caps only the tools served over the bridge (grep,
+# glob, git, task skills), not Claude Code's built-ins.
 # CMX_TOOL_OUTPUT_MAX_BYTES
 tool_output_max_bytes: 131072
 
@@ -213,7 +230,9 @@ tool_output_max_bytes: 131072
 # default) to send no effort: each model reasons at its own default, and a model
 # that always reasons still does. Reasoning replay does not depend on this
 # setting. Footgun: this is sent to every selected model; the endpoint must
-# accept reasoning_effort on all served models, or leave empty.
+# accept reasoning_effort on all served models, or leave empty. In Claude Code
+# subscription sessions it becomes Claude Code's effort, and a value Claude
+# Code does not accept falls back to its default.
 # CMX_REASONING_EFFORT
 # reasoning_effort: ""
 
@@ -228,7 +247,8 @@ tool_output_max_bytes: 131072
 # without it, and the chat transcript shows a replay_dropped line; if those
 # recur, turn this off. With a router model id, a later request may reach a
 # model that ignores or rejects the earlier reasoning.
-# Forwarded as CMX_REPLAY_REASONING=true to every worker container.
+# Forwarded as CMX_REPLAY_REASONING=true to every worker container. Does not
+# apply to Claude Code subscription sessions.
 # Default: true.
 # CMX_REPLAY_REASONING
 replay_reasoning: true

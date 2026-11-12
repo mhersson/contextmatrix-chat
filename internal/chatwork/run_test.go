@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/mhersson/contextmatrix-chat/internal/secrets"
 	"github.com/mhersson/contextmatrix-harness/harness"
 	"github.com/mhersson/contextmatrix-harness/llm"
+	protocol "github.com/mhersson/contextmatrix-protocol"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -277,5 +279,61 @@ func TestBuildToolRegistrySendsChatSessionHeader(t *testing.T) {
 
 	for _, h := range headers {
 		assert.Equal(t, sessionID, h)
+	}
+}
+
+func TestShutdownErr(t *testing.T) {
+	t.Parallel()
+
+	boom := errors.New("boom")
+
+	tests := []struct {
+		name string
+		done bool
+		err  error
+		want error
+	}{
+		{"live ctx keeps the error", false, boom, boom},
+		{"cancelled ctx drops the error", true, boom, nil},
+		{"cancelled ctx with no error", true, nil, nil},
+		{"live ctx with no error", false, nil, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			if tt.done {
+				cancel()
+			}
+
+			assert.Equal(t, tt.want, shutdownErr(ctx, tt.err))
+		})
+	}
+}
+
+func TestWorkerRunner(t *testing.T) {
+	tests := []struct {
+		name    string
+		llmType string
+		want    func(context.Context) error
+	}{
+		{"claude_code", protocol.LLMEndpointTypeClaudeCode, runClaudeCode},
+		{"openrouter", "openrouter", runHarness},
+		{"openai", "openai", runHarness},
+		{"unset", "", runHarness},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LLM_TYPE", tt.llmType)
+
+			got := workerRunner()
+
+			assert.Equal(t, reflect.ValueOf(tt.want).Pointer(), reflect.ValueOf(got).Pointer())
+		})
 	}
 }

@@ -10,11 +10,15 @@ Two runtime roles in one binary:
 - **`serve`** - host service: lifecycle webhooks, one worker container per
   session, task-skills clone staging, log SSE, graceful drain.
 - **`work`** - hidden container entrypoint: assembles the tool registry,
-  optionally clones the project repo, seeds resume history, runs the epoch loop.
+  optionally clones the project repo, seeds resume history, runs the epoch loop
+  (or, for a Claude Code subscription chat, the Claude Code session loop).
+  SIGTERM or SIGINT cancels the session and the worker exits 0.
 
 The interactive loop, LLM client, tool primitives, redaction, and event stream
 come from the shared `contextmatrix-harness` module (version pinned in
-`go.mod`).
+`go.mod`). The Claude Code executor a subscription chat runs on (one
+long-lived `claude` process per session) comes from the shared
+`contextmatrix-vendorkit` module (version pinned in `go.mod`).
 
 The HTTP transport core (HMAC auth, replay cache, drain gate, SSE `/logs`,
 health/readiness/images probes, request metrics), the /message dedup cache, the
@@ -32,12 +36,12 @@ internal/cli/             cobra commands: serve, work (hidden), git-credential +
 internal/config/          layered service config (defaults < file < env, CMX_*) + Validate
 internal/webhook/         HTTP surface: /chat/start, /chat/end, /message lifecycle handlers and the worker LLM proxy mount (/llm), mounted on backendkit/webhookcore.Core (HMAC auth, replay cache, drain gate, SSE /logs, /images, /health, /readyz)
 internal/executor/        Docker container lifecycle; Tracker gates concurrency; DockerExecutor implements Executor
-internal/chatwork/        container work loop: provisioned credentials, git credential helper, optional clone, tool registry, embedded primer, resume, epoch loop
+internal/chatwork/        container work loop: provisioned credentials, git credential helper, optional clone, tool registry, embedded primer, resume, epoch loop, Claude Code session loop
 internal/mcpbridge/       dials CM's /mcp, adapts each board tool to a harness tools.Tool
 internal/secrets/         KEY=value env-file read/write (atomic write+rename); stages the worker's provisioned git-credentials config
 internal/metrics/         chat's Prometheus metric set: the shared backendkit bundle (namespaced cm_chat) plus the endpoint allowlist
 internal/buildinfo/       build stamp (ldflags version, commit, build time) and the embedded merge history serve reports on /health
-docker/Dockerfile.worker  worker image; entrypoint `contextmatrix-chat work`
+docker/Dockerfile.worker  worker images (five targets, each with the pinned `claude`); entrypoint `contextmatrix-chat work`
 ```
 
 ## Boundary discipline (the load-bearing invariant)
@@ -85,6 +89,16 @@ never enters the container: `LLM_API_KEY` there is a per-session token for
 serve's LLM proxy (`llmproxy.DefaultPrefix`), revoked on container exit or
 launch failure.
 
+The one exception is a `claude_code` (Claude Code subscription) endpoint: it
+bypasses the proxy, and the subscription token sits in the worker env
+(`LLM_OAUTH_TOKEN`, then `claude`'s env), so a prompt-injected session could
+read and exfiltrate it: it stays readable in docker-init's environ
+(`/proc/1/environ`, PID 1 under `Init: true`), in the worker's own initial
+environ (unsetting does not rewrite it) and in `claude`'s environ, all the same
+uid as the model's Bash. This is an accepted risk, with no hardening. serve
+still masks it in every bridged frame.
+`worker_extra_env` can never set `LLM_OAUTH_TOKEN`.
+
 ### Config
 
 koanf, not viper. Precedence: defaults < file < env. `CMX_*` env prefix; nested
@@ -119,27 +133,40 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
    first user turn. A `/clear` frame ends the epoch, resets history to nil,
    and re-orients the next epoch from the same primer - the host sends only
    `/clear`. Resume seeds history from `resume.jsonl` when `CM_CHAT_RESUME=1`.
+   A `claude_code` chat runs the session loop instead
+   (`chatwork/sessionloop.go`): one long-lived `claude` process answers every turn, the
+   messages that arrive during a turn go together as the next one, `/clear`
+   closes the process and opens a fresh one with the same primer, and resume
+   renders the restored transcript as text above the primer. A process that
+   exits is resumed on the next user message (sent once more if the exited
+   process never took it); a turn halted by a failed `contextmatrix` MCP
+   server is sent once more at once on a restarted process; a usage limit is
+   shown, never retried.
 4. **Compaction is on** (harness): older messages drop at `compaction.threshold`
    (default 0.85) of the model's context window; `keep_recent_turns` (default 6)
-   messages are kept verbatim.
+   messages are kept verbatim. A `claude_code` chat ignores `compaction.*`:
+   Claude Code compacts on its own.
 5. **Reasoning replay is on by default** (`replay_reasoning`; set it false to
    turn it off). serve forwards `CMX_REPLAY_REASONING=true` to every worker, and
    the harness sends each reply's reasoning back with later requests of that
    epoch; on an OpenRouter-type endpoint it pins them to the provider that
    served the newest reasoning. It never outlives the epoch: `/clear` resets
-   history and resume history is text-only.
+   history and resume history is text-only. It does not apply to a
+   `claude_code` chat.
 6. **Model and MCP key come from ContextMatrix** in the chat-start payload
    (`CM_MODEL`, `CM_MCP_API_KEY`). Chat never selects models or stages the MCP
    key.
 7. **Board operations go over MCP, never raw HTTP.** The worker dials
    `<container_contextmatrix_url>/mcp`, lists board tools, and offers them to
-   the model alongside the filesystem/shell tools rooted at `/workspace`.
+   the model alongside the filesystem/shell tools rooted at `/workspace`. In a
+   `claude_code` chat, `claude` connects to that server itself (named
+   `contextmatrix`), and the worker fails at boot without `CM_MCP_URL`.
 8. **Git credentials are fetched per-repo, per-operation from CM**
    (`CM_GIT_CREDENTIALS_TOKEN`, always provisioned - chat/start fails closed
    without it). At boot, `Run` stages the credentials URL/token into a 0600
    scratch file and registers the global v2 git credential helper and `gh`
    wrapper; both read only that file, never `os.Getenv` (the model's git/`gh`
-   calls run through the harness bash tool's scrubbed environment). Each call
+   calls run with a scrubbed environment). Each call
    GETs CM's `/api/worker/git-credentials` with the target repo's
    `(host, path)` and mints a fresh token, so one session can span multiple
    projects/hosts. A fetch failure logs one stderr note (never a credential)

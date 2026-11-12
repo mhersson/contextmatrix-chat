@@ -22,6 +22,7 @@ import (
 	"github.com/mhersson/contextmatrix-harness/llm"
 	"github.com/mhersson/contextmatrix-harness/tlsca"
 	"github.com/mhersson/contextmatrix-harness/tools"
+	protocol "github.com/mhersson/contextmatrix-protocol"
 )
 
 const (
@@ -31,14 +32,45 @@ const (
 	defaultContextWindow       = 128000
 	defaultCompactionThreshold = 0.85
 	defaultKeepRecentTurns     = 6
+	defaultToolOutputMaxBytes  = 131072
 )
 
 // Run is the container entrypoint for one interactive chat session. It reads
 // the CM-provisioned credentials from its env, configures git auth, optionally
 // clones the project repo, assembles the tool registry and harness config, and
 // drives the epoch loop to completion. Each epoch is one harness.Run; a /clear
-// frame ends the current epoch and starts a fresh one with no history.
+// frame ends the current epoch and starts a fresh one with no history. A
+// claude_code chat runs on a Claude Code session instead (runClaudeCode). A
+// cancelled ctx is a requested shutdown, not a failure, and returns nil.
 func Run(ctx context.Context) error {
+	return shutdownErr(ctx, workerRunner()(ctx))
+}
+
+// shutdownErr maps any error to nil once ctx is done. It tests ctx.Err(), not
+// errors.Is(err, context.Canceled): a signal cancellation cause need not wrap it.
+func shutdownErr(ctx context.Context, err error) error {
+	if ctx.Err() == nil {
+		return err
+	}
+
+	if err != nil {
+		slog.Info("worker stopped", "error", err, "cause", context.Cause(ctx))
+	}
+
+	return nil
+}
+
+// workerRunner picks the session loop for the provisioned LLM_TYPE.
+func workerRunner() func(context.Context) error {
+	if os.Getenv("LLM_TYPE") == protocol.LLMEndpointTypeClaudeCode {
+		return runClaudeCode
+	}
+
+	return runHarness
+}
+
+// runHarness runs the harness epoch loop against the provisioned LLM endpoint.
+func runHarness(ctx context.Context) error {
 	// 1. handleChatStart sets LLM_API_KEY/LLM_BASE_URL/LLM_TYPE as per-session
 	// container env: LLM_BASE_URL is serve's proxy URL and LLM_API_KEY a
 	// per-session proxy token, not the real key.
@@ -56,26 +88,10 @@ func Run(ctx context.Context) error {
 		return err
 	}
 
-	gitCredentialsToken := os.Getenv("CM_GIT_CREDENTIALS_TOKEN")
-
-	// 2. Configure git credential auth (CM_GIT_CREDENTIALS_TOKEN).
-	selfPath, err := configureGitAuth(ctx, gitCredentialsToken)
+	// 2-3. Git credential auth and the project repo clone.
+	selfPath, gitCredentialsToken, err := prepareWorkspace(ctx)
 	if err != nil {
 		return err
-	}
-
-	// 3. Clone the project repo into /workspace (best-effort: a clone failure
-	// is logged but must not kill the session - the model can re-clone with its
-	// shell tool).
-	if repoURL := os.Getenv("CM_CHAT_REPO_URL"); repoURL != "" {
-		cloneDir := filepath.Join(workspaceRoot, cloneTarget())
-
-		cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, cloneDir) //nolint:gosec // G702: repoURL is the operator-supplied CM_CHAT_REPO_URL
-		if out, err := cmd.CombinedOutput(); err != nil {
-			slog.Warn("repo clone failed; continuing",
-				"url", repoURL, "dir", cloneDir,
-				"error", err, "output", strings.TrimSpace(string(out)))
-		}
 	}
 
 	// 4. Build the LLM client and resolve the model's context window from the
@@ -140,16 +156,7 @@ func Run(ctx context.Context) error {
 	defer func() { _ = bridge.Close() }()
 
 	// 7. History: seed from a prior session when CM_CHAT_RESUME == "1".
-	var history []llm.Message
-
-	if os.Getenv("CM_CHAT_RESUME") == "1" {
-		rc, err := LoadResume(resumePath)
-		if err != nil {
-			slog.Warn("load resume failed; starting fresh", "error", err)
-		} else {
-			history = SeedHistory(rc)
-		}
-	}
+	history := loadResumeHistory()
 
 	// 8. Redactor: mask the secrets from all tool output and event data. Backed
 	// by a watcher so a fresh per-repo git token the credential-helper/
@@ -170,7 +177,7 @@ func Run(ctx context.Context) error {
 	// 10. Emitter: board tool_call lines (the MCP bridge tools) are filtered
 	// from the transcript as noise. All other events reach stdout for the
 	// serve-side log bridge.
-	filteredWriter := newBoardFilterWriter(os.Stdout, bridge.BoardToolNames())
+	filteredWriter := newBoardFilterWriter(os.Stdout, boardToolSet(bridge.BoardToolNames()))
 	emit := events.NewEmitter(io.Discard, filteredWriter)
 
 	// 11. Epoch loop: one harness.Run per epoch; /clear resets history and
@@ -228,7 +235,7 @@ func Run(ctx context.Context) error {
 func harnessConfig(model string, contextWindow int, history []llm.Message, inbox harness.Inbox, redact func(string) string) harness.Config {
 	threshold := envFloatDefault("CMX_COMPACTION_THRESHOLD", defaultCompactionThreshold)
 	keepRecent := envIntDefault("CMX_COMPACTION_KEEP_RECENT_TURNS", defaultKeepRecentTurns)
-	toolOutputMaxBytes := envIntDefault("CMX_TOOL_OUTPUT_MAX_BYTES", 131072)
+	toolOutputMaxBytes := envIntDefault("CMX_TOOL_OUTPUT_MAX_BYTES", defaultToolOutputMaxBytes)
 
 	return harness.Config{
 		Model:              model,
@@ -318,6 +325,16 @@ func buildToolRegistry(ctx context.Context, selfPath, sessionID string, mcpBase 
 		return nil, nil, fmt.Errorf("connect to mcp: %w", err)
 	}
 
+	ts, _ := localTools(selfPath)
+	ts = append(ts, bridge.Tools()...)
+
+	return tools.NewRegistry(ts...), bridge, nil
+}
+
+// localTools returns the filesystem/shell tools rooted at /workspace plus the
+// optional skill tool, and the extra bash env (the gh wrapper PATH) when the
+// wrapper is installed. See buildToolRegistry for the selfPath semantics.
+func localTools(selfPath string) (ts []tools.Tool, bashEnv []string) {
 	bashTimeout := envIntDefault("CMX_BASH_TIMEOUT_MAX_SECONDS", 600)
 
 	bashTool := tools.NewBashTool(workspaceRoot).WithMaxTimeout(bashTimeout)
@@ -334,11 +351,12 @@ func buildToolRegistry(ctx context.Context, selfPath, sessionID string, mcpBase 
 		if dir, err := installGHWrapperV2(selfPath); err != nil {
 			slog.Warn("gh wrapper v2 install failed; gh may be unavailable this session", "error", err)
 		} else {
-			bashTool = bashTool.WithExtraEnv([]string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")})
+			bashEnv = []string{"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")}
+			bashTool = bashTool.WithExtraEnv(bashEnv)
 		}
 	}
 
-	ts := []tools.Tool{
+	ts = []tools.Tool{
 		tools.NewReadTool(workspaceRoot),
 		tools.NewWriteTool(workspaceRoot),
 		tools.NewEditTool(workspaceRoot),
@@ -354,9 +372,7 @@ func buildToolRegistry(ctx context.Context, selfPath, sessionID string, mcpBase 
 		}
 	}
 
-	ts = append(ts, bridge.Tools()...)
-
-	return tools.NewRegistry(ts...), bridge, nil
+	return ts, bashEnv
 }
 
 // cloneTarget returns the directory name to use under /workspace when cloning.
@@ -396,10 +412,52 @@ func validateLLMKey(llmKey string) error {
 	return nil
 }
 
+// prepareWorkspace configures git credential auth from CM_GIT_CREDENTIALS_TOKEN
+// and clones the project repo under /workspace. The clone is best-effort: a
+// failure is logged, and the model can re-clone with its shell tool.
+func prepareWorkspace(ctx context.Context) (selfPath, gitCredentialsToken string, err error) {
+	gitCredentialsToken = os.Getenv("CM_GIT_CREDENTIALS_TOKEN")
+
+	selfPath, err = configureGitAuth(ctx, gitCredentialsToken)
+	if err != nil {
+		return "", "", err
+	}
+
+	if repoURL := os.Getenv("CM_CHAT_REPO_URL"); repoURL != "" {
+		cloneDir := filepath.Join(workspaceRoot, cloneTarget())
+
+		cmd := exec.CommandContext(ctx, "git", "clone", "--", repoURL, cloneDir) //nolint:gosec // G702: repoURL is the operator-supplied CM_CHAT_REPO_URL
+		if out, err := cmd.CombinedOutput(); err != nil {
+			slog.Warn("repo clone failed; continuing",
+				"url", repoURL, "dir", cloneDir,
+				"error", err, "output", strings.TrimSpace(string(out)))
+		}
+	}
+
+	return selfPath, gitCredentialsToken, nil
+}
+
+// loadResumeHistory seeds history from a prior session when CM_CHAT_RESUME is
+// "1". An unreadable resume file starts the chat fresh.
+func loadResumeHistory() []llm.Message {
+	if os.Getenv("CM_CHAT_RESUME") != "1" {
+		return nil
+	}
+
+	rc, err := LoadResume(resumePath)
+	if err != nil {
+		slog.Warn("load resume failed; starting fresh", "error", err)
+
+		return nil
+	}
+
+	return SeedHistory(rc)
+}
+
 // configureGitAuth stages the CM-provisioned git-credentials config into a
 // 0600 scratch file the git-credential/gh-wrapper subcommands read from (see
 // gitCredentialsConfigPath's doc for why NOT env - they run through the
-// harness bash tool's scrubbed environment) and registers the v2 helper
+// scrubbed environment of the harness bash tool or Claude Code's Bash built-in) and registers the v2 helper
 // GLOBALLY, since a provisioned session is multi-host by construction. It
 // returns the resolved self path for the gh-wrapper install, "" when git auth
 // is unavailable. Setup failures are non-fatal: a degraded git-auth

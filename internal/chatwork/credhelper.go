@@ -67,7 +67,7 @@ func ConfigureGitCredentialHelperV2(ctx context.Context, selfPath string) error 
 // CM_GIT_CREDENTIALS_URL/CM_GIT_CREDENTIALS_TOKEN. RunGitCredentialHelper and
 // RunGHWrapper read ONLY this file for those two values - never
 // os.Getenv - because git/gh are invoked by the model through the harness
-// bash tool, which execs with a SCRUBBED environment (tools.ScrubbedEnv) that
+// bash tool or Claude Code's Bash built-in, which exec with a SCRUBBED environment (tools.ScrubbedEnv) that
 // strips everything outside a small allowlist (PATH, HOME, USER, LANG,
 // LC_ALL, TMPDIR, TERM). CM_GIT_CREDENTIALS_TOKEN/URL would be invisible to a
 // subcommand reading its own env from that lineage. The file lives in
