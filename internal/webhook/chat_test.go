@@ -2004,6 +2004,46 @@ func TestChatStart_ClaudeCodeEnv(t *testing.T) {
 	}
 }
 
+func TestChatStart_ClaudeCodeEffortEnv(t *testing.T) {
+	claudeCodeWithEffort := func(effort string) *protocol.LLMEndpoint {
+		ep := claudeCodeEndpoint()
+		ep.Effort = effort
+
+		return ep
+	}
+
+	tests := []struct {
+		name       string
+		endpoint   *protocol.LLMEndpoint
+		want       string
+		wantAbsent bool
+	}{
+		{name: "claude code endpoint effort is forwarded", endpoint: claudeCodeWithEffort("max"), want: "max"},
+		{name: "empty claude code effort sends nothing", endpoint: claudeCodeWithEffort(""), wantAbsent: true},
+		{name: "endpoint mode never sends it", endpoint: &protocol.LLMEndpoint{Type: "openai", APIKey: "sk-test-000000", Effort: "max"}, wantAbsent: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, fe := newChatServer(t)
+			if tt.endpoint.Type == protocol.LLMEndpointTypeClaudeCode {
+				srv.llmProxy = nil
+			}
+
+			require.Equal(t, http.StatusAccepted, startLLMSession(t, srv, tt.endpoint))
+
+			got, has := envToMap(fe.Launched()[0].Env)["CM_CLAUDE_CODE_EFFORT"]
+			if tt.wantAbsent {
+				assert.False(t, has)
+
+				return
+			}
+
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestChatStart_ClaudeCodeNeverRegistersWithProxy(t *testing.T) {
 	srv, _, _ := newChatServer(t)
 	rec := &recordingLLMProxy{Handler: http.NotFoundHandler()}

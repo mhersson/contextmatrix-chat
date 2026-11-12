@@ -237,6 +237,10 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 			"LLM_TYPE="+protocol.LLMEndpointTypeClaudeCode,
 			llmOAuthTokenEnv+"="+p.LLMEndpoint.OAuthToken,
 		)
+
+		if p.LLMEndpoint.Effort != "" {
+			env = append(env, "CM_CLAUDE_CODE_EFFORT="+p.LLMEndpoint.Effort)
+		}
 	} else {
 		// The worker's LLM_* point at serve's proxy; the real key stays host-side.
 		// The type is still passed through so the harness picks the right wire format.
