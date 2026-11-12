@@ -145,9 +145,17 @@ func TestCheckClaudeCode(t *testing.T) {
 			}
 
 			if tt.wantWarn {
-				assert.Equal(t, 1, strings.Count(logBuf.String(), "level=WARN"))
-				assert.Contains(t, logBuf.String(), tt.found)
-				assert.Contains(t, logBuf.String(), claudecode.Version)
+				var warns []string
+
+				for _, l := range strings.Split(logBuf.String(), "\n") {
+					if strings.Contains(l, "level=WARN") {
+						warns = append(warns, l)
+					}
+				}
+
+				require.Len(t, warns, 1)
+				assert.Contains(t, warns[0], tt.found)
+				assert.Contains(t, warns[0], claudecode.Version)
 			} else {
 				assert.Zero(t, strings.Count(logBuf.String(), "level=WARN"))
 			}
@@ -544,4 +552,21 @@ func TestClaudeCodeVersionPinsAgree(t *testing.T) {
 		require.NotNil(t, m, tt.file)
 		assert.Equal(t, claudecode.Version, string(m[1]), tt.file)
 	}
+}
+
+func TestClaudeCodeTap(t *testing.T) {
+	var out bytes.Buffer
+
+	tap := newClaudeCodeTap(&out)
+
+	dropped := `{"kind":"state_change","data":{"stop":"done","turns":1}}` + "\n" +
+		`{"kind":"tool_call","data":{"name":"mcp__` + cmMCPServerName + `__get_card"}}` + "\n"
+	kept := `{"kind":"state_change","data":{"state":"awaiting_human"}}` + "\n" +
+		`{"kind":"tool_call","data":{"name":"Bash"}}` + "\n"
+
+	_, err := tap.Write([]byte(dropped + kept))
+	require.NoError(t, err)
+
+	assert.Equal(t, kept, out.String())
+	assert.EqualValues(t, 1, tap.counts().awaiting)
 }

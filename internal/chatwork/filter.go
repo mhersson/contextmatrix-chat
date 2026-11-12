@@ -8,14 +8,14 @@ import (
 )
 
 // boardFilterWriter wraps dst and drops JSONL transcript lines whose kind is
-// "tool_call" and whose data.name the isBoard predicate accepts. With dropStop
-// it also drops state_change lines carrying a data.stop key. All other
-// lines pass through unchanged. Write always returns len(p) so the emitter
-// never sees a short-write error on filtered lines.
+// "tool_call" and whose data.name the isBoard predicate accepts; all other
+// lines pass through. Write always returns len(p) so the emitter never sees a
+// short-write error on filtered lines.
 type boardFilterWriter struct {
 	dst     io.Writer
 	isBoard func(name string) bool
-	// dropStop drops the per-process stop line the claude session emits.
+	// dropStop drops the stop line: Claude Code ends a process at every /clear,
+	// usage limit and crash, and it would reach ContextMatrix as a raw-JSON row nothing reads.
 	dropStop bool
 }
 
@@ -25,8 +25,7 @@ func newBoardFilterWriter(dst io.Writer, isBoard func(name string) bool) io.Writ
 	return &boardFilterWriter{dst: dst, isBoard: isBoard}
 }
 
-// newClaudeCodeFilterWriter is newBoardFilterWriter that also drops the
-// state_change stop line emitted at every claude process end.
+// newClaudeCodeFilterWriter is newBoardFilterWriter that also drops the stop line.
 func newClaudeCodeFilterWriter(dst io.Writer, isBoard func(name string) bool) io.Writer {
 	return &boardFilterWriter{dst: dst, isBoard: isBoard, dropStop: true}
 }

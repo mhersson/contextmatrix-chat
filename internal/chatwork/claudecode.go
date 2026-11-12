@@ -57,10 +57,16 @@ func takeOAuthToken() (string, error) {
 
 var _ chatSession = (*claudecode.Session)(nil)
 
+// newClaudeCodeTap counts the events that survive the claude_code transcript
+// filter on their way to dst.
+func newClaudeCodeTap(dst io.Writer) *eventTap {
+	return newEventTap(newClaudeCodeFilterWriter(dst, mcpServerTools(cmMCPServerName)))
+}
+
 // runClaudeCode runs a claude_code chat on one Claude Code session in place of
 // the harness epoch loop.
 func runClaudeCode(ctx context.Context) error {
-	tap := newEventTap(newClaudeCodeFilterWriter(os.Stdout, mcpServerTools(cmMCPServerName)))
+	tap := newClaudeCodeTap(os.Stdout)
 	emit := events.NewEmitter(io.Discard, tap)
 
 	// The token is taken first so the version check's child cannot inherit it.
