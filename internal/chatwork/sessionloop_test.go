@@ -230,6 +230,16 @@ func turn(parts ...string) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// assertOpeningTurn checks that sent is one turn: opening first, then the user
+// texts that waited for it, in order.
+func assertOpeningTurn(t *testing.T, sent []string, opening string, user ...string) {
+	t.Helper()
+
+	require.Len(t, sent, 1, "one turn carries the opening and the user text")
+	assert.True(t, strings.HasPrefix(sent[0], opening), "the opening comes first: %q", sent[0])
+	assert.True(t, strings.HasSuffix(sent[0], turn(user...)), "the user text comes after it: %q", sent[0])
+}
+
 type loopFixture struct {
 	starter *fakeStarter
 	inbox   *chatInbox
@@ -339,6 +349,28 @@ func TestJoinTurn(t *testing.T) {
 	}
 }
 
+func TestOpeningTurn(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no user text is the opening alone", func(t *testing.T) {
+		t.Parallel()
+
+		assert.Equal(t, testOpening, openingTurn(testOpening, ""))
+	})
+
+	// The opening tells the model to wait for a message, so the folded one is set off from it.
+	t.Run("user text follows the opening, set off from it", func(t *testing.T) {
+		t.Parallel()
+
+		got := openingTurn(testOpening, "q1")
+		require.True(t, strings.HasPrefix(got, testOpening))
+		require.True(t, strings.HasSuffix(got, "q1"))
+
+		between := strings.TrimSuffix(strings.TrimPrefix(got, testOpening), "q1")
+		assert.NotEmpty(t, strings.TrimSpace(between))
+	})
+}
+
 func TestOpeningMessage(t *testing.T) {
 	t.Parallel()
 
@@ -435,13 +467,12 @@ func TestSessionLoopOpeningTurn(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		queued   []string // messages waiting at boot
-		asked    []string // messages that arrive during the opening turn
-		wantSent []string
+		name   string
+		queued []string // messages waiting at boot
+		asked  []string // messages that arrive during the opening turn
 	}{
-		{name: "queued messages go with the opening", queued: []string{"a", "b"}, wantSent: []string{turn(testOpening, "a", "b")}},
-		{name: "nothing queued, the opening goes alone", asked: []string{"a", "b"}, wantSent: []string{testOpening, turn("a", "b")}},
+		{name: "queued messages go with the opening", queued: []string{"q1", "q2"}},
+		{name: "nothing queued, the opening goes alone", asked: []string{"q1", "q2"}},
 	}
 
 	for _, tt := range tests {
@@ -469,7 +500,13 @@ func TestSessionLoopOpeningTurn(t *testing.T) {
 
 			require.NoError(t, f.run(t.Context(), t))
 			assert.Equal(t, []string{""}, f.starter.starts())
-			assert.Equal(t, tt.wantSent, s1.sent())
+
+			if len(tt.queued) > 0 {
+				assertOpeningTurn(t, s1.sent(), testOpening, tt.queued...)
+			} else {
+				assert.Equal(t, []string{testOpening, turn(tt.asked...)}, s1.sent())
+			}
+
 			assertClosedOnce(t, f.starter)
 		})
 	}
@@ -489,7 +526,7 @@ func TestSessionLoopClearRestartsWithPrimer(t *testing.T) {
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", ""}, f.starter.starts())
 	assert.Equal(t, []string{testOpening}, s1.sent())
-	assert.Equal(t, []string{turn(testPrimer, "after")}, s2.sent())
+	assertOpeningTurn(t, s2.sent(), testPrimer, "after")
 	assertClosedOnce(t, f.starter)
 }
 
@@ -517,7 +554,7 @@ func TestSessionLoopClearWhileIdle(t *testing.T) {
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", ""}, f.starter.starts())
 	assert.Equal(t, []string{testOpening}, s1.sent())
-	assert.Equal(t, []string{turn(testPrimer, "next")}, s2.sent())
+	assertOpeningTurn(t, s2.sent(), testPrimer, "next")
 	assertClosedOnce(t, f.starter)
 }
 
@@ -557,7 +594,7 @@ func TestSessionLoopClearAfterWaitDropsTurn(t *testing.T) {
 	assert.Equal(t, []string{"", "id-1", ""}, f.starter.starts())
 	assert.Equal(t, []string{testOpening, "q1"}, s1.sent())
 	assert.Empty(t, s2.sent())
-	assert.Equal(t, []string{turn(testPrimer, "after")}, s3.sent())
+	assertOpeningTurn(t, s3.sent(), testPrimer, "after")
 	assertClosedOnce(t, f.starter)
 }
 
@@ -693,7 +730,7 @@ func TestSessionLoopResumeStartFailureStartsFresh(t *testing.T) {
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "id-1", ""}, f.starter.starts())
-	assert.Equal(t, []string{turn(testPrimer, "q2")}, s3.sent())
+	assertOpeningTurn(t, s3.sent(), testPrimer, "q2")
 	assert.Len(t, errorEvents(f.decoded(t)), 2)
 	assertClosedOnce(t, f.starter)
 }
@@ -734,19 +771,19 @@ func TestSessionLoopIdleDeathResendsText(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		resumeErr  error
-		wantStarts []string
-		wantSent   []string
-		wantErrors int
+		name        string
+		resumeErr   error
+		wantStarts  []string
+		wantOpening string // what the reopened session's turn opens with; "" when it is resumed
+		wantErrors  int
 	}{
-		{name: "resumed", wantStarts: []string{"", "id-1"}, wantSent: []string{"q1"}},
+		{name: "resumed", wantStarts: []string{"", "id-1"}},
 		{
-			name:       "resume fails, fresh with the primer",
-			resumeErr:  errors.New("no transcript for id-1"),
-			wantStarts: []string{"", "id-1", ""},
-			wantSent:   []string{turn(testPrimer, "q1")},
-			wantErrors: 1, // the failed resume start, not the dead session
+			name:        "resume fails, fresh with the primer",
+			resumeErr:   errors.New("no transcript for id-1"),
+			wantStarts:  []string{"", "id-1", ""},
+			wantOpening: testPrimer,
+			wantErrors:  1, // the failed resume start, not the dead session
 		},
 	}
 
@@ -778,7 +815,12 @@ func TestSessionLoopIdleDeathResendsText(t *testing.T) {
 			require.NoError(t, f.run(t.Context(), t))
 			assert.Equal(t, tt.wantStarts, f.starter.starts())
 			assert.Equal(t, []string{testOpening, "q1"}, s1.sent())
-			assert.Equal(t, tt.wantSent, reopened.sent())
+
+			if tt.wantOpening == "" {
+				assert.Equal(t, []string{"q1"}, reopened.sent())
+			} else {
+				assertOpeningTurn(t, reopened.sent(), tt.wantOpening, "q1")
+			}
 
 			evs := f.decoded(t)
 			assert.Len(t, errorEvents(evs), tt.wantErrors)
@@ -868,11 +910,11 @@ func TestSessionLoopMCPHaltOnFreshOpeningResendsItAlone(t *testing.T) {
 	tests := []struct {
 		name       string
 		clear      bool   // a /clear restarts the boot process before the halt
-		opening    string // the halted process's first turn
+		opening    string // what the halted process's first turn opens with
 		wantStarts []string
 	}{
-		{name: "boot opening", opening: turn(testOpening, "q1"), wantStarts: []string{"", ""}},
-		{name: "primer after a /clear", clear: true, opening: turn(testPrimer, "q1"), wantStarts: []string{"", "", ""}},
+		{name: "boot opening", opening: testOpening, wantStarts: []string{"", ""}},
+		{name: "primer after a /clear", clear: true, opening: testPrimer, wantStarts: []string{"", "", ""}},
 	}
 
 	for _, tt := range tests {
@@ -903,8 +945,12 @@ func TestSessionLoopMCPHaltOnFreshOpeningResendsItAlone(t *testing.T) {
 
 			require.NoError(t, f.run(t.Context(), t))
 			assert.Equal(t, tt.wantStarts, f.starter.starts())
-			assert.Equal(t, []string{tt.opening}, halted.sent())
-			assert.Equal(t, []string{tt.opening}, fresh.sent())
+			assertOpeningTurn(t, halted.sent(), tt.opening, "q1")
+			assert.Equal(t, halted.sent(), fresh.sent(), "the halted turn is resent whole")
+
+			for _, s := range []*fakeSession{halted, fresh} {
+				assert.Equal(t, 1, strings.Count(strings.Join(s.sent(), "\n"), "q1"), "user text sends to %s", s.id)
+			}
 
 			evs := f.decoded(t)
 			assert.Empty(t, errorEvents(evs))
@@ -938,7 +984,7 @@ func TestSessionLoopMCPHaltFreshStartFailureAwaitsHuman(t *testing.T) {
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "", ""}, f.starter.starts())
-	assert.Equal(t, []string{turn(testPrimer, "q1")}, s3.sent())
+	assertOpeningTurn(t, s3.sent(), testPrimer, "q1")
 
 	evs := f.decoded(t)
 	assert.Len(t, errorEvents(evs), 1)
@@ -995,7 +1041,7 @@ func TestSessionLoopMCPHaltResendsOnlyOnce(t *testing.T) {
 		halted     string   // the boot process's halted turn
 		resentID   string   // the ID of the process the halted turn is resent on
 		wantStarts []string
-		wantNext   []string // what the process after the second halt is sent
+		nextOpens  string // what the next process's turn opens with; "" when it resumes
 	}{
 		{
 			name:       "resumed conversation",
@@ -1003,14 +1049,13 @@ func TestSessionLoopMCPHaltResendsOnlyOnce(t *testing.T) {
 			halted:     "q1",
 			resentID:   "id-1",
 			wantStarts: []string{"", "id-1", "id-1"},
-			wantNext:   []string{"next"},
 		},
 		{
 			name:       "fresh opening",
 			halted:     testOpening,
 			resentID:   "id-2",
 			wantStarts: []string{"", "", ""},
-			wantNext:   []string{turn(testPrimer, "next")},
+			nextOpens:  testPrimer,
 		},
 	}
 
@@ -1046,7 +1091,12 @@ func TestSessionLoopMCPHaltResendsOnlyOnce(t *testing.T) {
 			require.NoError(t, f.run(t.Context(), t))
 			assert.Equal(t, tt.wantStarts, f.starter.starts())
 			assert.Equal(t, []string{tt.halted}, s2.sent())
-			assert.Equal(t, tt.wantNext, s3.sent())
+
+			if tt.nextOpens == "" {
+				assert.Equal(t, []string{"next"}, s3.sent())
+			} else {
+				assertOpeningTurn(t, s3.sent(), tt.nextOpens, "next")
+			}
 
 			evs := f.decoded(t)
 			assert.Len(t, errorEvents(evs), 1)
@@ -1234,7 +1284,7 @@ func TestSessionLoopClearThenFailedRestartAwaitsHuman(t *testing.T) {
 
 	require.NoError(t, f.run(t.Context(), t))
 	assert.Equal(t, []string{"", "", ""}, f.starter.starts())
-	assert.Equal(t, []string{turn(testPrimer, "after")}, s3.sent())
+	assertOpeningTurn(t, s3.sent(), testPrimer, "after")
 
 	evs := f.decoded(t)
 	assert.Len(t, errorEvents(evs), 1)

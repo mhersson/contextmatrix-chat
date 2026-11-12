@@ -44,6 +44,10 @@ That transcript is the prior conversation the orientation below refers to; treat
 
 %s`
 
+// queuedTextFrame sets off user text folded into an opening turn, whose
+// instructions would otherwise have the model wait for a message already here.
+const queuedTextFrame = "The user's message below arrived while this chat was starting; it is the message the opening above tells you to wait for. Do the opening step above (the welcome, or the chat_rehydration_complete call on a resume), then answer it in this same turn."
+
 // sessionLoop runs a chat on one long-lived Claude Code session with the
 // inbox and /clear semantics of epochLoop. Only run's goroutine touches sess,
 // keptID and fresh.
@@ -391,9 +395,13 @@ func openingMessage(primer string, history []llm.Message) string {
 }
 
 // openingTurn puts user text that waited for a new conversation's opening in
-// that turn, as the harness does, so claude answers both in one reply.
+// that turn, as the harness does, framed so claude answers it in the same reply.
 func openingTurn(opening, text string) string {
-	return joinTurn([]harness.UserMessage{{Content: opening}, {Content: text}})
+	if text == "" {
+		return opening
+	}
+
+	return joinTurn([]harness.UserMessage{{Content: opening}, {Content: queuedTextFrame}, {Content: text}})
 }
 
 // joinTurn joins the non-empty messages of one turn in arrival order.
