@@ -249,8 +249,9 @@ func (s *Server) handleChatStart(w http.ResponseWriter, r *http.Request) {
 
 	// Arm the host-side log-bridge redactor BEFORE the container starts so a
 	// secret surfacing on worker stderr or an unparsable stdout line is masked
-	// before it reaches /logs. The real key never enters the container but is
-	// still masked defensively. Forgotten on container exit (DropSession).
+	// before it reaches /logs. The proxy token and a claude_code subscription
+	// token enter the container; the endpoint key stays host-side and is masked
+	// defensively. Forgotten on container exit (DropSession).
 	if s.sessionSecrets != nil {
 		s.sessionSecrets.AddSessionKey(p.SessionID, llmToken)
 		s.sessionSecrets.AddSessionKey(p.SessionID, p.LLMEndpoint.OAuthToken)

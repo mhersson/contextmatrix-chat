@@ -182,9 +182,9 @@ token once, unsets it from its own environment, and passes it only to
 `claude`'s environment (`CLAUDE_CODE_OAUTH_TOKEN`).
 
 The token is still readable inside the container: it remains in
-`/proc/1/environ` (the worker's initial environment, which unsetting does not
-rewrite) and in the worker's and `claude`'s environ, all the same user as the
-model's Bash. This is an accepted risk; no hardening is applied.
+docker-init's environ (`/proc/1/environ`, PID 1 under `Init: true`), in the
+worker's own initial environ (unsetting does not rewrite it) and in `claude`'s
+environ, all the same user as the model's Bash. This is an accepted risk; no hardening is applied.
 
 - **Version check.** At boot the worker runs `claude --version`. When the
   worker image (or the project's chat worker image) has no runnable `claude`,
@@ -241,7 +241,7 @@ prompt-injected session could exfiltrate it (see
    `unzip`, `node`) plus the **Go, Python, and Rust** toolchains - Go with
    `golangci-lint`/`gofumpt`, Python via `uv`/`uvx` (a managed CPython) with
    `ty`/`ruff`, and Rust via `rustup`/`cargo` with `clippy`/`rustfmt`. Slimmer single-language variants
-   (`go-node`, `python`, `rust`) are also published, along with `jvm-node` for
+   (`go-node`, `python`, `rust`) are also built, along with `jvm-node` for
    Kotlin/Java + Node projects (JDK 21 as `java`, Maven, Node 24, `yarn`; not
    part of `full`). Every variant also carries the pinned `claude` binary
    (`/usr/local/bin/claude`, from Claude Code's npm platform tarball, with no
@@ -255,14 +255,17 @@ prompt-injected session could exfiltrate it (see
    gofumpt are built from source at pinned versions; npm, yarn, pip, ty and
    ruff are pinned by version and fetched from their registries.
 
+   The worker images bundle Anthropic's proprietary Claude Code (`claude`), so
+   they must not be pushed to a public registry.
+
    Any other ecosystem (Ruby, .NET) **needs an image carrying that
    toolchain** - build one `FROM` a published variant (see the agent repo's
    [`docs/custom-images.md`](https://github.com/mhersson/contextmatrix-agent/blob/main/docs/custom-images.md)
    pattern) and point a project at it via the chat worker image in
    ContextMatrix's project settings.
 
-   For a real deployment, publish a digest-pinned image and reference it from
-   `base_image`.
+   For a real deployment, publish a digest-pinned image to a private registry
+   and reference it from `base_image`.
 
    Every image these targets build carries the label
    `org.opencontainers.image.revision`, set to the commit it was built from.
