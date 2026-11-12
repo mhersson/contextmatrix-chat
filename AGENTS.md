@@ -92,7 +92,10 @@ launch failure.
 The one exception is a `claude_code` (Claude Code subscription) endpoint: it
 bypasses the proxy, and the subscription token sits in the worker env
 (`LLM_OAUTH_TOKEN`, then `claude`'s env), so a prompt-injected session could
-read and exfiltrate it. serve still masks it in every bridged frame.
+read and exfiltrate it: it stays in `/proc/1/environ` (unsetting it does not
+rewrite the initial environment) and in the worker's and `claude`'s environ,
+all the same uid as the model's Bash. This is an accepted risk, with no
+hardening. serve still masks it in every bridged frame.
 `worker_extra_env` can never set `LLM_OAUTH_TOKEN`.
 
 ### Config

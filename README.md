@@ -102,6 +102,7 @@ run by the `contextmatrix-vendorkit` module.
   not staged upfront. There is no local credential fallback.
 - Upstream LLM calls leave from `serve`, so its own `HTTP(S)_PROXY` / `NO_PROXY` environment governs them; an egress proxy set only in `worker_extra_env` no longer reaches LLM traffic, so give serve's process (e.g. its service unit) the proxy env.
   In Claude Code subscription mode `claude` reaches Anthropic from the worker instead, so the `worker_extra_env` proxy settings and `ca_cert_file` apply to it.
+  There `NO_PROXY` must also include `127.0.0.1,localhost` and the host of `container_contextmatrix_url`: Node does not skip loopback, so a proxy without them breaks the loopback MCP bridge, CM's MCP and the git-credentials fetch. `HTTP_PROXY` alone carries `claude`'s https API traffic; use `HTTPS_PROXY` for it, or add `.anthropic.com` to `NO_PROXY` when the proxy is not meant to carry it.
 - Workers must reach serve's webhook port at `container_serve_url` (by default `host.docker.internal:<port>`, the Docker host gateway); a host firewall must allow it.
 - A shared HMAC secret (at least 32 characters), configured on both this service
   and ContextMatrix.
@@ -113,7 +114,8 @@ run directory with mode 0750 under `chat_run_dir`, writes `resume.jsonl` into
 it, and bind-mounts it read-only at `/run/cm-chat`; it also bind-mounts
 `ca_cert_file` when configured. Session secrets (the MCP key, the git-credentials
 bearer, and the LLM proxy token below) reach the worker as container environment,
-not files. When `serve` runs as another host UID or GID, or under
+not files; a Claude Code subscription token does too (see below), and the model's
+shell, running as the same user, can read all of them from `/proc`. When `serve` runs as another host UID or GID, or under
 rootless Docker (where container UID 1000 maps to a subuid), the worker cannot
 read the run directory. A resumed chat then logs "starting fresh" and silently
 loses its prior conversation, and a `ca_cert_file` the worker cannot read fails
@@ -157,7 +159,8 @@ Exception: a Claude Code subscription session (`claude_code` endpoint) bypasses
 the proxy. serve puts the subscription token in the worker env as
 `LLM_OAUTH_TOKEN` (with `LLM_TYPE=claude_code`), where a prompt-injected session
 could read and exfiltrate it; serve still masks it in every bridged frame.
-`worker_extra_env` can never set `LLM_OAUTH_TOKEN` or an `LLM_TYPE` of
+The worker unsets it from its own environment, but it stays readable in the
+container (see Claude Code subscription mode). `worker_extra_env` can never set `LLM_OAUTH_TOKEN` or an `LLM_TYPE` of
 `claude_code`, and in a Claude Code session it cannot set `LLM_TYPE`,
 `LLM_API_KEY` or `LLM_BASE_URL` either; serve logs the withheld names once.
 
@@ -173,8 +176,13 @@ payload carries an LLM endpoint of type `claude_code` with the subscription
 token (`claude setup-token`) instead of an endpoint URL and key, next to the
 usual model and MCP key. serve skips the LLM proxy and passes the token to the
 worker as `LLM_OAUTH_TOKEN` with `LLM_TYPE=claude_code`. The worker reads the
-token once, removes it from its own environment, and hands it only to
-`claude`.
+token once, unsets it from its own environment, and passes it only to
+`claude`'s environment (`CLAUDE_CODE_OAUTH_TOKEN`).
+
+The token is still readable inside the container: it remains in
+`/proc/1/environ` (the worker's initial environment, which unsetting does not
+rewrite) and in the worker's and `claude`'s environ, all the same user as the
+model's Bash. This is an accepted risk; no hardening is applied.
 
 - **Version check.** At boot the worker runs `claude --version`. When the
   worker image (or the project's chat worker image) has no runnable `claude`,
