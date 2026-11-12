@@ -225,14 +225,14 @@ bash_timeout_max_seconds: 600
 # CMX_TOOL_OUTPUT_MAX_BYTES
 tool_output_max_bytes: 131072
 
-# Static reasoning effort applied to every chat session (low | medium | high).
+# Static reasoning effort for LLM-endpoint chat sessions (low | medium | high).
 # Forwarded as CMX_REASONING_EFFORT to every worker container. Leave empty (the
 # default) to send no effort: each model reasons at its own default, and a model
 # that always reasons still does. Reasoning replay does not depend on this
 # setting. Footgun: this is sent to every selected model; the endpoint must
-# accept reasoning_effort on all served models, or leave empty. In Claude Code
-# subscription sessions it becomes Claude Code's effort, and a value Claude
-# Code does not accept falls back to its default.
+# accept reasoning_effort on all served models, or leave empty. It does not
+# apply to Claude Code subscription sessions: their effort is ContextMatrix's
+# claude_code.effort.
 # CMX_REASONING_EFFORT
 # reasoning_effort: ""
 

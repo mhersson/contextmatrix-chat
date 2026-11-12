@@ -22,6 +22,7 @@ const (
 	claudeCodeBinary = "claude"
 	cmMCPServerName  = "contextmatrix"   // vendorkit's own bridge is "cm"
 	oauthTokenEnv    = "LLM_OAUTH_TOKEN" //nolint:gosec // env var name, not a credential
+	effortEnv        = "CM_CLAUDE_CODE_EFFORT"
 
 	repoInstructionsCap  = 64 * 1024
 	bashDefaultCeilingMS = 120000
@@ -120,7 +121,7 @@ func runClaudeCode(ctx context.Context) error {
 	cfg := claudeCodeConfig{
 		Token:                 token,
 		Model:                 os.Getenv("CM_MODEL"),
-		Effort:                claudeCodeEffort(os.Getenv("CMX_REASONING_EFFORT"), slog.Default()),
+		Effort:                claudeCodeEffort(slog.Default()),
 		SessionID:             sessionID,
 		MCPURL:                mcpURL,
 		MCPAPIKey:             os.Getenv("CM_MCP_API_KEY"),
@@ -168,12 +169,15 @@ func claudeCodeMCPURL(emit *events.Emitter) (string, error) {
 	return u, nil
 }
 
-// claudeCodeEffort maps the configured reasoning effort to a Claude Code
-// --effort value; one it does not accept falls back to the CLI default.
-func claudeCodeEffort(raw string, logger *slog.Logger) string {
+// claudeCodeEffort returns the endpoint's Claude Code --effort level; the
+// chat's reasoning_effort never applies here. A value Claude Code does not
+// accept falls back to the CLI default.
+func claudeCodeEffort(logger *slog.Logger) string {
+	raw := os.Getenv(effortEnv)
+
 	effort := claudecode.NormalizeEffort(raw)
 	if raw != "" && effort == "" {
-		logger.Warn("reasoning effort not accepted by claude code; using its default", "effort", raw)
+		logger.Warn("claude code effort not accepted; using its default", "effort", raw)
 	}
 
 	return effort

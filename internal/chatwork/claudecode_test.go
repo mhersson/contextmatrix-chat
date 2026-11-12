@@ -505,33 +505,42 @@ func TestClaudeCodeMCPURL(t *testing.T) {
 	}
 }
 
+// The claude_code effort comes only from the endpoint (CM_CLAUDE_CODE_EFFORT);
+// an empty Spec.Effort means vendorkit sends no --effort.
 func TestClaudeCodeEffort(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
-		name     string
-		raw      string
-		want     string
-		wantWarn bool
+		name            string
+		endpointEffort  string
+		reasoningEffort string
+		want            string
+		wantWarn        bool
 	}{
-		{name: "unset", raw: "", want: ""},
-		{name: "accepted", raw: "high", want: "high"},
-		{name: "normalized", raw: " High ", want: "high"},
-		{name: "dropped", raw: "minimal", want: "", wantWarn: true},
+		{name: "endpoint effort", endpointEffort: "max", reasoningEffort: "low", want: "max"},
+		{name: "unset sends none", want: ""},
+		{name: "reasoning effort does not apply", reasoningEffort: "high", want: ""},
+		{name: "normalized", endpointEffort: " High ", want: "high"},
+		{name: "dropped", endpointEffort: "minimal", want: "", wantWarn: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			t.Setenv("CM_CLAUDE_CODE_EFFORT", tt.endpointEffort)
+			t.Setenv("CMX_REASONING_EFFORT", tt.reasoningEffort)
+			t.Setenv("CMX_TASK_SKILLS_DIR", "")
+			t.Setenv("TMPDIR", t.TempDir())
 
 			var logBuf bytes.Buffer
 
-			got := claudeCodeEffort(tt.raw, slog.New(slog.NewTextHandler(&logBuf, nil)))
-			assert.Equal(t, tt.want, got)
+			cfg := testCfg()
+			cfg.Effort = claudeCodeEffort(slog.New(slog.NewTextHandler(&logBuf, nil)))
+
+			ts, bashEnv := localTools("")
+			spec := claudeCodeSpec(cfg, tools.NewRegistry(ts...), bashEnv, events.NewEmitter(nil, nil), nil)
+			assert.Equal(t, tt.want, spec.Effort)
 
 			if tt.wantWarn {
 				assert.Equal(t, 1, strings.Count(logBuf.String(), "level=WARN"))
-				assert.Contains(t, logBuf.String(), tt.raw)
+				assert.Contains(t, logBuf.String(), tt.endpointEffort)
 			} else {
 				assert.Zero(t, strings.Count(logBuf.String(), "level=WARN"))
 			}
