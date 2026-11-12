@@ -98,3 +98,53 @@ func TestBoardFilterWriterByMCPServer(t *testing.T) {
 		})
 	}
 }
+
+func TestClaudeCodeFilterWriter(t *testing.T) {
+	t.Parallel()
+
+	stopDone := `{"seq":1,"kind":"state_change","data":{"stop":"done","turns":2}}` + "\n"
+	stopError := `{"seq":2,"kind":"state_change","data":{"stop":"error","turns":1}}` + "\n"
+	awaiting := `{"seq":3,"kind":"state_change","data":{"state":"awaiting_human"}}` + "\n"
+	boardCall := `{"seq":4,"kind":"tool_call","data":{"name":"mcp__contextmatrix__list_cards"}}` + "\n"
+	otherCall := `{"seq":5,"kind":"tool_call","data":{"name":"Bash"}}` + "\n"
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"stop done dropped", stopDone, ""},
+		{"stop error dropped", stopError, ""},
+		{"awaiting_human kept", awaiting, awaiting},
+		{"board tool_call dropped", boardCall, ""},
+		{"non-board tool_call kept", otherCall, otherCall},
+		{"mixed lines", stopDone + awaiting + boardCall + otherCall, awaiting + otherCall},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+
+			w := newClaudeCodeFilterWriter(&buf, mcpServerTools("contextmatrix"))
+			n, err := w.Write([]byte(tt.input))
+			require.NoError(t, err)
+			assert.Equal(t, len(tt.input), n)
+			assert.Equal(t, tt.want, buf.String())
+		})
+	}
+}
+
+func TestBoardFilterWriterKeepsStopLine(t *testing.T) {
+	t.Parallel()
+
+	stop := `{"seq":1,"kind":"state_change","data":{"stop":"done","turns":2}}` + "\n"
+
+	var buf bytes.Buffer
+
+	w := newBoardFilterWriter(&buf, boardToolSet([]string{"claim_card"}))
+	_, err := w.Write([]byte(stop))
+	require.NoError(t, err)
+	assert.Equal(t, stop, buf.String())
+}

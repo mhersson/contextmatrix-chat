@@ -60,7 +60,7 @@ var _ chatSession = (*claudecode.Session)(nil)
 // runClaudeCode runs a claude_code chat on one Claude Code session in place of
 // the harness epoch loop.
 func runClaudeCode(ctx context.Context) error {
-	tap := newEventTap(newBoardFilterWriter(os.Stdout, mcpServerTools(cmMCPServerName)))
+	tap := newEventTap(newClaudeCodeFilterWriter(os.Stdout, mcpServerTools(cmMCPServerName)))
 	emit := events.NewEmitter(io.Discard, tap)
 
 	// The token is taken first so the version check's child cannot inherit it.
