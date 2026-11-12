@@ -272,10 +272,6 @@ func claudeCodeSpec(cfg claudeCodeConfig, local *tools.Registry, bashEnv []strin
 		headers["X-CM-Chat-Session"] = cfg.SessionID
 	}
 
-	if len(headers) == 0 {
-		headers = nil
-	}
-
 	return claudecode.Spec{
 		Binary:             claudeCodeBinary,
 		Dir:                workspaceRoot,

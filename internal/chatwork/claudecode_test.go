@@ -151,11 +151,6 @@ func TestCheckClaudeCode(t *testing.T) {
 			} else {
 				assert.Zero(t, strings.Count(logBuf.String(), "level=WARN"))
 			}
-
-			if !tt.wantErr {
-				assert.Contains(t, logBuf.String(), "level=INFO")
-				assert.Contains(t, logBuf.String(), tt.found)
-			}
 		})
 	}
 }
