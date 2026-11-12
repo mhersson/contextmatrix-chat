@@ -109,18 +109,19 @@ run by the `contextmatrix-vendorkit` module.
 
 ### Host UID 1000
 
-Worker containers run as container UID 1000. `serve` creates each session's
-run directory with mode 0750 under `chat_run_dir`, writes `resume.jsonl` into
-it, and bind-mounts it read-only at `/run/cm-chat`; it also bind-mounts
-`ca_cert_file` when configured. Session secrets (the MCP key, the git-credentials
-bearer, and the LLM proxy token below) reach the worker as container environment,
-not files; a Claude Code subscription token does too (see below), and the model's
-shell, running as the same user, can read all of them from `/proc`. When `serve` runs as another host UID or GID, or under
-rootless Docker (where container UID 1000 maps to a subuid), the worker cannot
-read the run directory. A resumed chat then logs "starting fresh" and silently
-loses its prior conversation, and a `ca_cert_file` the worker cannot read fails
-the session at startup. Fresh sessions otherwise run. `serve` logs a warning
-on Linux when its UID is not 1000.
+Worker containers run as container UID 1000. `serve` creates each session's run
+directory with mode 0750 under `chat_run_dir`, writes `resume.jsonl` into it,
+and bind-mounts it read-only at `/run/cm-chat`; it also bind-mounts
+`ca_cert_file` when configured. Session secrets (the MCP key, the
+git-credentials bearer, and the LLM proxy token below) reach the worker as
+container environment, not files; a Claude Code subscription token does too (see
+below), and the model's shell, running as the same user, can read all of them
+from `/proc`. When `serve` runs as another host UID or GID, or under rootless
+Docker (where container UID 1000 maps to a subuid), the worker cannot read the
+run directory. A resumed chat then logs "starting fresh" and silently loses its
+prior conversation, and a `ca_cert_file` the worker cannot read fails the
+session at startup. Fresh sessions otherwise run. `serve` logs a warning on
+Linux when its UID is not 1000.
 
 ## Worker credentials
 
@@ -158,11 +159,12 @@ stand-in token plus the proxy URL.
 Exception: a Claude Code subscription session (`claude_code` endpoint) bypasses
 the proxy. serve puts the subscription token in the worker env as
 `LLM_OAUTH_TOKEN` (with `LLM_TYPE=claude_code`), where a prompt-injected session
-could read and exfiltrate it; serve still masks it in every bridged frame.
-The worker unsets it from its own environment, but it stays readable in the
-container (see Claude Code subscription mode). `worker_extra_env` can never set `LLM_OAUTH_TOKEN` or an `LLM_TYPE` of
-`claude_code`, and in a Claude Code session it cannot set `LLM_TYPE`,
-`LLM_API_KEY` or `LLM_BASE_URL` either; serve logs the withheld names once.
+could read and exfiltrate it; serve still masks it in every bridged frame. The
+worker unsets it from its own environment, but it stays readable in the
+container (see Claude Code subscription mode). `worker_extra_env` can never set
+`LLM_OAUTH_TOKEN` or an `LLM_TYPE` of `claude_code`, and in a Claude Code
+session it cannot set `LLM_TYPE`, `LLM_API_KEY` or `LLM_BASE_URL` either; serve
+logs the withheld names once.
 
 Limits:
 
