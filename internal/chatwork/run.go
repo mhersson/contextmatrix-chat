@@ -42,7 +42,7 @@ const (
 // claude_code chat runs on a Claude Code session instead (runClaudeCode). A
 // cancelled ctx is a requested shutdown, not a failure, and returns nil.
 func Run(ctx context.Context) error {
-	return shutdownErr(ctx, runWorker(ctx))
+	return shutdownErr(ctx, workerRunner()(ctx))
 }
 
 // shutdownErr maps any error to nil once ctx is done. It tests ctx.Err(), not
@@ -59,11 +59,17 @@ func shutdownErr(ctx context.Context, err error) error {
 	return nil
 }
 
-func runWorker(ctx context.Context) error {
+// workerRunner picks the session loop for the provisioned LLM_TYPE.
+func workerRunner() func(context.Context) error {
 	if os.Getenv("LLM_TYPE") == protocol.LLMEndpointTypeClaudeCode {
-		return runClaudeCode(ctx)
+		return runClaudeCode
 	}
 
+	return runHarness
+}
+
+// runHarness runs the harness epoch loop against the provisioned LLM endpoint.
+func runHarness(ctx context.Context) error {
 	// 1. handleChatStart sets LLM_API_KEY/LLM_BASE_URL/LLM_TYPE as per-session
 	// container env: LLM_BASE_URL is serve's proxy URL and LLM_API_KEY a
 	// per-session proxy token, not the real key.
