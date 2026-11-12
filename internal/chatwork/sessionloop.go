@@ -45,8 +45,8 @@ That transcript is the prior conversation the orientation below refers to; treat
 %s`
 
 // sessionLoop runs a chat on one long-lived Claude Code session with the
-// inbox and /clear semantics of epochLoop. Only run's goroutine touches sess
-// and keptID.
+// inbox and /clear semantics of epochLoop. Only run's goroutine touches sess,
+// keptID and fresh.
 type sessionLoop struct {
 	start   startSessionFunc
 	inbox   *chatInbox
@@ -58,6 +58,7 @@ type sessionLoop struct {
 
 	sess   chatSession // nil while no claude process is live
 	keptID string      // the session the next message resumes; "" after a /clear
+	fresh  bool        // the last process started a new conversation and completed no turn
 }
 
 // run starts the session, sends opening, then answers each user turn until
@@ -100,7 +101,8 @@ func (l *sessionLoop) run(ctx context.Context, opening string) error {
 
 // sendAll sends texts in order as separate turns and stops at a /clear or at
 // a failed turn, which leaves the session down and drops the rest. A text that
-// never reached claude is resent once on a reopened session.
+// never reached claude, or that a failed MCP server halted, is resent once on a
+// reopened session.
 func (l *sessionLoop) sendAll(ctx context.Context, texts []string) (cleared bool, err error) {
 	mayResend := true
 
@@ -129,7 +131,7 @@ func (l *sessionLoop) sendAll(ctx context.Context, texts []string) (cleared bool
 }
 
 // send runs one turn under a clear watch. A cleared or shut-down turn is not a
-// failure; lost reports a text the session never took.
+// failure; lost reports a text to resend.
 func (l *sessionLoop) send(ctx context.Context, text string, mayResend bool) (cleared, lost bool, err error) {
 	before := l.tap.counts()
 	turnCtx, stop := watchClear(ctx, l.clearCh)
@@ -138,6 +140,10 @@ func (l *sessionLoop) send(ctx context.Context, text string, mayResend bool) (cl
 	during := l.tap.counts().since(before)
 
 	slog.Info("chat turn finished", "reason", res.Reason, "turns", res.Turns)
+
+	if sendErr == nil || res.Completed {
+		l.fresh = false
+	}
 
 	if cleared || ctx.Err() != nil || sendErr == nil {
 		return cleared, false, nil
@@ -150,16 +156,25 @@ func (l *sessionLoop) send(ctx context.Context, text string, mayResend bool) (cl
 		return false, false, nil
 	}
 
-	lost, err = l.turnFailed(sendErr, during, mayResend)
+	lost, err = l.turnFailed(ctx, sendErr, during, mayResend)
 
 	return false, lost, err
 }
 
-// turnFailed closes the session after a failed turn and keeps its ID, so the
-// next message resumes the conversation. Only a rejected token is fatal. The
-// error and awaiting_human events the session already emitted are not repeated.
-func (l *sessionLoop) turnFailed(err error, during tapCounts, mayResend bool) (lost bool, fatal error) {
-	var limit *claudecode.UsageLimitError
+// turnFailed closes the session after a failed turn. It keeps the session's ID
+// for the next message to resume, unless a halted turn left nothing stored
+// under it. Only a rejected token is fatal. The error and awaiting_human events
+// the session already emitted are not repeated.
+func (l *sessionLoop) turnFailed(ctx context.Context, err error, during tapCounts, mayResend bool) (lost bool, fatal error) {
+	var (
+		limit  *claudecode.UsageLimitError
+		halted *claudecode.MCPServerError
+	)
+
+	if errors.As(err, &halted) && l.fresh {
+		// A halted turn is never stored, so this conversation has nothing to resume.
+		l.keptID = ""
+	}
 
 	switch {
 	case errors.As(err, &limit):
@@ -170,6 +185,23 @@ func (l *sessionLoop) turnFailed(err error, during tapCounts, mayResend bool) (l
 		l.closeSession()
 
 		return false, fmt.Errorf("claude code turn: %w", err)
+	case halted != nil && mayResend:
+		// Claude Code keeps a failed MCP server failed for the rest of the process.
+		slog.Warn("claude code halted the turn on a failed mcp server; resending on a new process",
+			"server", halted.Server, "status", halted.Status)
+		l.closeSession()
+
+		// A fresh conversation's halted turn is its opening, which carries the
+		// primer, so it goes alone to a fresh process: reopen would add the primer.
+		if l.fresh && l.startSession(ctx, "") != nil {
+			if ctx.Err() == nil {
+				l.emitAwaitingHuman()
+			}
+
+			return false, nil
+		}
+
+		return true, nil
 	case during.userInputs == 0 && mayResend:
 		// A Send that emitted no user_input never reached claude: the process
 		// had exited while idle.
@@ -300,6 +332,7 @@ func (l *sessionLoop) startSession(ctx context.Context, resume string) error {
 
 	l.sess = sess
 	l.keptID = sess.ID()
+	l.fresh = resume == ""
 
 	return nil
 }

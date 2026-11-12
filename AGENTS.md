@@ -139,7 +139,9 @@ The koanf wire shape (`serviceRaw`) is kept separate from the typed
    closes the process and opens a fresh one with the same primer, and resume
    renders the restored transcript as text above the primer. A process that
    exits is resumed on the next user message (sent once more if the exited
-   process never took it); a usage limit is shown, never retried.
+   process never took it); a turn halted by a failed `contextmatrix` MCP
+   server is sent once more at once on a restarted process; a usage limit is
+   shown, never retried.
 4. **Compaction is on** (harness): older messages drop at `compaction.threshold`
    (default 0.85) of the model's context window; `keep_recent_turns` (default 6)
    messages are kept verbatim. A `claude_code` chat ignores `compaction.*`:

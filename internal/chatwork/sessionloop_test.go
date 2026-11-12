@@ -81,10 +81,13 @@ func (s *fakeSession) report(res harness.Result, err error) {
 
 	s.emit.Emit(events.UserInput, map[string]any{"content_len": 1})
 
-	var limit *claudecode.UsageLimitError
+	var (
+		limit  *claudecode.UsageLimitError
+		halted *claudecode.MCPServerError
+	)
 
 	switch {
-	case err == nil, res.Reason == "canceled", s.reports == inputEvents:
+	case err == nil, res.Reason == "canceled", s.reports == inputEvents, errors.As(err, &halted):
 	case errors.As(err, &limit):
 		s.emit.Emit(events.Kind("usage_limit"), map[string]any{"window": limit.Window})
 	default:
@@ -760,6 +763,233 @@ func TestSessionLoopIdleDeathResendsOnlyOnce(t *testing.T) {
 	assert.Len(t, errorEvents(evs), 1)
 	assert.Equal(t, 1, awaitingHumanCount(evs))
 	assertClosedOnce(t, f.starter)
+}
+
+// mcpHalt is a turn vendorkit halted because Claude Code marked the
+// contextmatrix MCP server failed.
+func mcpHalt() (harness.Result, error) {
+	return harness.Result{Reason: "error"}, fmt.Errorf("claudecode: turn: %w", &claudecode.MCPServerError{Server: cmMCPServerName, Status: "failed"})
+}
+
+// Claude Code keeps a failed MCP server failed for the rest of the process, so
+// the halted turn goes once to the conversation resumed on a new one, with no
+// error and no awaiting_human: the turn goes on.
+func TestSessionLoopMCPHaltMidSessionResumesAndResends(t *testing.T) {
+	t.Parallel()
+
+	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+		if i == 1 {
+			return mcpHalt()
+		}
+
+		return harness.Result{Reason: "done"}, nil
+	}}
+	s2 := &fakeSession{id: "id-1", reports: crashEvents}
+
+	f := newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2})
+	pumpFrames(t, f.inbox, f.clearCh, userFrame("q1"))
+
+	require.NoError(t, f.run(t.Context(), t))
+	assert.Equal(t, []string{"", "id-1"}, f.starter.starts())
+	assert.Equal(t, []string{testOpening, "q1"}, s1.sent())
+	assert.Equal(t, []string{"q1"}, s2.sent())
+
+	evs := f.decoded(t)
+	assert.Empty(t, errorEvents(evs))
+	assert.Zero(t, awaitingHumanCount(evs))
+	assertClosedOnce(t, f.starter)
+}
+
+// A halt on the first turn of a new conversation leaves nothing stored to
+// resume. That turn is the opening, which carries the primer, so it goes alone
+// to a fresh process.
+func TestSessionLoopMCPHaltOnFreshOpeningResendsItAlone(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		clear      bool   // a /clear restarts the boot process before the halt
+		opening    string // the halted process's first turn
+		wantStarts []string
+	}{
+		{name: "boot opening", opening: testOpening, wantStarts: []string{"", ""}},
+		{name: "primer after a /clear", clear: true, opening: testPrimer, wantStarts: []string{"", "", ""}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			halted := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+				if i == 0 {
+					return mcpHalt()
+				}
+
+				return harness.Result{Reason: "done"}, nil
+			}}
+			steps := []startStep{{sess: halted}}
+			fs := []frames.Frame{userFrame("q1")}
+
+			if tt.clear {
+				boot := &fakeSession{id: "id-0", reply: func(ctx context.Context, _ int, _ string) (harness.Result, error) {
+					return blockUntilCanceled(ctx)
+				}}
+				steps = []startStep{{sess: boot}, {sess: halted}}
+				fs = []frames.Frame{{Type: frames.TypeClear}, userFrame("q1")}
+			}
+
+			fresh := &fakeSession{id: "id-2", reports: crashEvents}
+			f := newLoopFixture(nil, append(steps, startStep{sess: fresh})...)
+			pumpFrames(t, f.inbox, f.clearCh, fs...)
+
+			require.NoError(t, f.run(t.Context(), t))
+			assert.Equal(t, tt.wantStarts, f.starter.starts())
+			assert.Equal(t, []string{tt.opening}, halted.sent())
+			assert.Equal(t, []string{tt.opening, "q1"}, fresh.sent())
+
+			evs := f.decoded(t)
+			assert.Empty(t, errorEvents(evs))
+			assert.Zero(t, awaitingHumanCount(evs))
+			assertClosedOnce(t, f.starter)
+		})
+	}
+}
+
+// A fresh process that cannot start for the halted opening shows its start
+// error, returns CM's chat to idle, and the next message opens a fresh
+// conversation instead of resuming one with nothing stored.
+func TestSessionLoopMCPHaltFreshStartFailureAwaitsHuman(t *testing.T) {
+	t.Parallel()
+
+	var f *loopFixture
+
+	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(context.Context, int, string) (harness.Result, error) {
+		return mcpHalt()
+	}}
+	s3 := &fakeSession{id: "id-3", reports: crashEvents}
+
+	f = newLoopFixture(nil,
+		startStep{sess: s1},
+		startStep{err: errors.New("spawn failed"), hook: func() {
+			pushUser(f.inbox, "q1")
+			f.inbox.closeInbox()
+		}},
+		startStep{sess: s3},
+	)
+
+	require.NoError(t, f.run(t.Context(), t))
+	assert.Equal(t, []string{"", "", ""}, f.starter.starts())
+	assert.Equal(t, []string{testPrimer, "q1"}, s3.sent())
+
+	evs := f.decoded(t)
+	assert.Len(t, errorEvents(evs), 1)
+	assert.Equal(t, 1, awaitingHumanCount(evs))
+	assertClosedOnce(t, f.starter)
+}
+
+// A resumed process halted on its first turn still has the transcript it
+// resumed, so the turn goes to the same conversation resumed again.
+func TestSessionLoopMCPHaltOnResumedProcessResumesAgain(t *testing.T) {
+	t.Parallel()
+
+	var f *loopFixture
+
+	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+		if i == 1 {
+			pushUser(f.inbox, "q2")
+			f.inbox.closeInbox()
+
+			return harness.Result{Reason: "error"}, &claudecode.UsageLimitError{Window: "five_hour"}
+		}
+
+		return harness.Result{Reason: "done"}, nil
+	}}
+	s2 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(context.Context, int, string) (harness.Result, error) {
+		return mcpHalt()
+	}}
+	s3 := &fakeSession{id: "id-1", reports: crashEvents}
+
+	f = newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2}, startStep{sess: s3})
+	pushUser(f.inbox, "q1")
+
+	require.NoError(t, f.run(t.Context(), t))
+	assert.Equal(t, []string{"", "id-1", "id-1"}, f.starter.starts())
+	assert.Equal(t, []string{"q2"}, s2.sent())
+	assert.Equal(t, []string{"q2"}, s3.sent())
+
+	evs := f.decoded(t)
+	assert.Empty(t, errorEvents(evs))
+	assert.Equal(t, 1, awaitingHumanCount(evs), "the usage limit's only")
+	assertClosedOnce(t, f.starter)
+}
+
+// A resent turn halted again shows one error and one awaiting_human, and the
+// next message resumes only a conversation that has something stored.
+func TestSessionLoopMCPHaltResendsOnlyOnce(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		queued     []string // messages waiting at boot
+		halted     string   // the boot process's halted turn
+		resentID   string   // the ID of the process the halted turn is resent on
+		wantStarts []string
+		wantNext   []string // what the process after the second halt is sent
+	}{
+		{
+			name:       "resumed conversation",
+			queued:     []string{"q1"},
+			halted:     "q1",
+			resentID:   "id-1",
+			wantStarts: []string{"", "id-1", "id-1"},
+			wantNext:   []string{"next"},
+		},
+		{
+			name:       "fresh opening",
+			halted:     testOpening,
+			resentID:   "id-2",
+			wantStarts: []string{"", "", ""},
+			wantNext:   []string{testPrimer, "next"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var f *loopFixture
+
+			s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, _ int, text string) (harness.Result, error) {
+				if text == tt.halted {
+					return mcpHalt()
+				}
+
+				return harness.Result{Reason: "done"}, nil
+			}}
+			s2 := &fakeSession{id: tt.resentID, reports: crashEvents, reply: func(context.Context, int, string) (harness.Result, error) {
+				pushUser(f.inbox, "next")
+				f.inbox.closeInbox()
+
+				return mcpHalt()
+			}}
+			s3 := &fakeSession{id: "id-3", reports: crashEvents}
+
+			f = newLoopFixture(nil, startStep{sess: s1}, startStep{sess: s2}, startStep{sess: s3})
+			for _, q := range tt.queued {
+				pushUser(f.inbox, q)
+			}
+
+			require.NoError(t, f.run(t.Context(), t))
+			assert.Equal(t, tt.wantStarts, f.starter.starts())
+			assert.Equal(t, []string{tt.halted}, s2.sent())
+			assert.Equal(t, tt.wantNext, s3.sent())
+
+			evs := f.decoded(t)
+			assert.Len(t, errorEvents(evs), 1)
+			assert.Equal(t, 1, awaitingHumanCount(evs))
+			assertClosedOnce(t, f.starter)
+		})
+	}
 }
 
 func TestEventTap(t *testing.T) {

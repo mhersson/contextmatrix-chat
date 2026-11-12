@@ -207,7 +207,14 @@ hardening is applied.
 - **Failures.** A `claude` process that exits is resumed on the next message,
   and a message the exited process never took is sent once more to the resumed
   one; if that resume cannot start, a fresh session opens with the primer.
-  Nothing restarts on its own before that message. A failed turn shows one
+  Except for a failed MCP server (below), nothing restarts on its own before
+  that message, and a failed turn shows one error line. Once ContextMatrix's
+  MCP server fails mid-chat (with the tested release, after ContextMatrix is
+  unreachable for more than about 16 seconds), Claude Code keeps it failed for
+  the rest of the process. The turn it halts shows no error and is sent once
+  more at once on a restarted `claude` process that resumes the conversation
+  (with the fallback above); a halted first turn of a new conversation goes
+  alone to a fresh session instead. If the resent turn fails too, it shows one
   error line. A subscription usage limit shows
   in the chat pane, never falls back to the LLM endpoint, and lifts on the
   first message after the reset. A token Claude Code rejects ends the chat
