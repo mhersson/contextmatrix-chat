@@ -14,8 +14,9 @@ import (
 type boardFilterWriter struct {
 	dst     io.Writer
 	isBoard func(name string) bool
-	// dropStop drops the stop line: Claude Code ends a process at every /clear,
-	// usage limit and crash, and it would reach ContextMatrix as a raw-JSON row nothing reads.
+	// dropStop drops the stop line: Claude Code ends a process at every
+	// /clear, usage limit and crash, and it would reach ContextMatrix as a
+	// raw-JSON row nothing reads.
 	dropStop bool
 }
 

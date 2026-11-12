@@ -57,8 +57,8 @@ func takeOAuthToken() (string, error) {
 
 var _ chatSession = (*claudecode.Session)(nil)
 
-// newClaudeCodeTap counts the events that survive the claude_code transcript
-// filter on their way to dst.
+// newClaudeCodeTap counts every event line, then passes it through the
+// claude_code transcript filter to dst.
 func newClaudeCodeTap(dst io.Writer) *eventTap {
 	return newEventTap(newClaudeCodeFilterWriter(dst, mcpServerTools(cmMCPServerName)))
 }
