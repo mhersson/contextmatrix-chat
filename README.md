@@ -102,7 +102,7 @@ run by the `contextmatrix-vendorkit` module.
   not staged upfront. There is no local credential fallback.
 - Upstream LLM calls leave from `serve`, so its own `HTTP(S)_PROXY` / `NO_PROXY` environment governs them; an egress proxy set only in `worker_extra_env` no longer reaches LLM traffic, so give serve's process (e.g. its service unit) the proxy env.
   In Claude Code subscription mode `claude` reaches Anthropic from the worker instead, so the `worker_extra_env` proxy settings and `ca_cert_file` apply to it.
-  There `NO_PROXY` must also include `127.0.0.1,localhost` and the host of `container_contextmatrix_url`: Node does not skip loopback, so a proxy without them breaks the loopback MCP bridge, CM's MCP and the git-credentials fetch. `HTTP_PROXY` alone carries `claude`'s https API traffic; use `HTTPS_PROXY` for it, or add `.anthropic.com` to `NO_PROXY` when the proxy is not meant to carry it.
+  Loopback (`127.0.0.1,localhost,::1`) is added to `claude`'s `NO_PROXY` automatically when a proxy variable is set, so the loopback MCP bridge needs nothing; `NO_PROXY` must still include the host of `container_contextmatrix_url`, or CM's MCP and the git-credentials fetch go through the proxy and fail. `HTTP_PROXY` alone carries `claude`'s https API traffic; use `HTTPS_PROXY` for it, or add `.anthropic.com` to `NO_PROXY` when the proxy is not meant to carry it.
 - Workers must reach serve's webhook port at `container_serve_url` (by default `host.docker.internal:<port>`, the Docker host gateway); a host firewall must allow it.
 - A shared HMAC secret (at least 32 characters), configured on both this service
   and ContextMatrix.

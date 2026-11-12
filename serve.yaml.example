@@ -136,10 +136,11 @@ secrets_dir: /var/run/cm-chat/secrets
 # endpoint LLM calls: those leave from serve, so serve's own HTTP(S)_PROXY /
 # NO_PROXY environment applies (set it on its service unit). In Claude Code
 # subscription sessions claude reaches Anthropic from the worker, so the proxy
-# here applies to it, and NO_PROXY must also include 127.0.0.1,localhost (the
-# loopback MCP bridge) and the host of container_contextmatrix_url (CM's MCP and
-# the git-credentials fetch); Node does not skip loopback, so without them the
-# bridge fails to start and those calls fail. HTTP_PROXY alone carries claude's
+# here applies to it. Loopback (127.0.0.1,localhost,::1) is added to claude's
+# NO_PROXY automatically when a proxy variable is set, so the loopback MCP
+# bridge needs nothing; NO_PROXY must still include the host of
+# container_contextmatrix_url, or CM's MCP and the git-credentials fetch go
+# through the proxy and fail. HTTP_PROXY alone carries claude's
 # https API traffic; set HTTPS_PROXY for it explicitly, or add .anthropic.com to
 # NO_PROXY when the proxy is not meant to carry it.
 # worker_extra_env:
