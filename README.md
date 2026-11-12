@@ -184,7 +184,8 @@ token once, unsets it from its own environment, and passes it only to
 The token is still readable inside the container: it remains in
 docker-init's environ (`/proc/1/environ`, PID 1 under `Init: true`), in the
 worker's own initial environ (unsetting does not rewrite it) and in `claude`'s
-environ, all the same user as the model's Bash. This is an accepted risk; no hardening is applied.
+environ, all the same user as the model's Bash. This is an accepted risk; no
+hardening is applied.
 
 - **Version check.** At boot the worker runs `claude --version`. When the
   worker image (or the project's chat worker image) has no runnable `claude`,

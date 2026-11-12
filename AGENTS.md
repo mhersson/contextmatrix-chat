@@ -95,8 +95,8 @@ bypasses the proxy, and the subscription token sits in the worker env
 read and exfiltrate it: it stays readable in docker-init's environ
 (`/proc/1/environ`, PID 1 under `Init: true`), in the worker's own initial
 environ (unsetting does not rewrite it) and in `claude`'s environ, all the same
-uid as the model's Bash. This is an accepted risk, with no
-hardening. serve still masks it in every bridged frame.
+uid as the model's Bash. This is an accepted risk, with no hardening. serve
+still masks it in every bridged frame.
 `worker_extra_env` can never set `LLM_OAUTH_TOKEN`.
 
 ### Config
