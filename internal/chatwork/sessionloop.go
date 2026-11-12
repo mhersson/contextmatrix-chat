@@ -54,11 +54,20 @@ type sessionLoop struct {
 	emit    *events.Emitter
 	tap     *eventTap // counts what emit carries, the session's own events included
 	redact  func(string) string
-	primer  string // rendered primer: the first message after a /clear or a fresh restart
+	primer  string       // rendered primer: the first message after a /clear or a fresh restart
+	log     *slog.Logger // nil means slog.Default()
 
 	sess   chatSession // nil while no claude process is live
 	keptID string      // the session the next message resumes; "" after a /clear
 	fresh  bool        // the last process started a new conversation and completed no turn
+}
+
+func (l *sessionLoop) logger() *slog.Logger {
+	if l.log != nil {
+		return l.log
+	}
+
+	return slog.Default()
 }
 
 // run starts the session, sends opening, then answers each user turn until
@@ -139,7 +148,7 @@ func (l *sessionLoop) send(ctx context.Context, text string, mayResend bool) (cl
 	cleared = stop()
 	during := l.tap.counts().since(before)
 
-	slog.Info("chat turn finished", "reason", res.Reason, "turns", res.Turns)
+	l.logger().Info("chat turn finished", "reason", res.Reason, "turns", res.Turns)
 
 	if sendErr == nil || res.Completed {
 		l.fresh = false
@@ -151,7 +160,7 @@ func (l *sessionLoop) send(ctx context.Context, text string, mayResend bool) (cl
 
 	// A completed turn with an error (a transcript-store failure) leaves a healthy process.
 	if res.Completed {
-		slog.Warn("claude code turn completed with an error", "error", l.redact(sendErr.Error()))
+		l.logger().Warn("claude code turn completed with an error", "error", l.redact(sendErr.Error()))
 
 		return false, false, nil
 	}
@@ -187,7 +196,7 @@ func (l *sessionLoop) turnFailed(ctx context.Context, err error, during tapCount
 		return false, fmt.Errorf("claude code turn: %w", err)
 	case halted != nil && mayResend:
 		// Claude Code keeps a failed MCP server failed for the rest of the process.
-		slog.Warn("claude code halted the turn on a failed mcp server; resending on a new process",
+		l.logger().Info("claude code halted the turn on a failed mcp server; resending on a new process",
 			"server", halted.Server, "status", halted.Status)
 		l.closeSession()
 
@@ -205,7 +214,7 @@ func (l *sessionLoop) turnFailed(ctx context.Context, err error, during tapCount
 	case during.userInputs == 0 && mayResend:
 		// A Send that emitted no user_input never reached claude: the process
 		// had exited while idle.
-		slog.Warn("claude code process had exited; resending on a reopened session", "error", l.redact(err.Error()))
+		l.logger().Warn("claude code process had exited; resending on a reopened session", "error", l.redact(err.Error()))
 		l.closeSession()
 
 		return true, nil
@@ -344,7 +353,7 @@ func (l *sessionLoop) closeSession() {
 	}
 
 	if err := l.sess.Close(); err != nil {
-		slog.Warn("close claude code session", "error", l.redact(err.Error()))
+		l.logger().Warn("close claude code session", "error", l.redact(err.Error()))
 	}
 
 	l.sess = nil

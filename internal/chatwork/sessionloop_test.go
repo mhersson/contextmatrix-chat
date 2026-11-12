@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
@@ -1173,4 +1174,55 @@ func TestSessionLoopClearThenFailedRestartAwaitsHuman(t *testing.T) {
 	assert.Len(t, errorEvents(evs), 1)
 	assert.Equal(t, 1, awaitingHumanCount(evs))
 	assertClosedOnce(t, f.starter)
+}
+
+// levelRecorder is a slog.Handler that records each record's level.
+type levelRecorder struct {
+	mu     sync.Mutex
+	levels []slog.Level
+}
+
+func (h *levelRecorder) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *levelRecorder) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.levels = append(h.levels, r.Level)
+
+	return nil
+}
+
+func (h *levelRecorder) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *levelRecorder) WithGroup(string) slog.Handler { return h }
+
+// A halted turn that the resend recovers is not a warning: the worker's stderr
+// becomes a chat row, and a warning shows there as a problem.
+func TestSessionLoopMCPHaltResendLogsNoWarning(t *testing.T) {
+	t.Parallel()
+
+	halted := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+		if i == 0 {
+			return mcpHalt()
+		}
+
+		return harness.Result{Reason: "done"}, nil
+	}}
+	fresh := &fakeSession{id: "id-2", reports: crashEvents}
+	f := newLoopFixture(nil, startStep{sess: halted}, startStep{sess: fresh})
+	rec := &levelRecorder{}
+	f.loop.log = slog.New(rec)
+	pumpFrames(t, f.inbox, f.clearCh, userFrame("q1"))
+
+	require.NoError(t, f.run(t.Context(), t))
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+
+	require.NotEmpty(t, rec.levels)
+
+	for _, lvl := range rec.levels {
+		assert.Less(t, lvl, slog.LevelWarn)
+	}
 }
