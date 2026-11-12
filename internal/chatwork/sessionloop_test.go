@@ -1197,6 +1197,20 @@ func (h *levelRecorder) WithAttrs([]slog.Attr) slog.Handler { return h }
 
 func (h *levelRecorder) WithGroup(string) slog.Handler { return h }
 
+// assertNoWarnings checks that rec recorded something and nothing at WARN or above.
+func assertNoWarnings(t *testing.T, rec *levelRecorder) {
+	t.Helper()
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+
+	require.NotEmpty(t, rec.levels)
+
+	for _, lvl := range rec.levels {
+		assert.Less(t, lvl, slog.LevelWarn)
+	}
+}
+
 // A halted turn that the resend recovers is not a warning: the worker's stderr
 // becomes a chat row, and a warning shows there as a problem.
 func TestSessionLoopMCPHaltResendLogsNoWarning(t *testing.T) {
@@ -1216,13 +1230,32 @@ func TestSessionLoopMCPHaltResendLogsNoWarning(t *testing.T) {
 	pumpFrames(t, f.inbox, f.clearCh, userFrame("q1"))
 
 	require.NoError(t, f.run(t.Context(), t))
+	assertNoWarnings(t, rec)
+}
 
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
+// A text the exited process never took, resent on a resumed one, is a
+// recovery, not a warning.
+func TestSessionLoopIdleDeathResendLogsNoWarning(t *testing.T) {
+	t.Parallel()
 
-	require.NotEmpty(t, rec.levels)
+	var f *loopFixture
 
-	for _, lvl := range rec.levels {
-		assert.Less(t, lvl, slog.LevelWarn)
-	}
+	s1 := &fakeSession{id: "id-1", reports: crashEvents, reply: func(_ context.Context, i int, _ string) (harness.Result, error) {
+		if i == 0 {
+			pushUser(f.inbox, "q1")
+			f.inbox.closeInbox()
+
+			return harness.Result{Reason: "done"}, nil
+		}
+
+		return harness.Result{Reason: "error"}, errDeadProcess
+	}}
+	resumed := &fakeSession{id: "id-1", reports: crashEvents}
+	f = newLoopFixture(nil, startStep{sess: s1}, startStep{sess: resumed})
+	rec := &levelRecorder{}
+	f.loop.log = slog.New(rec)
+
+	require.NoError(t, f.run(t.Context(), t))
+	require.Equal(t, []string{"q1"}, resumed.sent(), "the resend reached the resumed session")
+	assertNoWarnings(t, rec)
 }

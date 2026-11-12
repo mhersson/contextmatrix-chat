@@ -214,7 +214,7 @@ func (l *sessionLoop) turnFailed(ctx context.Context, err error, during tapCount
 	case during.userInputs == 0 && mayResend:
 		// A Send that emitted no user_input never reached claude: the process
 		// had exited while idle.
-		l.logger().Warn("claude code process had exited; resending on a reopened session", "error", l.redact(err.Error()))
+		l.logger().Info("claude code process had exited; resending on a reopened session", "error", l.redact(err.Error()))
 		l.closeSession()
 
 		return true, nil
