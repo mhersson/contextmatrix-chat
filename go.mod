@@ -10,11 +10,11 @@ require (
 	github.com/knadh/koanf/v2 v2.4.1
 	github.com/mhersson/contextmatrix-backendkit v0.16.0
 	github.com/mhersson/contextmatrix-harness v0.29.0
-	github.com/mhersson/contextmatrix-protocol v0.44.0
+	github.com/mhersson/contextmatrix-protocol v0.47.0
 	github.com/mhersson/contextmatrix-vendorkit v0.1.4
 	github.com/moby/docker-image-spec v1.3.1
-	github.com/moby/moby/api v1.56.1
-	github.com/moby/moby/client v0.6.2
+	github.com/moby/moby/api v1.57.0
+	github.com/moby/moby/client v0.6.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/prometheus/client_golang v1.25.0
